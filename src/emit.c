@@ -302,7 +302,25 @@ static void put_call(ir_node *c, const char *dest, int drep, int ind, const char
     else if (cur->rrep == R_OBJ) out(ind, "RT_DTAIL(%s, %s, %s%s);", fn, self, argc, args);
     else out(ind, "return %s;", conv(nt(call), R_OBJ, cur->rrep));
 }
+/* -g (spec §11.3): before a check or a call in user code, rt_loc = its source location, so a
+ * run-time error raised there (or in library code it calls) names it. Inlined library code
+ * carries the location of the user's call; code located in a built-in library sets nothing. */
+static int debug_;
+static void emit_loc(ir_node *n, int ind) {
+    obj f;
+    intptr_t l, c;
+    sbuf b = {0};
+    if (!debug_ || !n->loc || !rt_srcloc_lookup(n->loc, &f, &l, &c) || !strncmp(RT_STR(f)->buf, "<builtin>", 9)) return;
+    sb_printf(&b, "%s:%ld:%ld", RT_STR(f)->buf, (long)l, (long)c);
+    {   sbuf q = {0};
+        c_string(&q, b.s, b.len);
+        out(ind, "rt_loc = %s;", q.s);
+        sb_free(&q);
+    }
+    sb_free(&b);
+}
 static void emit_call(ir_node *c, const char *dest, int drep, int ind) {
+    emit_loc(c, ind);
     if (c->u.call.ctl == CTL_CALLCC) { /* tier 2: the runtime keeps the frame (not a tail call) */
         const char *e = fmt("rt_call_cc(%s)", atom_as(c->u.call.args[0], R_OBJ));
         if (c->u.call.tail) out(ind, "return %s;", conv(e, R_OBJ, fn_rep(cur)));
@@ -484,6 +502,7 @@ static void emit_prim(ir_node *r, const char *dest, int drep, int ind) {
     const prim_info *p = &prim_table[r->u.prim.op];
     int i, erep;
     const char *e;
+    if (p->flags & PF_FAIL) emit_loc(r, ind);
     if (r->u.prim.op == PI_VALUES) {
         sbuf b = {0};
         if (drep == R_MV) return; /* returned in a struct (M4-2): no heap object */
@@ -758,6 +777,7 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     for (i = 0; i < p->nglobals; i++)
         if (!p->globals[i]->known) p->globals[i]->slot = nglob++;
     unsafe_ = o->unsafe;
+    debug_ = o->debug;
     prog_ = p;
     for (L = p->lambdas; L; L = L->next)
         if (L->direct && L->rrep == R_MV && !(mvs & (1u << L->nvals))) {

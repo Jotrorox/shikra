@@ -1933,6 +1933,9 @@ static const char *const e28[] = {
 " *             (converter . global-value)).\n"
 " * rt_handlers: exception handler procedures. */\n"
 "RT_EXTVAR obj rt_winders, rt_handlers;\n"
+"#ifdef RT_DEBUG\n"
+"RT_EXTVAR const char *rt_loc; /* -g: \"file:line:col\" of the check generated code runs next (M4-3) */\n"
+"#endif\n"
 "RT_FN obj rt_winders_get(void);\n"
 "RT_FN obj rt_winders_set(obj w);\n"
 "RT_FN obj rt_handlers_get(void);\n"
@@ -1944,8 +1947,8 @@ static const char *const e28[] = {
 " * the winders and handler lists and jumps back here with its arguments as the result. */\n"
 "RT_FN obj rt_call_cc(obj f);\n"
 "#endif\n"
-"/* --unsafe (spec \302\2473.3, RT_UNSAFE): the remaining checks are removed -- type, bounds, overflow,\n"
-" * undefined-variable, not-a-procedure and literal-mutation checks of the inline primitives and\n",
+"/* --unsafe (spec \302\2473.3, RT_UNSAFE): the remaining checks are removed -- type, bounds, overflow,\n",
+" * undefined-variable, not-a-procedure and literal-mutation checks of the inline primitives and\n"
 " * of every RT_CHECK in the runtime; behaviour is then undefined, as in C. */\n"
 "#ifdef RT_UNSAFE\n"
 "#define RT_SAFE(x)\n"
@@ -2010,9 +2013,9 @@ static const char *const e28[] = {
 "RT_FN obj rt_sub2(obj a, obj b);\n"
 "RT_FN obj rt_mul2(obj a, obj b);\n"
 "RT_FN obj rt_div(obj a, obj b);\n"
-"RT_FN int rt_numcmp(obj a, obj b, const char *who); /* -1 0 1, or 2 if unordered (NaN) */\n"
+"RT_FN int rt_numcmp(obj a, obj b, const char *who); /* -1 0 1, or 2 if unordered (NaN) */\n",
 "RT_FN obj rt_num_eq(obj a, obj b);\n"
-"RT_FN obj rt_num_le(obj a, obj b);\n",
+"RT_FN obj rt_num_le(obj a, obj b);\n"
 "RT_FN obj rt_num_ge(obj a, obj b);\n"
 "RT_FN obj rt_lt2(obj a, obj b);\n"
 "RT_FN obj rt_gt2(obj a, obj b);\n"
@@ -2077,10 +2080,10 @@ static const char *const e28[] = {
 "#endif\n"
 "RT_INLINE RT_ALWAYS obj rt_lt(obj a, obj b) {\n"
 "    if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b))) return RT_BOOL((intptr_t)a < (intptr_t)b);\n"
-"    return rt_lt2(a, b);\n"
+"    return rt_lt2(a, b);\n",
 "}\n"
 "RT_INLINE RT_ALWAYS obj rt_gt(obj a, obj b) {\n"
-"    if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b))) return RT_BOOL((intptr_t)a > (intptr_t)b);\n",
+"    if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b))) return RT_BOOL((intptr_t)a > (intptr_t)b);\n"
 "    return rt_gt2(a, b);\n"
 "}\n"
 "\n"
@@ -2139,9 +2142,9 @@ static const char *const e28[] = {
 "RT_FN obj rt_put_string(obj s, obj port);\n"
 "RT_FN obj rt_put_char(obj c, obj port);\n"
 "RT_INLINE obj rt_put_newline(obj port) { rt_port_write_fd(port, \"\\n\", 1); return RT_UNSPEC; }\n"
-"RT_FN obj rt_display_flat(obj x, obj port); /* x is no pair and no non-empty vector: no labels */\n"
+"RT_FN obj rt_display_flat(obj x, obj port); /* x is no pair and no non-empty vector: no labels */\n",
 "RT_FN obj rt_write_flat(obj x, obj port);\n"
-"RT_EXTVAR obj rt_ports; /* open OS-descriptor output ports other than stdout/stderr (flushed at exit) */\n",
+"RT_EXTVAR obj rt_ports; /* open OS-descriptor output ports other than stdout/stderr (flushed at exit) */\n"
 "RT_FN obj rt_make_fd_port(int fd, int flags, obj name);\n"
 "RT_FN obj rt_open_input_string(obj s);\n"
 "RT_FN obj rt_open_output_string(void);\n"
@@ -2204,8 +2207,8 @@ static const char *const e28[] = {
 "#endif\n"
 "\n"
 "/* ---- inline checked primitives (named in prims.def) ---- */\n"
-"#define RT_CHECK(c, who, ty, x) do { RT_SAFE(if (RT_UNLIKELY(!(c))) rt_type_error(who, ty, x);) } while (0)\n"
-"RT_INLINE obj rt_car(obj x) { RT_CHECK(rt_is_pair(x), \"car\", \"pair\", x); return RT_CAR(x); }\n",
+"#define RT_CHECK(c, who, ty, x) do { RT_SAFE(if (RT_UNLIKELY(!(c))) rt_type_error(who, ty, x);) } while (0)\n",
+"RT_INLINE obj rt_car(obj x) { RT_CHECK(rt_is_pair(x), \"car\", \"pair\", x); return RT_CAR(x); }\n"
 "RT_INLINE obj rt_cdr(obj x) { RT_CHECK(rt_is_pair(x), \"cdr\", \"pair\", x); return RT_CDR(x); }\n"
 "#ifdef RT_UNSAFE\n"
 "#define RT_CHECK_MUTABLE_PAIR(x, who) ((void)0)\n"
@@ -2256,8 +2259,8 @@ static const char *const e28[] = {
 "    return RT_VEC(v)[RT_FIXVAL(k)];\n"
 "}\n"
 "RT_INLINE obj rt_vector_set_u(obj v, obj k, obj x) {\n"
-"    RT_SAFE(if (RT_UNLIKELY(RT_HFLAGS(v) & RT_F_RO)) rt_type_error(\"vector-set!\", \"mutable vector\", v);)\n"
-"    RT_INDEX((uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), \"vector-set!\", k);\n",
+"    RT_SAFE(if (RT_UNLIKELY(RT_HFLAGS(v) & RT_F_RO)) rt_type_error(\"vector-set!\", \"mutable vector\", v);)\n",
+"    RT_INDEX((uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), \"vector-set!\", k);\n"
 "    RT_VEC(v)[RT_FIXVAL(k)] = x;\n"
 "    return RT_UNSPEC;\n"
 "}\n"
@@ -2305,9 +2308,9 @@ static const char *const e28[] = {
 "RT_INLINE obj rt_port_p(obj x) { return RT_BOOL(rt_is_port(x)); }\n"
 "RT_INLINE obj rt_eof_object(void) { return RT_EOF; }\n"
 "RT_INLINE obj rt_eof_object_p(obj x) { return RT_BOOL(x == RT_EOF); }\n"
-"RT_INLINE obj rt_port_cell(obj k) { return RT_O((char *)&rt_port_cells[RT_FIXVAL(k)] + 1); }\n"
+"RT_INLINE obj rt_port_cell(obj k) { return RT_O((char *)&rt_port_cells[RT_FIXVAL(k)] + 1); }\n",
 "\n"
-"#endif /* SHIKRA_RT_H */\n",
+"#endif /* SHIKRA_RT_H */\n"
 "",
 0};
 static const char *const e29[] = {
@@ -2392,8 +2395,15 @@ static const char *const e29[] = {
 "RT_FN obj rt_current_jiffy(void) { return RT_FIX(rt_sys_clock_ns(1)); } /* nanoseconds */\n",
 "\n"
 "/* ---- error path ---- */\n"
+"#ifdef RT_DEBUG\n"
+"RT_VAR const char *rt_loc;\n"
+"#endif\n"
 "RT_FN obj rt_make_error(int kind, obj message, obj irritants, obj loc) {\n"
-"    rt_vector *e = (rt_vector *)rt_alloc(RT_HDR(RT_T_ERROR, kind, 3), 4 * sizeof(obj));\n"
+"    rt_vector *e;\n"
+"#ifdef RT_DEBUG\n"
+"    if (loc == RT_FALSE && rt_loc) loc = rt_cstring(rt_loc);\n"
+"#endif\n"
+"    e = (rt_vector *)rt_alloc(RT_HDR(RT_T_ERROR, kind, 3), 4 * sizeof(obj));\n"
 "    e->v[0] = message;\n"
 "    e->v[1] = irritants;\n"
 "    e->v[2] = loc;\n"
@@ -2439,6 +2449,9 @@ static const char *const e29[] = {
 " * and no Scheme raise: the error path allocates nothing. */\n"
 "static void core_die_head(const char *who, const char *msg, const char *msg2) {\n"
 "    rt_flush(rt_stdout);\n"
+"#ifdef RT_DEBUG\n"
+"    if (rt_loc) { rt_port_write_fd(rt_stderr, rt_loc, rt_strlen(rt_loc)); rt_port_write_fd(rt_stderr, \": error: \", 9); } else\n"
+"#endif\n"
 "    rt_port_write_fd(rt_stderr, \"Error: \", 7);\n"
 "    if (who) { rt_port_write_fd(rt_stderr, who, rt_strlen(who)); rt_port_write_fd(rt_stderr, \": \", 2); }\n"
 "    rt_port_write_fd(rt_stderr, msg, rt_strlen(msg));\n"
@@ -2462,9 +2475,9 @@ static const char *const e29[] = {
 "    rt_exit(70);\n"
 "}\n"
 "RT_FN void rt_error(const char *who, const char *msg, obj irritants) { core_die(who, msg, 0, irritants); }\n"
-"RT_FN void rt_type_error(const char *who, const char *expected, obj x) { CORE_DIE1(who, \"expected \", expected, x); }\n"
+"RT_FN void rt_type_error(const char *who, const char *expected, obj x) { CORE_DIE1(who, \"expected \", expected, x); }\n",
 "RT_FN void rt_range_error(const char *who, obj x) { CORE_DIE1(who, \"index out of range\", 0, x); }\n"
-"/* Fixnum overflow of + - * (also from specialised code): the irritants are fixnums, printed by\n",
+"/* Fixnum overflow of + - * (also from specialised code): the irritants are fixnums, printed by\n"
 " * the integer printer alone (so the section 12 program links no general printer). */\n"
 "RT_FN void rt_fx_overflow(const char *who, obj a, obj b) {\n"
 "    core_die_head(who, \"fixnum overflow\", 0);\n"
@@ -2539,12 +2552,12 @@ static const char *const e29[] = {
 "/* ---- address tables: entries [a, b, value] keyed by one or two object addresses, open\n"
 " * addressing over a raw heap buffer (write's datum labels, equal? on cycles). The buffer is\n"
 " * reached from the caller's C stack, so it survives a collection; the keyed objects stay\n"
-" * reachable from the caller's arguments, and the collector never moves objects. ---- */\n"
+" * reachable from the caller's arguments, and the collector never moves objects. ---- */\n",
 "RT_FN intptr_t *rt_addrtab_get(rt_addrtab *t, obj a, obj b, int insert) {\n"
 "    uintptr_t *e, h;\n"
 "    intptr_t i;\n"
 "    if (insert && 2 * (t->n + 1) > t->cap) { /* grow and rehash */\n"
-"        rt_addrtab o = *t;\n",
+"        rt_addrtab o = *t;\n"
 "        t->cap = o.cap ? 2 * o.cap : 64;\n"
 "        t->n = 0;\n"
 "        t->e = (uintptr_t *)rt_alloc_raw(3 * sizeof(uintptr_t) * (size_t)t->cap);\n"
@@ -2601,11 +2614,11 @@ static const char *const e29[] = {
 "        case RT_T_BYTEVECTOR:\n"
 "            return RT_HLEN(a) == RT_HLEN(b) &&\n"
 "                   rt_memcmp(RT_PTR(a, rt_bytevector)->b, RT_PTR(b, rt_bytevector)->b, (size_t)RT_HLEN(a)) == 0;\n"
-"        case RT_T_VECTOR: {\n"
+"        case RT_T_VECTOR: {\n",
 "            intptr_t i, n = RT_HLEN(a);\n"
 "            if (n != RT_HLEN(b)) return 0;\n"
 "            if (n == 0) return 1;\n"
-"            for (i = 0; i < n - 1; i++) if (!core_equal(RT_VEC(a)[i], RT_VEC(b)[i], q, depth + 1)) return 0;\n",
+"            for (i = 0; i < n - 1; i++) if (!core_equal(RT_VEC(a)[i], RT_VEC(b)[i], q, depth + 1)) return 0;\n"
 "            a = RT_VEC(a)[n - 1]; b = RT_VEC(b)[n - 1];\n"
 "            continue;\n"
 "        }\n"
@@ -2675,13 +2688,13 @@ static const char *const e29[] = {
 "    *core_symslot(RT_STR(name)->buf, (size_t)RT_STR(name)->bytes) = sym;\n"
 "    core_symcount++;\n"
 "}\n"
-"RT_FN obj rt_intern(const char *s, size_t n) {\n"
+"RT_FN obj rt_intern(const char *s, size_t n) {\n",
 "    obj *slot = core_symslot(s, n), name, sym;\n"
 "    if (*slot) return *slot;\n"
 "    name = rt_make_string_n(s, n);\n"
 "    RT_SETFLAGS(name, RT_HFLAGS(name) | RT_F_RO);\n"
 "    sym = rt_make_symbol(name);\n"
-"    core_symadd(sym);\n",
+"    core_symadd(sym);\n"
 "    return sym;\n"
 "}\n"
 "RT_FN obj rt_string_to_symbol(obj s) {\n"
@@ -2748,10 +2761,10 @@ static const char *const e29[] = {
 "    rt_memcpy(RT_PTR(r, rt_bytevector)->b, RT_PTR(bv, rt_bytevector)->b + s, (size_t)(e - s));\n"
 "    return r;\n"
 "}\n"
-"RT_FN obj rt_bytevector_copy_x(obj to, obj at, obj from, obj start, obj end) {\n"
+"RT_FN obj rt_bytevector_copy_x(obj to, obj at, obj from, obj start, obj end) {\n",
 "    intptr_t s, e, k;\n"
 "    RT_CHECK(rt_is_bytevector(from), \"bytevector-copy!\", \"bytevector\", from);\n"
-"    RT_CHECK(rt_is_bytevector(to) && !(RT_HFLAGS(to) & RT_F_RO), \"bytevector-copy!\", \"mutable bytevector\", to);\n",
+"    RT_CHECK(rt_is_bytevector(to) && !(RT_HFLAGS(to) & RT_F_RO), \"bytevector-copy!\", \"mutable bytevector\", to);\n"
 "    s = rt_check_range(start, end, RT_HLEN(from), &e, \"bytevector-copy!\");\n"
 "    k = rt_is_fix(at) ? RT_FIXVAL(at) : -1;\n"
 "    if (k < 0 || k > RT_HLEN(to) - (e - s)) rt_range_error(\"bytevector-copy!\", at);\n"
@@ -2815,13 +2828,13 @@ static const char *const e29[] = {
 "RT_FN obj rt_error_object_p(obj x) { return RT_BOOL(rt_is_type(x, RT_T_ERROR)); }\n"
 "RT_FN obj rt_error_object_message(obj x) {\n"
 "    RT_CHECK(rt_is_type(x, RT_T_ERROR), \"error-object-message\", \"error object\", x);\n"
-"    return RT_VEC(x)[0];\n"
+"    return RT_VEC(x)[0];\n",
 "}\n"
 "RT_FN obj rt_error_object_irritants(obj x) {\n"
 "    RT_CHECK(rt_is_type(x, RT_T_ERROR), \"error-object-irritants\", \"error object\", x);\n"
 "    return RT_VEC(x)[1];\n"
 "}\n"
-"RT_FN obj rt_file_error_p(obj x) { return RT_BOOL(rt_is_type(x, RT_T_ERROR) && RT_HFLAGS(x) == RT_ERR_FILE); }\n",
+"RT_FN obj rt_file_error_p(obj x) { return RT_BOOL(rt_is_type(x, RT_T_ERROR) && RT_HFLAGS(x) == RT_ERR_FILE); }\n"
 "RT_FN obj rt_read_error_p(obj x) { return RT_BOOL(rt_is_type(x, RT_T_ERROR) && RT_HFLAGS(x) == RT_ERR_READ); }\n"
 "\n"
 "/* ---- multiple values (only for unknown receivers, spec \302\2478.5) and procedures ---- */\n"
@@ -2884,7 +2897,7 @@ static const char *const e29[] = {
 "    for (i = 0; i < n; i++, args = RT_CDR(args))\n"
 "        if (i < 4) regs[i] = RT_CAR(args);\n"
 "        else rt_args[i - 4] = RT_CAR(args);\n"
-"    for (; i < 4; i++) regs[i] = RT_FALSE;\n"
+"    for (; i < 4; i++) regs[i] = RT_FALSE;\n",
 "    return n;\n"
 "}\n"
 "RT_FN intptr_t rt_spread_values(obj v, obj *regs) {\n"
@@ -2892,7 +2905,7 @@ static const char *const e29[] = {
 "    if (!rt_is_type(v, RT_T_VALUES)) { regs[0] = v; regs[1] = regs[2] = regs[3] = RT_FALSE; return 1; }\n"
 "    n = RT_HLEN(v);\n"
 "    if (n > 4) rt_args_reserve(n - 4);\n"
-"    for (i = 0; i < n; i++)\n",
+"    for (i = 0; i < n; i++)\n"
 "        if (i < 4) regs[i] = RT_VEC(v)[i];\n"
 "        else rt_args[i - 4] = RT_VEC(v)[i];\n"
 "    for (; i < 4; i++) regs[i] = RT_FALSE;\n"
@@ -2947,10 +2960,10 @@ static const char *const e29[] = {
 "#ifdef SHIKRA_PROGRAM\n"
 "typedef struct core_cont { rt_jmpbuf jb; struct core_cont *prev; obj winders, handlers, f, k, val; } core_cont;\n"
 "static core_cont *core_conts;\n"
-"static obj core_cont_code(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3) {\n"
+"static obj core_cont_code(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3) {\n",
 "    core_cont *c = (core_cont *)(void *)RT_PROC(self)->free[0], *t;\n"
 "    obj v = argc == 1 ? a0 : rt_make_values(rt_rest_list(argc, 0, a0, a1, a2, a3));\n"
-"    if ((obj)(void *)c == RT_FALSE) rt_error(0, \"re-entrant continuation not supported yet (milestone M5)\", RT_NIL);\n",
+"    if ((obj)(void *)c == RT_FALSE) rt_error(0, \"re-entrant continuation not supported yet (milestone M5)\", RT_NIL);\n"
 "    if (c->winders != rt_winders) { /* after thunks may escape, or end the capture's extent */\n"
 "        rt_engine_travel(c->winders);\n"
 "        if ((obj)(void *)(c = (core_cont *)(void *)RT_PROC(self)->free[0]) == RT_FALSE)\n"

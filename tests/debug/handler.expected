@@ -1,0 +1,1 @@
+tests/debug/handler.scm:6:12: error: vector-ref: index out of range 2

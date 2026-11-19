@@ -313,13 +313,21 @@ static int cmd_build(options *o) {
     sbuf c = {0}, cf = {0};
     const char *out = o->output ? o->output : default_output(o->input);
     gen_c(o, &c);
-    sb_printf(&cf, "%s/build-%ld.c", cache_dir(), (long)getpid());
+    if (o->debug) { /* -g: the C stays where the debug information points (one file per output) */
+        char abs[4096];
+        unsigned long long h = 14695981039346656037ull;
+        const char *a = out[0] == '/' || !getcwd(abs, sizeof abs) ? out : abs;
+        size_t i;
+        for (i = 0; a[i]; i++) h = (h ^ (unsigned char)a[i]) * 1099511628211ull;
+        if (a == abs) for (i = 0; out[i]; i++) h = (h ^ (unsigned char)out[i]) * 1099511628211ull;
+        sb_printf(&cf, "%s/debug-%016llx.c", cache_dir(), h);
+    } else sb_printf(&cf, "%s/build-%ld.c", cache_dir(), (long)getpid());
     write_text(cf.s, &c);
     if (!run_cc(o, cf.s, out)) {
         fprintf(stderr, "shikra: C compilation failed; generated C kept in %s\n", cf.s);
         return 1;
     }
-    remove(cf.s);
+    if (!o->debug) remove(cf.s);
     return 0;
 }
 

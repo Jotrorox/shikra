@@ -447,6 +447,33 @@ run_cache() {
     rm -rf "$C" "$C.shared"
 }
 
+# run_debug (M4-3): -g (spec §11.3). tests/debug/locations.scm, built with -g at -O2, -O0 and -Os,
+# run with each argument 1..8, prints line k of locations.expected as its last stderr line (exit
+# 70): type, range, overflow, unknown-call arity and user errors, an inlined library wrapper and
+# library procedures, each named by the user's expression. handler.scm: the same through an
+# error object. Without -g the C has no rt_loc store and the binary no location string.
+run_debug() {
+    for lev in 2 0 s; do
+        if $SHIKRA build -O$lev -g -w tests/debug/locations.scm -o "$TMP/dbg" 2> "$TMP/dbg.err"; then
+            k=1
+            while [ $k -le 8 ]; do
+                "$TMP/dbg" $k > /dev/null 2> "$TMP/dbg.err"
+                st=$?
+                if [ $st = 70 ] && [ "$(tail -1 "$TMP/dbg.err")" = "$(sed -n ${k}p tests/debug/locations.expected)" ]; then ok
+                else bad "-g -O$lev locations $k (exit $st): $(tail -1 "$TMP/dbg.err")"; fi
+                k=$((k + 1))
+            done
+        else bad "-g -O$lev: build failed"; head -3 "$TMP/dbg.err"; fi
+        if $SHIKRA build -O$lev -g -w tests/debug/handler.scm -o "$TMP/dbg" && ! "$TMP/dbg" > /dev/null 2> "$TMP/dbg.err" &&
+            [ "$(tail -1 "$TMP/dbg.err")" = "$(cat tests/debug/handler.expected)" ]; then ok
+        else bad "-g -O$lev handler: $(tail -1 "$TMP/dbg.err")"; fi
+    done
+    if $SHIKRA emit-c -w tests/debug/locations.scm | grep -q 'rt_loc = '; then bad "rt_loc without -g"; else ok; fi
+    $SHIKRA build -w tests/debug/locations.scm -o "$TMP/dbg"
+    if grep -q 'locations.scm' "$TMP/dbg"; then bad "location strings in a binary built without -g"; else ok; fi
+    if "$TMP/dbg" 1 2>&1 >/dev/null | grep -qx 'Error: car: expected pair 5'; then ok; else bad "error message without -g"; fi
+}
+
 # run_stress: cases and r7rs files with a collection at every allocation, at -O2 and -O0.
 run_stress() {
     for opt in 2 0; do
@@ -487,9 +514,10 @@ gcc) opt=2; run_cases gcc
 shape) run_shape ;;
 size) run_size ;;
 cache) run_cache ;;
-all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_size; run_cache; run_cases interp; run_repl; run_tramp
+debug) run_debug ;;
+all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_size; run_cache; run_debug; run_cases interp; run_repl; run_tramp
     run_stress ;;
-*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape|size|cache]"; exit 2 ;;
+*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape|size|cache|debug]"; exit 2 ;;
 esac
 if [ "$skip" -gt 0 ]; then echo "tests: $pass passed, $fail failed, $skip skipped (see above)"
 else echo "tests: $pass passed, $fail failed"; fi

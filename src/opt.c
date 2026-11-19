@@ -1016,6 +1016,33 @@ static int inside(ir_lambda *Q, ir_lambda **g, int ng) {
     for (; Q; Q = Q->parent) if (in_group(g, ng, Q)) return 1;
     return 0;
 }
+/* Give every node of a term (and of the procedures it creates) the location loc. */
+static void relocate(ir_node *n, obj loc) {
+    ir_join *j;
+    int i;
+    for (; n; ) {
+        if (n->loc) n->loc = loc;
+        switch (n->kind) {
+        case IR_LET:
+            if (n->u.let.rhs) {
+                if (n->u.let.rhs->loc) n->u.let.rhs->loc = loc;
+                if (n->u.let.rhs->kind == IR_LAMBDA) relocate(n->u.let.rhs->u.lam->body, loc);
+            }
+            n = n->u.let.body;
+            continue;
+        case IR_FIX:
+            for (i = 0; i < n->u.fix.n; i++) relocate(n->u.fix.lams[i]->body, loc);
+            n = n->u.fix.body;
+            continue;
+        case IR_LETJ:
+            for (j = n->u.letj.j; j; j = j->next) relocate(j->body, loc);
+            n = n->u.letj.body;
+            continue;
+        case IR_IF: relocate(n->u.if_.then, loc); n = n->u.if_.els; continue;
+        default: return;
+        }
+    }
+}
 static int contify_group(ir_lambda **g, int ng, csite *bind) {
     ir_lambda *Q = NULL;
     csite *s, *single = NULL;
@@ -1059,6 +1086,8 @@ static int contify_group(ir_lambda **g, int ng, csite *bind) {
     if (next == 1) { /* one call site: the join points go there */
         ir_lambda *L = single->call->u.call.known;
         ir_node *n = single->node;
+        if (single->call->loc && !builtin(Q)) /* library code moved into user code: the user's call site, as for inlining */
+            for (i = 0; i < ng; i++) if (builtin(g[i])) relocate(g[i]->entry->body, single->call->loc);
         if (n->kind == IR_CALL) *single->slot = mk_letj(chain, call_jump(L, n), n->loc);
         else {
             ir_join *k = ir_new_join(1, Q);
