@@ -719,7 +719,7 @@ static void append_embedded(sbuf *o, const char *name) {
 
 void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     static const char *const rtfiles[] = {"src/rt_sys.c", "src/rt_gc.c", "src/rt_core.c", "src/rt_str.c",
-                                          "src/rt_num.c", "src/rt_io.c", "src/rt_read.c", 0};
+                                          "src/rt_num.c", "src/rt_io.c", "src/rt_read.c", "src/rt_math.c", 0};
     ir_lambda *L;
     int i;
     unsigned mvs = 0;

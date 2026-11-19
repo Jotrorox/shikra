@@ -19,8 +19,22 @@
 #define _DARWIN_C_SOURCE 1
 #endif
 
+#if defined(SHIKRA_NOLIBC) && defined(__SIZE_TYPE__) && defined(__INTPTR_TYPE__) && defined(__UINT64_TYPE__)
+/* Static Linux without libc (M6): no header at all, so a cross compiler needs no sysroot. The
+ * types and limits the runtime uses, from the compiler's predefined macros (GCC, clang). */
+typedef __SIZE_TYPE__ size_t;
+typedef __INTPTR_TYPE__ intptr_t;
+typedef __UINTPTR_TYPE__ uintptr_t;
+typedef __INT64_TYPE__ int64_t;
+typedef __UINT64_TYPE__ uint64_t;
+typedef __UINT32_TYPE__ uint32_t;
+#define INTPTR_MAX __INTPTR_MAX__
+#define INTPTR_MIN (-INTPTR_MAX - 1)
+#define UINT64_MAX __UINT64_MAX__
+#else
 #include <stddef.h>
 #include <stdint.h>
+#endif
 
 typedef char rt_assert_64bit[(sizeof(void *) == 8 && sizeof(double) == 8 && sizeof(intptr_t) == 8) ? 1 : -1];
 
@@ -199,6 +213,11 @@ RT_INLINE int rt_mul_ovf(intptr_t a, intptr_t b, intptr_t *r) {
 #endif
 
 /* ---- platform layer (rt_sys.c; the only file that touches libc / the OS) ---- */
+/* Math: libm on macOS (libSystem), elsewhere the runtime's own rt_math.c (M6): static Linux
+ * programs have no libm, and the tool on Linux then computes exactly what they compute. */
+#if defined(__APPLE__) && !defined(SHIKRA_NOLIBC)
+#define RT_SYS_LIBM 1
+#endif
 enum { RT_O_READ = 0, RT_O_WRITE = 1, RT_O_APPEND = 2 };
 RT_FN intptr_t rt_sys_write(int fd, const void *buf, size_t n); /* bytes written or -1 */
 RT_FN intptr_t rt_sys_read(int fd, void *buf, size_t n);        /* 0 at EOF, -1 on error */
