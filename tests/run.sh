@@ -46,6 +46,12 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 SHIKRA=./shikra
 CC=${CC:-cc}
+# On Linux x86-64/arm64 compiled programs are static and use no libc (M6): the warning check of
+# the generated C then compiles that variant (DESIGN.md "M6 Linux as built").
+CHECK_FLAGS=
+case "$(uname -s)-$(uname -m)" in
+Linux-x86_64 | Linux-aarch64) CHECK_FLAGS="-DSHIKRA_NOLIBC=1 -ffreestanding" ;;
+esac
 TMP=tests/tmp
 mkdir -p "$TMP"
 pass=0
@@ -84,6 +90,11 @@ run_unit() {
     else bad "tests/unit/rt_unit.c (open file port not flushed at exit)"; fi
     grep -v '^rt_unit:' "$TMP/unit.out" 2>/dev/null
     tail -1 "$TMP/unit.out" 2>/dev/null
+    # rt_math.c (M6) against the host libm: >= 10^5 arguments per range, special cases
+    if $CC -std=c99 -O2 -Wall -Wextra -Werror -Isrc tests/unit/math_unit.c -lm -o "$TMP/math_unit" &&
+        "$TMP/math_unit" > "$TMP/math.out"; then ok
+    else bad "tests/unit/math_unit.c"; grep -v '^math_unit:' "$TMP/math.out"; fi
+    grep '^math_unit:' "$TMP/math.out"
 }
 
 run_amalg() {
@@ -147,7 +158,7 @@ run_cases() {
         if [ "$mode" = compiled ]; then
             # shellcheck disable=SC2086
             if $SHIKRA emit-c -O${opt:-2} $flags "$f" > "$TMP/c.c" 2> /dev/null &&
-                $CC -std=c99 -Wall -Wextra -Werror -fsyntax-only "$TMP/c.c" 2> "$TMP/cc.err"; then ok
+                $CC -std=c99 -Wall -Wextra -Werror $CHECK_FLAGS -fsyntax-only "$TMP/c.c" 2> "$TMP/cc.err"; then ok
             else bad "$f (generated C is not warning-free)"; head -5 "$TMP/cc.err"; fi
         fi
     done
@@ -228,7 +239,7 @@ run_r7rs() {
         if [ "$engine" = compiled ]; then
             # shellcheck disable=SC2086
             if $SHIKRA emit-c -O${opt:-2} $flag "$f" > "$TMP/r7.c" 2> /dev/null &&
-                $CC -std=c99 -Wall -Wextra -Werror -fsyntax-only "$TMP/r7.c" 2> "$TMP/cc.err"; then ok
+                $CC -std=c99 -Wall -Wextra -Werror $CHECK_FLAGS -fsyntax-only "$TMP/r7.c" 2> "$TMP/cc.err"; then ok
             else bad "$f (generated C is not warning-free)"; head -5 "$TMP/cc.err"; fi
         fi
     done
@@ -267,6 +278,7 @@ run_tramp() {
 # gcc mode: the compiled cases built by GCC (GCC=gcc-16 by default) at -O2, -O0 and -O0 with the
 # trampoline; not part of all (it needs that compiler).
 GCC=${GCC:-gcc-16}
+command -v "$GCC" > /dev/null 2>&1 || GCC=gcc
 
 # run_shape: tests/shape/NAME.scm, structural properties of the emitted C (M4-1, spec §12): the
 # program is compiled at each level of NAME.check's "levels" line (default: 2 s 0), must run with
@@ -298,6 +310,8 @@ shape_select() { # $1 directive, $2 argument; selection in $TMP/sel, program in 
           mv "$TMP/sel2" "$TMP/sel" ;;
     esac
 }
+# Symbols defined in a binary, without the suffixes of GCC's clones (rt_put_fixnum.isra.0).
+nm_defined() { nm "$1" | awk '$2 !~ /^[Uu]$/ { print $3 }' | sed -E 's/[.](isra|constprop|part|cold|lto_priv)([.][0-9a-z_]+)*$//'; }
 run_shape() {
     for f in tests/shape/*.scm; do
         [ -f "$f" ] || continue
@@ -322,9 +336,9 @@ run_shape() {
                 no) if grep -Eq -- "$arg" "$TMP/sel"; then failed="no $arg: $(grep -E -- "$arg" "$TMP/sel" | head -2)"; fi ;;
                 has) grep -Eq -- "$arg" "$TMP/sel" || failed="has $arg" ;;
                 count) [ "$(grep -Ec -- "$rest" "$TMP/sel")" = "$arg" ] || failed="count $arg $rest: $(grep -Ec -- "$rest" "$TMP/sel")" ;;
-                nm-no) if nm "$TMP/shape" | awk '$2 !~ /^[Uu]$/ { print $3 }' | grep -Eq -- "$arg"; then
-                           failed="nm-no $arg: $(nm "$TMP/shape" | awk '$2 !~ /^[Uu]$/ { print $3 }' | grep -E -- "$arg" | head -3 | tr '\n' ' ')"; fi ;;
-                nm-has) nm "$TMP/shape" | awk '$2 !~ /^[Uu]$/ { print $3 }' | grep -Eq -- "$arg" || failed="nm-has $arg" ;;
+                nm-no) if nm_defined "$TMP/shape" | grep -Eq -- "$arg"; then
+                           failed="nm-no $arg: $(nm_defined "$TMP/shape" | grep -E -- "$arg" | head -3 | tr '\n' ' ')"; fi ;;
+                nm-has) nm_defined "$TMP/shape" | grep -Eq -- "$arg" || failed="nm-has $arg" ;;
                 *) failed="unknown directive $dir" ;;
                 esac
                 [ -n "$failed" ] && break
@@ -332,6 +346,14 @@ run_shape() {
             if [ -z "$failed" ]; then ok; else bad "$what: $failed"; fi
         done
     done
+    # spec §1.1, §9.3: hello world under 30 KB, statically linked, on Linux (no libc, M6)
+    if [ -n "$CHECK_FLAGS" ]; then
+        for lev in 2 s; do
+            if $SHIKRA build -O$lev tests/cases/hello.scm -o "$TMP/hello" > "$TMP/shape.err" 2>&1 &&
+                "$TMP/hello" | cmp -s - tests/cases/hello.out && [ "$(wc -c < "$TMP/hello")" -lt 30000 ]; then ok
+            else bad "hello world -O$lev: $(wc -c < "$TMP/hello" 2> /dev/null) bytes (Linux: under 30 KB, spec §9.3)"; head -3 "$TMP/shape.err"; fi
+        done
+    fi
 }
 
 # run_stress: cases and r7rs files with a collection at every allocation, at -O2 and -O0.

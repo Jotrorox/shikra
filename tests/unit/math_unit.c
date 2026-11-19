@@ -15,6 +15,7 @@
 #include <string.h>
 
 #define MAXULP 2.0
+#define MAXULP_TAN 4.0 /* macOS libm's tan is itself up to 2.5 ulp off (e.g. at 1.0381590199329658) */
 #define N 100000
 static int fails, dump; /* -dump: print differing arguments (for an exact-arithmetic check) */
 static uint64_t seed = 0x9e3779b97f4a7c15u;
@@ -46,7 +47,7 @@ static void report(stat *s) {
            100.0 * (double)s->diff / (double)s->n, s->maxarg);
     if (s->maxarg2 == s->maxarg2 && s->maxarg2 != 0) printf(", %.17g", s->maxarg2);
     printf(")\n");
-    if (s->max > MAXULP) { fails++; printf("FAIL: %s error above %.1f ulp\n", s->name, MAXULP); }
+    if (s->max > (strcmp(s->name, "tan") ? MAXULP : MAXULP_TAN)) { fails++; printf("FAIL: %s error too large\n", s->name); }
 }
 
 typedef double (*f1)(double);
@@ -136,7 +137,8 @@ int main(int argc, char **argv) {
             double x = v[a];
             if (isinf(x) || isnan(x) || x == 0 || fabs(x) == 1 || fabs(x) < 1e-300) {
                 SAME(mt_test_exp(x), exp(x)); SAME(mt_test_log(x), log(x)); SAME(mt_test_sin(x), sin(x));
-                SAME(mt_test_cos(x), cos(x)); SAME(mt_test_tan(x), tan(x)); SAME(mt_test_asin(x), asin(x));
+                SAME(mt_test_cos(x), cos(x)); SAME(mt_test_asin(x), asin(x));
+                if (fabs(x) != 1) SAME(mt_test_tan(x), tan(x));
                 SAME(mt_test_acos(x), acos(x)); SAME(mt_test_sqrt(x), sqrt(x));
             }
             for (b = 0; b < n; b++) {
@@ -158,6 +160,7 @@ int main(int argc, char **argv) {
         SAME(mt_test_log(mt_test_exp(1.0)), 1.0); SAME(mt_test_acos(-1.0), 3.141592653589793);
         SAME(mt_test_asin(1.0), 1.5707963267948966); SAME(mt_test_atan2(1.0, 0.0), 1.5707963267948966);
         SAME(mt_test_atan2(1.0, -1.0), atan2(1.0, -1.0)); SAME(mt_test_atan2(-0.0, -1.0), -3.141592653589793);
+        SAME(mt_test_tan(1.0), 1.5574077246549023); /* correctly rounded (exact arithmetic) */
         SAME(mt_test_sin(0x1p1023), sin(0x1p1023)); SAME(mt_test_cos(1e22), cos(1e22));
     }
     printf("math_unit: %s\n", fails ? "FAILED" : "ok");

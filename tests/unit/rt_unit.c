@@ -150,11 +150,17 @@ static void float_corpus(long n) {
     }
 }
 
+/* The tests run in a frame below main's: the stack base given to rt_init is the address of
+ * main's argc, and a compiler may place main's own locals above it (GCC on arm64 does). */
+static NOINLINE void tests(void);
 int main(int argc, char **argv) {
+    rt_init(argc, argv, (void *)&argc);
+    tests();
+    return 0;
+}
+static NOINLINE void tests(void) {
     obj x, y, port, file;
     intptr_t line, col;
-    (void)argc;
-    rt_init(argc, argv, (void *)&argc);
     rt_raise_hook = hook;
 
     /* values and fixnum arithmetic */

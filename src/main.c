@@ -71,7 +71,7 @@ static void usage(FILE *f) {
           "  --gc=immix|bump         collector (default immix)\n"
           "  --unicode=ascii|full    character tables (default ascii)\n"
           "  -I dir                  add a library search directory\n"
-          "  --cc=CC                 C compiler to invoke (default cc)\n"
+          "  --cc=CC                 C compiler to invoke (default $SHIKRA_CC, else cc)\n"
           "  --target=TRIPLE         cross-compilation target (default host)\n"
           "  -g                      add source locations to run-time errors\n"
           "  -o file                 output file\n", f);
@@ -95,7 +95,7 @@ static void parse_args(int argc, char **argv, options *o) {
     const char *v;
     memset(o, 0, sizeof *o);
     o->opt = '2';
-    o->cc = "cc";
+    o->cc = getenv("SHIKRA_CC") && *getenv("SHIKRA_CC") ? getenv("SHIKRA_CC") : "cc"; /* --cc default */
     o->incdirs = (const char **)xmalloc(sizeof(char *) * (size_t)argc);
     o->keep = (const char **)xmalloc(sizeof(char *) * (size_t)(argc + 1));
     if (argc < 2) { usage(stderr); exit(2); }
@@ -281,6 +281,7 @@ static char **cc_argv(const options *o, const char *cfile, const char *out) {
     av[n++] = "-ffunction-sections";
     av[n++] = "-fdata-sections";
     if (o->debug) av[n++] = "-g";
+    else if (zig) av[n++] = "-g0"; /* zig cc adds debug information by default */
     if (nolibc(&tg)) { /* static, no libc: rt_sys.c's own _start and system calls */
         av[n++] = "-DSHIKRA_NOLIBC=1";
         av[n++] = "-ffreestanding";
@@ -347,7 +348,7 @@ static int cmd_run(options *o) {
     char **av;
     const char *dir;
     gen_c(o, &c);
-    sb_printf(&c, "/* cc: %s -O%c */\n", o->cc, o->opt); /* the key covers compiler and flags */
+    sb_printf(&c, "/* cc: %s -O%c %s */\n", o->cc, o->opt, o->target ? o->target : ""); /* the key covers compiler and flags */
     for (i = 0; i < c.len; i++) h = (h ^ (unsigned char)c.s[i]) * 1099511628211ull;
     dir = cache_dir();
     sb_printf(&bin, "%s/run-%016llx", dir, h);

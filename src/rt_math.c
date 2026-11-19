@@ -204,20 +204,26 @@ done:
 }
 
 /* sin and cos of r = rh + rl, |r| <= ~pi/4, as hi + *lo: Taylor to r^19 and r^18. */
-static double mt_ksin(double rh, double rl, double *lo) {
-    double z = rh * rh, p, t, h;
+static double mt_ksin(double rh, double rl, double *lo) { /* r - r^3/6 in double-double */
+    double zh, zl, ch, cl, d, dl, p, pe, s, e, t, h;
+    mt_mul(rh, rh, &zh, &zl);
+    mt_mul(rh, zh, &ch, &cl);
+    cl += rh * zl;
+    d = ch / 6.0;
+    mt_mul(d, 6.0, &p, &pe);
+    dl = (((ch - p) - pe) + cl) / 6.0;
     p = -1.0 / 121645100408832000.0;
-    p = p * z + 1.0 / 355687428096000.0;
-    p = p * z - 1.0 / 1307674368000.0;
-    p = p * z + 1.0 / 6227020800.0;
-    p = p * z - 1.0 / 39916800.0;
-    p = p * z + 1.0 / 362880.0;
-    p = p * z - 1.0 / 5040.0;
-    p = p * z + 1.0 / 120.0;
-    p = p * z - 1.0 / 6.0;
-    t = rh * z * p + rl * (1.0 - 0.5 * z);
-    h = rh + t;
-    *lo = t - (h - rh);
+    p = p * zh + 1.0 / 355687428096000.0;
+    p = p * zh - 1.0 / 1307674368000.0;
+    p = p * zh + 1.0 / 6227020800.0;
+    p = p * zh - 1.0 / 39916800.0;
+    p = p * zh + 1.0 / 362880.0;
+    p = p * zh - 1.0 / 5040.0;
+    p = p * zh + 1.0 / 120.0;
+    mt_add(rh, -d, &s, &e);
+    t = e - dl + ch * zh * p + rl * (1.0 - 0.5 * zh);
+    h = s + t;
+    *lo = t - (h - s);
     return h;
 }
 static double mt_kcos(double rh, double rl, double *lo) {
