@@ -277,3 +277,96 @@ RT_FN obj rt_integer_to_char(obj n) {
     if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c < 0xE000)) rt_type_error("integer->char", "Unicode scalar value", n);
     return RT_CHAR(c);
 }
+
+/* ---- (scheme char): character classes and case (R7RS 6.6, 6.7) ----
+ * ASCII here; other characters use the Unicode tables (rt_unicode.c) when they are enabled
+ * and are otherwise caseless, not alphabetic, not numeric and not whitespace. */
+#ifdef SHIKRA_PROGRAM
+#ifdef RT_UNICODE_FULL
+#define STR_UNI 1
+#endif
+#else
+RT_VAR int rt_unicode_full;
+#define STR_UNI rt_unicode_full
+#endif
+static int str_prop(int c, int p) {
+    if (c < 0x80)
+        switch (p) {
+        case RT_UNI_ALPHA: return (c | 0x20) >= 'a' && (c | 0x20) <= 'z';
+        case RT_UNI_UPPER: return c >= 'A' && c <= 'Z';
+        case RT_UNI_LOWER: return c >= 'a' && c <= 'z';
+        case RT_UNI_SPACE: return c == ' ' || (c >= 9 && c <= 13);
+        default: return c >= '0' && c <= '9' ? c - '0' : -1;
+        }
+#ifdef RT_HAVE_UNICODE
+    if (STR_UNI) return rt_uni_prop(c, p);
+#endif
+    return p == RT_UNI_DIGIT ? -1 : 0;
+}
+static int str_map(int c, int m) { /* m: 0 upper, 1 lower, 2 fold */
+    if (c < 0x80) return m == 0 ? (c >= 'a' && c <= 'z' ? c - 32 : c) : (c >= 'A' && c <= 'Z' ? c + 32 : c);
+#ifdef RT_HAVE_UNICODE
+    if (STR_UNI) return rt_uni_map(c, m);
+#endif
+    return c;
+}
+static int str_char(obj c, const char *who) { str_check_char(c, who); return RT_CHARVAL(c); }
+RT_FN obj rt_char_upcase(obj c) { return RT_CHAR(str_map(str_char(c, "char-upcase"), 0)); }
+RT_FN obj rt_char_downcase(obj c) { return RT_CHAR(str_map(str_char(c, "char-downcase"), 1)); }
+RT_FN obj rt_char_foldcase(obj c) { return RT_CHAR(str_map(str_char(c, "char-foldcase"), 2)); }
+RT_FN obj rt_char_alphabetic_p(obj c) { return RT_BOOL(str_prop(str_char(c, "char-alphabetic?"), RT_UNI_ALPHA)); }
+RT_FN obj rt_char_numeric_p(obj c) { return RT_BOOL(str_prop(str_char(c, "char-numeric?"), RT_UNI_DIGIT) >= 0); }
+RT_FN obj rt_char_whitespace_p(obj c) { return RT_BOOL(str_prop(str_char(c, "char-whitespace?"), RT_UNI_SPACE)); }
+RT_FN obj rt_char_upper_case_p(obj c) { return RT_BOOL(str_prop(str_char(c, "char-upper-case?"), RT_UNI_UPPER)); }
+RT_FN obj rt_char_lower_case_p(obj c) { return RT_BOOL(str_prop(str_char(c, "char-lower-case?"), RT_UNI_LOWER)); }
+RT_FN obj rt_digit_value(obj c) {
+    int v = str_prop(str_char(c, "digit-value"), RT_UNI_DIGIT);
+    return v < 0 ? RT_FALSE : RT_FIX(v);
+}
+/* Full case conversion of one character into out[3] (Unicode: SpecialCasing, final sigma, full
+ * folding = simple folding of the full upper case of the lower case; see tools/mkunicode.c). */
+static int str_case1(int c, int m, const char *s, intptr_t i, intptr_t n, int prev, int *out) {
+#ifdef RT_HAVE_UNICODE
+    if (c >= 0x80 && STR_UNI) {
+        int k, j;
+        size_t len;
+        if (m == 1 && c == 0x3A3) { /* final sigma: after a cased letter, not before one */
+            int next = i < n ? rt_utf8_decode(s + i, (size_t)(n - i), &len) : 0;
+            out[0] = (str_prop(prev, RT_UNI_UPPER) || str_prop(prev, RT_UNI_LOWER)) &&
+                     !(str_prop(next, RT_UNI_UPPER) || str_prop(next, RT_UNI_LOWER)) ? 0x3C2 : 0x3C3;
+            return 1;
+        }
+        if (m < 2) return (k = rt_uni_full(c, m, out)) ? k : (out[0] = rt_uni_map(c, m), 1);
+        if ((k = rt_uni_full(c, 2, out)) || (k = rt_uni_full(c, 1, out)) || (k = rt_uni_full(rt_uni_map(c, 1), 0, out))) {
+            for (j = 0; j < k; j++) out[j] = str_map(out[j], 2);
+            return k;
+        }
+    }
+#else
+    (void)s; (void)i; (void)n; (void)prev;
+#endif
+    out[0] = str_map(c, m);
+    return 1;
+}
+static obj str_case(obj s, int m, const char *who) {
+    obj out;
+    intptr_t i;
+    size_t l;
+    int c, prev = 0, k, n, buf[3];
+    RT_CHECK(rt_is_string(s), who, "string", s);
+    if (RT_STR(s)->chars == RT_STR(s)->bytes) { /* ASCII */
+        out = rt_make_string_n(RT_STR(s)->buf, (size_t)RT_STR(s)->bytes);
+        for (i = 0; i < RT_STR(out)->bytes; i++) RT_STR(out)->buf[i] = (char)str_map((unsigned char)RT_STR(out)->buf[i], m);
+        return out;
+    }
+    out = rt_open_output_string();
+    for (i = 0; i < RT_STR(s)->bytes; i += (intptr_t)l, prev = c) {
+        c = rt_utf8_decode(RT_STR(s)->buf + i, (size_t)(RT_STR(s)->bytes - i), &l);
+        n = str_case1(c, m, RT_STR(s)->buf, i + (intptr_t)l, RT_STR(s)->bytes, prev, buf);
+        for (k = 0; k < n; k++) rt_port_putc(out, buf[k]);
+    }
+    return rt_get_output_string(out);
+}
+RT_FN obj rt_string_upcase(obj s) { return str_case(s, 0, "string-upcase"); }
+RT_FN obj rt_string_downcase(obj s) { return str_case(s, 1, "string-downcase"); }
+RT_FN obj rt_string_foldcase(obj s) { return str_case(s, 2, "string-foldcase"); }

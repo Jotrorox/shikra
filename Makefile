@@ -20,6 +20,15 @@ src/embed.c: tools/mkembed $(EMBED_SRC)
 shikra: src/embed.c $(wildcard src/*.c src/*.h) src/prims.def
 	$(CC) $(CFLAGS) src/*.c -o $@
 
+# Regenerates src/rt_unicode.c (committed) from the Unicode Character Database files in
+# $(UCD); see tools/mkunicode.c for the version and download URLs.
+tools/mkunicode: tools/mkunicode.c
+	$(CC) $(CFLAGS) tools/mkunicode.c -o $@
+unicode: tools/mkunicode
+	@test -n "$(UCD)" || { echo "usage: make unicode UCD=<directory with the UCD files>"; exit 1; }
+	./tools/mkunicode $(UCD) > src/rt_unicode.c.tmp
+	mv src/rt_unicode.c.tmp src/rt_unicode.c
+
 # Fails if the committed src/embed.c does not match its sources.
 check-embed: tools/mkembed
 	@./tools/mkembed $(EMBED_SRC) | cmp -s - src/embed.c || \
@@ -30,7 +39,7 @@ test: shikra check-embed
 	sh tests/run.sh all
 
 clean:
-	rm -f shikra tools/mkembed src/embed.c.tmp
+	rm -f shikra tools/mkembed tools/mkunicode src/embed.c.tmp
 	rm -rf tests/tmp
 
-.PHONY: all test check-embed clean
+.PHONY: all test check-embed clean unicode

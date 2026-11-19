@@ -477,6 +477,7 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
                   p->raise->cname, closure_name(p->raise));
     else sb_puts(o_, "static void rt_engine_raise(obj e) { rt_uncaught(e); }\n");
     for (i = 0; rtfiles[i]; i++) append_embedded(o_, rtfiles[i]);
+    if (o->unicode_full) append_embedded(o_, "src/rt_unicode.c"); /* spec §9.1: only with --unicode=full */
     sb_free(&protos);
     sb_free(&closures);
 }

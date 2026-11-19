@@ -6,3 +6,4 @@
 /bench/r7rs-benchmarks/
 /tests/tmp/
 /tools/mkembed
+/tools/mkunicode

@@ -860,6 +860,58 @@ static const char *const e13[] = {
 "",
 0};
 static const char *const e14[] = {
+";; (scheme char) -- R7RS 6.6, 6.7. The classes and case mappings are leaf primitives (rt_str.c):\n"
+";; ASCII rules by default, the Unicode tables of rt_unicode.c with --unicode=full (spec \302\2473.1),\n"
+";; when cond-expand also sees full-unicode. string-upcase/-downcase/-foldcase use the full\n"
+";; mappings there (\303\237 -> SS, final sigma); the -ci comparisons compare case-folded characters\n"
+";; and strings.\n"
+"(define-library (scheme char)\n"
+"  (import (shikra primitives))\n"
+"  (export char-alphabetic? char-ci<=? char-ci<? char-ci=? char-ci>=? char-ci>? char-downcase\n"
+"          char-foldcase char-lower-case? char-numeric? char-upcase char-upper-case?\n"
+"          char-whitespace? digit-value string-ci<=? string-ci<? string-ci=? string-ci>=?\n"
+"          string-ci>? string-downcase string-foldcase string-upcase)\n"
+"  (begin\n"
+"    (define (char-alphabetic? c) (%char-alphabetic? c))\n"
+"    (define (char-numeric? c) (%char-numeric? c))\n"
+"    (define (char-whitespace? c) (%char-whitespace? c))\n"
+"    (define (char-upper-case? c) (%char-upper-case? c))\n"
+"    (define (char-lower-case? c) (%char-lower-case? c))\n"
+"    (define (digit-value c) (%digit-value c))\n"
+"    (define (char-upcase c) (%char-upcase c))\n"
+"    (define (char-downcase c) (%char-downcase c))\n"
+"    (define (char-foldcase c) (%char-foldcase c))\n"
+"    (define (string-upcase s) (%string-upcase s))\n"
+"    (define (string-downcase s) (%string-downcase s))\n"
+"    (define (string-foldcase s) (%string-foldcase s))\n"
+"    (define-syntax define-ci-comparison\n"
+"      (syntax-rules ()\n"
+"        ((_ name prim key)\n"
+"         (define (name a b . rest)\n"
+"           (let loop ((x (key a)) (y (key b)) (rest rest))\n"
+"             (if (prim x y)\n"
+"                 (if (%null? rest) #t (loop y (key (%car rest)) (%cdr rest)))\n"
+"                 #f))))))\n"
+"    (define (char-key c) (%char->integer (%char-foldcase c)))\n"
+"    (define (string-key s) (%string-foldcase s))\n"
+"    (define (string=0? a b) (%= (%string-compare a b) 0))\n"
+"    (define (string<0? a b) (%< (%string-compare a b) 0))\n"
+"    (define (string>0? a b) (%> (%string-compare a b) 0))\n"
+"    (define (string<=0? a b) (%<= (%string-compare a b) 0))\n"
+"    (define (string>=0? a b) (%>= (%string-compare a b) 0))\n"
+"    (define-ci-comparison char-ci=? %= char-key)\n"
+"    (define-ci-comparison char-ci<? %< char-key)\n"
+"    (define-ci-comparison char-ci>? %> char-key)\n"
+"    (define-ci-comparison char-ci<=? %<= char-key)\n"
+"    (define-ci-comparison char-ci>=? %>= char-key)\n"
+"    (define-ci-comparison string-ci=? string=0? string-key)\n"
+"    (define-ci-comparison string-ci<? string<0? string-key)\n"
+"    (define-ci-comparison string-ci>? string>0? string-key)\n"
+"    (define-ci-comparison string-ci<=? string<=0? string-key)\n"
+"    (define-ci-comparison string-ci>=? string>=0? string-key)))\n"
+"",
+0};
+static const char *const e15[] = {
 ";; (scheme cxr) -- R7RS 6.4: the 24 compositions of car and cdr of depth 3 and 4.\n"
 "(define-library (scheme cxr)\n"
 "  (import (shikra primitives))\n"
@@ -891,7 +943,7 @@ static const char *const e14[] = {
 "    (define (cddddr x) (%cdr (%cdr (%cdr (%cdr x)))))))\n"
 "",
 0};
-static const char *const e15[] = {
+static const char *const e16[] = {
 ";; (scheme eval) -- REPL only (spec \302\2473.1). The interpreter implements %eval and %environment\n"
 ";; (DESIGN.md \302\24711 M3); importing this library into a compiled program is a compile error.\n"
 ";; An environment is an open top level (like the REPL's) with the given imports.\n"
@@ -903,7 +955,7 @@ static const char *const e15[] = {
 "    (define (environment . import-sets) (%environment import-sets))))\n"
 "",
 0};
-static const char *const e16[] = {
+static const char *const e17[] = {
 ";; (scheme file) -- R7RS 6.13.1, 6.14. File ports are OS-descriptor ports (rt_io.c), textual or\n"
 ";; binary; every failure to open or delete raises an error satisfying file-error?. The\n"
 ";; call-with-* and with-* procedures close the port when the procedure returns (not when it\n"
@@ -933,7 +985,7 @@ static const char *const e16[] = {
 "          (lambda vals (%close-port p) (apply values vals)))))))\n"
 "",
 0};
-static const char *const e17[] = {
+static const char *const e18[] = {
 ";; (scheme inexact) -- R7RS 6.2.6. The functions go through the platform layer (rt_sys.c; M6\n"
 ";; supplies them without libm). No complex numbers (spec \302\2473): a real argument outside a\n"
 ";; function's real domain gives +nan.0, e.g. (sqrt -4), (log -1), (asin 2). sqrt of an exact\n"
@@ -966,7 +1018,7 @@ static const char *const e17[] = {
 "          (%sqrt z)))))\n"
 "",
 0};
-static const char *const e18[] = {
+static const char *const e19[] = {
 ";; (scheme lazy) -- R7RS 4.2.5. delay and delay-force are expander keywords (expand.c):\n"
 ";;   (delay-force e) = (%make-promise #f (lambda () e))\n"
 ";;   (delay e)       = (delay-force (%make-promise #t e))\n"
@@ -996,7 +1048,7 @@ static const char *const e18[] = {
 "              (force-promise p)))))))\n"
 "",
 0};
-static const char *const e19[] = {
+static const char *const e20[] = {
 ";; (scheme load) -- REPL only (spec \302\2473.1): read the file's forms one at a time and evaluate\n"
 ";; each in the environment (default: the interaction environment) before reading the next.\n"
 "(define-library (scheme load)\n"
@@ -1014,7 +1066,7 @@ static const char *const e19[] = {
 "        ((file env) (load-forms (%open-input-file file) env))))))\n"
 "",
 0};
-static const char *const e20[] = {
+static const char *const e21[] = {
 ";; (scheme process-context) -- R7RS 6.14. command-line is the program's argv: a compiled\n"
 ";; program's own, or, under `shikra run FILE args` and `shikra interp FILE args`, FILE then the\n"
 ";; arguments. exit unwinds (runs outstanding dynamic-wind after thunks) before it flushes the\n"
@@ -1034,7 +1086,7 @@ static const char *const e20[] = {
 "    (define emergency-exit (case-lambda (() (%exit #t)) ((obj) (%exit obj))))))\n"
 "",
 0};
-static const char *const e21[] = {
+static const char *const e22[] = {
 ";; (scheme read) -- R7RS 6.13.2: the shared runtime reader (rt_read.c), linked only into\n"
 ";; programs that call read (spec \302\2473.1, \302\2479.1), together with the symbol table. Reader errors\n"
 ";; satisfy read-error?.\n"
@@ -1046,7 +1098,7 @@ static const char *const e21[] = {
 "      (case-lambda (() (%read (current-input-port))) ((p) (%read p))))))\n"
 "",
 0};
-static const char *const e22[] = {
+static const char *const e23[] = {
 ";; (scheme repl) -- REPL only (spec \302\2473.1): the environment of the REPL session (in a program\n"
 ";; run by the interpreter: an open top level importing the REPL's default libraries).\n"
 "(define-library (scheme repl)\n"
@@ -1056,7 +1108,7 @@ static const char *const e22[] = {
 "    (define (interaction-environment) (%interaction-environment))))\n"
 "",
 0};
-static const char *const e23[] = {
+static const char *const e24[] = {
 ";; (scheme time) -- R7RS 6.14. current-second is POSIX time (UTC, not TAI) as a flonum;\n"
 ";; jiffies are nanoseconds of the monotonic clock (an exact integer).\n"
 "(define-library (scheme time)\n"
@@ -1068,7 +1120,7 @@ static const char *const e23[] = {
 "    (define (jiffies-per-second) 1000000000)))\n"
 "",
 0};
-static const char *const e24[] = {
+static const char *const e25[] = {
 ";; (scheme write) -- R7RS 6.13.3. write and display label cycles only (so they terminate on\n"
 ";; circular data), write-shared labels all shared pairs and vectors, write-simple none\n"
 ";; (DESIGN.md \"M5 as built\", datum labels in rt_io.c).\n"
@@ -1086,7 +1138,7 @@ static const char *const e24[] = {
 "      (case-lambda ((x) (%write-simple x (current-output-port))) ((x p) (%write-simple x p))))))\n"
 "",
 0};
-static const char *const e25[] = {
+static const char *const e26[] = {
 ";; (shikra dynamic) -- internal: the walk over the dynamic state that every non-local jump\n"
 ";; performs (spec \302\2478.4, R7RS 6.10). Shared by call/cc and guard in (scheme base) and by exit\n"
 ";; in (scheme process-context); plain Scheme on %primitives, so both engines use it.\n"
@@ -1129,7 +1181,7 @@ static const char *const e25[] = {
 "                      (%set-winders! w))))))))))\n"
 "",
 0};
-static const char *const e26[] = {
+static const char *const e27[] = {
 "/* prims.def -- the table of %primitives (DESIGN.md \302\2472, \302\2476). X-macro: define PRIM, include.\n"
 " *\n"
 " *   PRIM(NAME, WHO, CFN, ARITY, ARGS, RES, FLAGS)\n"
@@ -1193,6 +1245,19 @@ static const char *const e26[] = {
 "PRIM(\"%char?\", \"char?\", rt_char_p, 1, \"a\", 'b', PF_PURE)\n"
 "PRIM(\"%char->integer\", \"char->integer\", rt_char_to_integer, 1, \"c\", 'f', PF_FAIL)\n"
 "PRIM(\"%integer->char\", \"integer->char\", rt_integer_to_char, 1, \"f\", 'c', PF_FAIL)\n"
+"/* (scheme char): ASCII, or the Unicode tables with --unicode=full */\n"
+"PRIM(\"%char-upcase\", \"char-upcase\", rt_char_upcase, 1, \"c\", 'c', PF_FAIL)\n"
+"PRIM(\"%char-downcase\", \"char-downcase\", rt_char_downcase, 1, \"c\", 'c', PF_FAIL)\n"
+"PRIM(\"%char-foldcase\", \"char-foldcase\", rt_char_foldcase, 1, \"c\", 'c', PF_FAIL)\n"
+"PRIM(\"%char-alphabetic?\", \"char-alphabetic?\", rt_char_alphabetic_p, 1, \"c\", 'b', PF_FAIL)\n"
+"PRIM(\"%char-numeric?\", \"char-numeric?\", rt_char_numeric_p, 1, \"c\", 'b', PF_FAIL)\n"
+"PRIM(\"%char-whitespace?\", \"char-whitespace?\", rt_char_whitespace_p, 1, \"c\", 'b', PF_FAIL)\n"
+"PRIM(\"%char-upper-case?\", \"char-upper-case?\", rt_char_upper_case_p, 1, \"c\", 'b', PF_FAIL)\n"
+"PRIM(\"%char-lower-case?\", \"char-lower-case?\", rt_char_lower_case_p, 1, \"c\", 'b', PF_FAIL)\n"
+"PRIM(\"%digit-value\", \"digit-value\", rt_digit_value, 1, \"c\", 'a', PF_FAIL)\n"
+"PRIM(\"%string-upcase\", \"string-upcase\", rt_string_upcase, 1, \"s\", 's', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%string-downcase\", \"string-downcase\", rt_string_downcase, 1, \"s\", 's', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%string-foldcase\", \"string-foldcase\", rt_string_foldcase, 1, \"s\", 's', PF_ALLOC | PF_FAIL)\n"
 "\n"
 "/* strings */\n"
 "PRIM(\"%string?\", \"string?\", rt_string_p, 1, \"a\", 'b', PF_PURE)\n"
@@ -1211,7 +1276,7 @@ static const char *const e26[] = {
 "PRIM(\"%utf8->string\", \"utf8->string\", rt_utf8_to_string, 1, \"u\", 's', PF_ALLOC | PF_FAIL)\n"
 "\n"
 "/* vectors */\n"
-"PRIM(\"%vector?\", \"vector?\", rt_vector_p, 1, \"a\", 'b', PF_PURE)\n"
+"PRIM(\"%vector?\", \"vector?\", rt_vector_p, 1, \"a\", 'b', PF_PURE)\n",
 "PRIM(\"%make-vector\", \"make-vector\", rt_make_vector, 2, \"fa\", 'v', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%vector-length\", \"vector-length\", rt_vector_length, 1, \"v\", 'f', PF_FAIL)\n"
 "PRIM(\"%vector-ref\", \"vector-ref\", rt_vector_ref, 2, \"vf\", 'a', PF_FAIL)\n"
@@ -1225,7 +1290,7 @@ static const char *const e26[] = {
 "PRIM(\"%bytevector-length\", \"bytevector-length\", rt_bytevector_length, 1, \"u\", 'f', PF_FAIL)\n"
 "PRIM(\"%bytevector-u8-ref\", \"bytevector-u8-ref\", rt_bytevector_u8_ref, 2, \"uf\", 'f', PF_FAIL)\n"
 "PRIM(\"%bytevector-u8-set!\", \"bytevector-u8-set!\", rt_bytevector_u8_set, 3, \"uff\", 'a', PF_FAIL | PF_EFFECT)\n"
-"PRIM(\"%bytevector-copy\", \"bytevector-copy\", rt_bytevector_copy, 3, \"uff\", 'u', PF_ALLOC | PF_FAIL)\n",
+"PRIM(\"%bytevector-copy\", \"bytevector-copy\", rt_bytevector_copy, 3, \"uff\", 'u', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%bytevector-copy!\", \"bytevector-copy!\", rt_bytevector_copy_x, 5, \"ufuff\", 'a', PF_FAIL | PF_EFFECT)\n"
 "\n"
 "/* boxes (assigned captured variables) */\n"
@@ -1254,7 +1319,7 @@ static const char *const e26[] = {
 "PRIM(\"%error-object-irritants\", \"error-object-irritants\", rt_error_object_irritants, 1, \"a\", 'l', PF_FAIL)\n"
 "PRIM(\"%file-error?\", \"file-error?\", rt_file_error_p, 1, \"a\", 'b', PF_PURE)\n"
 "PRIM(\"%read-error?\", \"read-error?\", rt_read_error_p, 1, \"a\", 'b', PF_PURE)\n"
-"/* report an uncaught exception and exit (the bottom of raise in lib/) */\n"
+"/* report an uncaught exception and exit (the bottom of raise in lib/) */\n",
 "PRIM(\"%uncaught\", \"raise\", rt_uncaught_o, 1, \"a\", 'a', PF_EFFECT)\n"
 "\n"
 "/* dynamic state (spec \302\2478.3, \302\2478.4): the winders list (dynamic-wind and parameterize frames)\n"
@@ -1270,7 +1335,7 @@ static const char *const e26[] = {
 "PRIM(\"%make-values\", \"values\", rt_make_values, 1, \"l\", 'a', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%values?\", \"values?\", rt_values_p, 1, \"a\", 'b', PF_PURE)\n"
 "PRIM(\"%values->list\", \"values->list\", rt_values_to_list, 1, \"a\", 'l', PF_ALLOC | PF_FAIL)\n"
-"/* spreading a values object into a known receiver (emitted by normalize.c; nreq, i and\n",
+"/* spreading a values object into a known receiver (emitted by normalize.c; nreq, i and\n"
 " * rest are compiler constants) */\n"
 "PRIM(\"%values-check\", \"call-with-values\", rt_values_check, 3, \"afb\", 'a', PF_FAIL)\n"
 "PRIM(\"%values-ref\", \"call-with-values\", rt_values_ref, 2, \"af\", 'a', 0)\n"
@@ -1302,7 +1367,7 @@ static const char *const e26[] = {
 "PRIM(\"%modulo\", \"modulo\", rt_modulo, 2, \"nn\", 'n', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%floor-quotient\", \"floor-quotient\", rt_floor_quotient, 2, \"nn\", 'n', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%exact\", \"exact\", rt_exact, 1, \"n\", 'f', PF_FAIL)\n"
-"PRIM(\"%inexact\", \"inexact\", rt_inexact, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%inexact\", \"inexact\", rt_inexact, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n",
 "PRIM(\"%floor\", \"floor\", rt_floor, 1, \"n\", 'n', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%ceiling\", \"ceiling\", rt_ceiling, 1, \"n\", 'n', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%round\", \"round\", rt_round, 1, \"n\", 'n', PF_ALLOC | PF_FAIL)\n"
@@ -1318,7 +1383,7 @@ static const char *const e26[] = {
 "PRIM(\"%atan2\", \"atan\", rt_atan2, 2, \"nn\", 'd', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%sqrt\", \"sqrt\", rt_sqrt, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%number->string\", \"number->string\", rt_number_to_string, 2, \"nf\", 's', PF_ALLOC | PF_FAIL)\n"
-"PRIM(\"%string->number\", \"string->number\", rt_string_to_number, 2, \"sf\", 'a', PF_ALLOC | PF_FAIL)\n",
+"PRIM(\"%string->number\", \"string->number\", rt_string_to_number, 2, \"sf\", 'a', PF_ALLOC | PF_FAIL)\n"
 "\n"
 "/* ports and I/O */\n"
 "PRIM(\"%stdin-port\", \"current-input-port\", rt_stdin_port, 0, \"\", 'a', PF_PURE)\n"
@@ -1340,7 +1405,7 @@ static const char *const e26[] = {
 "PRIM(\"%open-input-file\", \"open-input-file\", rt_open_input_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%open-output-file\", \"open-output-file\", rt_open_output_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%open-binary-input-file\", \"open-binary-input-file\", rt_open_binary_input_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
-"PRIM(\"%open-binary-output-file\", \"open-binary-output-file\", rt_open_binary_output_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
+"PRIM(\"%open-binary-output-file\", \"open-binary-output-file\", rt_open_binary_output_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n",
 "PRIM(\"%file-exists?\", \"file-exists?\", rt_file_exists_p, 1, \"s\", 'b', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%delete-file\", \"delete-file\", rt_delete_file, 1, \"s\", 'a', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%close-port\", \"close-port\", rt_close_port, 1, \"a\", 'a', PF_FAIL | PF_EFFECT)\n"
@@ -1353,7 +1418,7 @@ static const char *const e26[] = {
 "PRIM(\"%peek-u8\", \"peek-u8\", rt_peek_u8, 1, \"a\", 'a', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%u8-ready?\", \"u8-ready?\", rt_u8_ready_p, 1, \"a\", 'b', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%read-bytevector!\", \"read-bytevector!\", rt_read_bytevector_x, 4, \"uaff\", 'a', PF_FAIL | PF_EFFECT)\n"
-"PRIM(\"%read\", \"read\", rt_read, 1, \"a\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n",
+"PRIM(\"%read\", \"read\", rt_read, 1, \"a\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%write-char\", \"write-char\", rt_write_char, 2, \"ca\", 'a', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%write-string\", \"write-string\", rt_write_string, 2, \"sa\", 'a', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%write-u8\", \"write-u8\", rt_write_u8, 2, \"fa\", 'a', PF_FAIL | PF_EFFECT)\n"
@@ -1376,7 +1441,7 @@ static const char *const e26[] = {
 "PRIM(\"%current-jiffy\", \"current-jiffy\", rt_current_jiffy, 0, \"\", 'f', PF_EFFECT)\n"
 "",
 0};
-static const char *const e27[] = {
+static const char *const e28[] = {
 "/* rt.h -- Shikra runtime: value representation and runtime API (spec \302\2476, DESIGN.md \302\2473-\302\2475).\n"
 " *\n"
 " * Two lives (DESIGN.md \302\2473):\n"
@@ -1830,6 +1895,31 @@ static const char *const e27[] = {
 "RT_FN obj rt_string_to_utf8(obj s);\n"
 "RT_FN obj rt_utf8_to_string(obj bv);\n"
 "RT_FN obj rt_integer_to_char(obj n);\n"
+"/* (scheme char): ASCII rules, and above 0x7F the Unicode tables of rt_unicode.c when they are\n"
+" * enabled: program mode with RT_UNICODE_FULL (--unicode=full; the file is only appended then),\n"
+" * tool mode when rt_unicode_full is set (shikra repl/interp --unicode=full). */\n"
+"RT_FN obj rt_char_upcase(obj c);\n"
+"RT_FN obj rt_char_downcase(obj c);\n"
+"RT_FN obj rt_char_foldcase(obj c);\n"
+"RT_FN obj rt_char_alphabetic_p(obj c);\n"
+"RT_FN obj rt_char_numeric_p(obj c);\n"
+"RT_FN obj rt_char_whitespace_p(obj c);\n"
+"RT_FN obj rt_char_upper_case_p(obj c);\n"
+"RT_FN obj rt_char_lower_case_p(obj c);\n"
+"RT_FN obj rt_digit_value(obj c);\n"
+"RT_FN obj rt_string_upcase(obj s);\n",
+"RT_FN obj rt_string_downcase(obj s);\n"
+"RT_FN obj rt_string_foldcase(obj s);\n"
+"enum { RT_UNI_ALPHA, RT_UNI_UPPER, RT_UNI_LOWER, RT_UNI_SPACE, RT_UNI_DIGIT };\n"
+"#if !defined(SHIKRA_PROGRAM) || defined(RT_UNICODE_FULL)\n"
+"#define RT_HAVE_UNICODE 1\n"
+"RT_FN int rt_uni_prop(int c, int p);          /* RT_UNI_DIGIT: digit value or -1, else 1/0 */\n"
+"RT_FN int rt_uni_map(int c, int m);           /* simple mapping, m: 0 upper, 1 lower, 2 fold */\n"
+"RT_FN int rt_uni_full(int c, int m, int *out); /* full mapping into out[3]: count, 0 if none */\n"
+"#endif\n"
+"#ifndef SHIKRA_PROGRAM\n"
+"RT_EXTVAR int rt_unicode_full;\n"
+"#endif\n"
 "\n"
 "/* ---- numbers (rt_num.c) ---- */\n"
 "RT_FN obj rt_make_flonum(double d);\n"
@@ -1846,7 +1936,7 @@ static const char *const e27[] = {
 "RT_FN obj rt_quotient(obj a, obj b);\n"
 "RT_FN obj rt_remainder(obj a, obj b);\n"
 "RT_FN obj rt_modulo(obj a, obj b);\n"
-"RT_FN obj rt_floor_quotient(obj a, obj b);\n",
+"RT_FN obj rt_floor_quotient(obj a, obj b);\n"
 "RT_FN obj rt_neg(obj x);\n"
 "RT_FN obj rt_abs(obj x);\n"
 "RT_FN obj rt_expt(obj a, obj b);\n"
@@ -1894,7 +1984,7 @@ static const char *const e27[] = {
 "    return rt_mul2(a, b);\n"
 "}\n"
 "RT_INLINE obj rt_lt(obj a, obj b) {\n"
-"    if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b))) return RT_BOOL((intptr_t)a < (intptr_t)b);\n"
+"    if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b))) return RT_BOOL((intptr_t)a < (intptr_t)b);\n",
 "    return rt_lt2(a, b);\n"
 "}\n"
 "RT_INLINE obj rt_gt(obj a, obj b) {\n"
@@ -1921,7 +2011,7 @@ static const char *const e27[] = {
 "RT_FN obj rt_close_port(obj port);\n"
 "RT_FN int rt_port_getc(obj port);  /* next code point or -1; tracks line/col */\n"
 "RT_FN int rt_port_peekc(obj port);\n"
-"RT_FN void rt_port_write(obj port, const char *s, size_t n);\n",
+"RT_FN void rt_port_write(obj port, const char *s, size_t n);\n"
 "RT_FN void rt_port_putc(obj port, int cp);\n"
 "RT_FN void rt_port_puts(obj port, const char *s);\n"
 "RT_FN void rt_flush(obj port);\n"
@@ -1962,7 +2052,7 @@ static const char *const e27[] = {
 "#ifndef SHIKRA_PROGRAM\n"
 "/* Tool mode: source locations of pairs created by the reader from ports with a name. */\n"
 "RT_FN void rt_srcloc_enable(int on);\n"
-"RT_FN int rt_srcloc_lookup(obj pair, obj *file, intptr_t *line, intptr_t *col); /* 1 if found */\n"
+"RT_FN int rt_srcloc_lookup(obj pair, obj *file, intptr_t *line, intptr_t *col); /* 1 if found */\n",
 "RT_FN void rt_srcloc_set(obj pair, obj file, intptr_t line, intptr_t col);\n"
 "#endif\n"
 "\n"
@@ -1989,7 +2079,7 @@ static const char *const e27[] = {
 "}\n"
 "RT_INLINE obj rt_pair_p(obj x) { return RT_BOOL(rt_is_pair(x)); }\n"
 "RT_INLINE obj rt_null_p(obj x) { return RT_BOOL(x == RT_NIL); }\n"
-"RT_INLINE obj rt_eq_p(obj a, obj b) { return RT_BOOL(a == b); }\n",
+"RT_INLINE obj rt_eq_p(obj a, obj b) { return RT_BOOL(a == b); }\n"
 "RT_INLINE obj rt_boolean_p(obj x) { return RT_BOOL(x == RT_TRUE || x == RT_FALSE); }\n"
 "RT_INLINE obj rt_symbol_p(obj x) { return RT_BOOL(rt_is_symbol(x)); }\n"
 "RT_INLINE obj rt_procedure_p(obj x) { return RT_BOOL(rt_is_proc(x)); }\n"
@@ -2014,7 +2104,7 @@ static const char *const e27[] = {
 "RT_INLINE obj rt_bytevector_length(obj v) { RT_CHECK(rt_is_bytevector(v), \"bytevector-length\", \"bytevector\", v); return RT_FIX(RT_HLEN(v)); }\n"
 "RT_INLINE obj rt_bytevector_u8_ref(obj v, obj k) {\n"
 "    RT_CHECK(rt_is_bytevector(v), \"bytevector-u8-ref\", \"bytevector\", v);\n"
-"    if (RT_UNLIKELY(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v))) rt_range_error(\"bytevector-u8-ref\", k);\n"
+"    if (RT_UNLIKELY(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v))) rt_range_error(\"bytevector-u8-ref\", k);\n",
 "    return RT_FIX(RT_PTR(v, rt_bytevector)->b[RT_FIXVAL(k)]);\n"
 "}\n"
 "RT_INLINE obj rt_bytevector_u8_set(obj v, obj k, obj b) {\n"
@@ -2031,7 +2121,7 @@ static const char *const e27[] = {
 "    return RT_VEC(r)[1 + RT_FIXVAL(k)]; /* k is a compiler-generated constant */\n"
 "}\n"
 "RT_INLINE obj rt_record_set(obj r, obj rtd, obj k, obj v) {\n"
-"    if (RT_UNLIKELY(!rt_is_type(r, RT_T_RECORD) || RT_VEC(r)[0] != rtd)) rt_record_error(r, rtd);\n",
+"    if (RT_UNLIKELY(!rt_is_type(r, RT_T_RECORD) || RT_VEC(r)[0] != rtd)) rt_record_error(r, rtd);\n"
 "    RT_VEC(r)[1 + RT_FIXVAL(k)] = v;\n"
 "    return RT_UNSPEC;\n"
 "}\n"
@@ -2050,7 +2140,7 @@ static const char *const e27[] = {
 "#endif /* SHIKRA_RT_H */\n"
 "",
 0};
-static const char *const e28[] = {
+static const char *const e29[] = {
 "/* rt_core.c -- initialisation, the error path, and the core data objects\n"
 " * (pairs, symbols, vectors, bytevectors, boxes, records, error objects, values,\n"
 " * equivalence). All primitives are leaves: they never call Scheme code.\n"
@@ -2659,7 +2749,7 @@ static const char *const e28[] = {
 "}\n"
 "",
 0};
-static const char *const e29[] = {
+static const char *const e30[] = {
 "/* rt_gc.c -- allocation and collection (spec \302\2477, DESIGN.md \302\2475 and \"M2 as built\").\n"
 " * One interface (the rt_alloc / rt_cons fast paths in rt.h, rt_alloc_slow, roots, immortal\n"
 " * mode, rt_gc_collect), two collectors chosen by a config macro:\n"
@@ -3185,7 +3275,7 @@ static const char *const e29[] = {
 "#endif\n"
 "",
 0};
-static const char *const e30[] = {
+static const char *const e31[] = {
 "/* rt_io.c -- ports and the printer (write/display).\n"
 " * A port is a fixed-field object (rt_port in rt.h) over either an OS descriptor (with a\n"
 " * byte buffer) or an in-memory buffer (RT_PF_STRING: string and bytevector ports).\n"
@@ -3716,7 +3806,7 @@ static const char *const e30[] = {
 "RT_FN obj rt_flush_output_port(obj port) { io_check(port, RT_PF_OUT | IO_ANY, \"flush-output-port\"); rt_flush(port); return RT_UNSPEC; }\n",
 "",
 0};
-static const char *const e31[] = {
+static const char *const e32[] = {
 "/* rt_num.c -- numbers: 63-bit fixnums and boxed IEEE doubles (spec \302\2473.2, \302\2476.2).\n"
 " * Fixnum overflow raises an error and never wraps. No rationals: (/ 1 3) is a flonum,\n"
 " * (/ 6 3) is the exact 2. No libm and no libc: rounding is done by hand, and float\n"
@@ -4242,7 +4332,7 @@ static const char *const e31[] = {
 "}\n"
 "",
 0};
-static const char *const e32[] = {
+static const char *const e33[] = {
 "/* rt_read.c -- the datum reader (R7RS \302\2477.1.2 lexical syntax), shared by the compiler,\n"
 " * the REPL and compiled programs that use (scheme read). Leaf code: no Scheme calls.\n"
 " * Tool mode additionally records file:line:column for every pair it creates. */\n"
@@ -4597,7 +4687,7 @@ static const char *const e32[] = {
 "}\n"
 "",
 0};
-static const char *const e33[] = {
+static const char *const e34[] = {
 "/* rt_str.c -- strings (UTF-8 with an ASCII fast path, spec \302\2473.2/\302\2476.1) and chars.\n"
 " * A string is [hdr][chars][bytes][buf]; buf is a NUL-terminated UTF-8 buffer that may be\n"
 " * replaced by string-set! when a character's encoded width changes. RT_F_ASCII is kept\n"
@@ -4877,9 +4967,102 @@ static const char *const e33[] = {
 "    if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c < 0xE000)) rt_type_error(\"integer->char\", \"Unicode scalar value\", n);\n"
 "    return RT_CHAR(c);\n"
 "}\n"
+"\n"
+"/* ---- (scheme char): character classes and case (R7RS 6.6, 6.7) ----\n"
+" * ASCII here; other characters use the Unicode tables (rt_unicode.c) when they are enabled\n"
+" * and are otherwise caseless, not alphabetic, not numeric and not whitespace. */\n"
+"#ifdef SHIKRA_PROGRAM\n"
+"#ifdef RT_UNICODE_FULL\n"
+"#define STR_UNI 1\n"
+"#endif\n"
+"#else\n"
+"RT_VAR int rt_unicode_full;\n"
+"#define STR_UNI rt_unicode_full\n"
+"#endif\n"
+"static int str_prop(int c, int p) {\n"
+"    if (c < 0x80)\n"
+"        switch (p) {\n"
+"        case RT_UNI_ALPHA: return (c | 0x20) >= 'a' && (c | 0x20) <= 'z';\n"
+"        case RT_UNI_UPPER: return c >= 'A' && c <= 'Z';\n"
+"        case RT_UNI_LOWER: return c >= 'a' && c <= 'z';\n"
+"        case RT_UNI_SPACE: return c == ' ' || (c >= 9 && c <= 13);\n"
+"        default: return c >= '0' && c <= '9' ? c - '0' : -1;\n"
+"        }\n"
+"#ifdef RT_HAVE_UNICODE\n"
+"    if (STR_UNI) return rt_uni_prop(c, p);\n"
+"#endif\n"
+"    return p == RT_UNI_DIGIT ? -1 : 0;\n"
+"}\n"
+"static int str_map(int c, int m) { /* m: 0 upper, 1 lower, 2 fold */\n"
+"    if (c < 0x80) return m == 0 ? (c >= 'a' && c <= 'z' ? c - 32 : c) : (c >= 'A' && c <= 'Z' ? c + 32 : c);\n"
+"#ifdef RT_HAVE_UNICODE\n"
+"    if (STR_UNI) return rt_uni_map(c, m);\n",
+"#endif\n"
+"    return c;\n"
+"}\n"
+"static int str_char(obj c, const char *who) { str_check_char(c, who); return RT_CHARVAL(c); }\n"
+"RT_FN obj rt_char_upcase(obj c) { return RT_CHAR(str_map(str_char(c, \"char-upcase\"), 0)); }\n"
+"RT_FN obj rt_char_downcase(obj c) { return RT_CHAR(str_map(str_char(c, \"char-downcase\"), 1)); }\n"
+"RT_FN obj rt_char_foldcase(obj c) { return RT_CHAR(str_map(str_char(c, \"char-foldcase\"), 2)); }\n"
+"RT_FN obj rt_char_alphabetic_p(obj c) { return RT_BOOL(str_prop(str_char(c, \"char-alphabetic?\"), RT_UNI_ALPHA)); }\n"
+"RT_FN obj rt_char_numeric_p(obj c) { return RT_BOOL(str_prop(str_char(c, \"char-numeric?\"), RT_UNI_DIGIT) >= 0); }\n"
+"RT_FN obj rt_char_whitespace_p(obj c) { return RT_BOOL(str_prop(str_char(c, \"char-whitespace?\"), RT_UNI_SPACE)); }\n"
+"RT_FN obj rt_char_upper_case_p(obj c) { return RT_BOOL(str_prop(str_char(c, \"char-upper-case?\"), RT_UNI_UPPER)); }\n"
+"RT_FN obj rt_char_lower_case_p(obj c) { return RT_BOOL(str_prop(str_char(c, \"char-lower-case?\"), RT_UNI_LOWER)); }\n"
+"RT_FN obj rt_digit_value(obj c) {\n"
+"    int v = str_prop(str_char(c, \"digit-value\"), RT_UNI_DIGIT);\n"
+"    return v < 0 ? RT_FALSE : RT_FIX(v);\n"
+"}\n"
+"/* Full case conversion of one character into out[3] (Unicode: SpecialCasing, final sigma, full\n"
+" * folding = simple folding of the full upper case of the lower case; see tools/mkunicode.c). */\n"
+"static int str_case1(int c, int m, const char *s, intptr_t i, intptr_t n, int prev, int *out) {\n"
+"#ifdef RT_HAVE_UNICODE\n"
+"    if (c >= 0x80 && STR_UNI) {\n"
+"        int k, j;\n"
+"        size_t len;\n"
+"        if (m == 1 && c == 0x3A3) { /* final sigma: after a cased letter, not before one */\n"
+"            int next = i < n ? rt_utf8_decode(s + i, (size_t)(n - i), &len) : 0;\n"
+"            out[0] = (str_prop(prev, RT_UNI_UPPER) || str_prop(prev, RT_UNI_LOWER)) &&\n"
+"                     !(str_prop(next, RT_UNI_UPPER) || str_prop(next, RT_UNI_LOWER)) ? 0x3C2 : 0x3C3;\n"
+"            return 1;\n"
+"        }\n"
+"        if (m < 2) return (k = rt_uni_full(c, m, out)) ? k : (out[0] = rt_uni_map(c, m), 1);\n"
+"        if ((k = rt_uni_full(c, 2, out)) || (k = rt_uni_full(c, 1, out)) || (k = rt_uni_full(rt_uni_map(c, 1), 0, out))) {\n"
+"            for (j = 0; j < k; j++) out[j] = str_map(out[j], 2);\n"
+"            return k;\n"
+"        }\n"
+"    }\n"
+"#else\n"
+"    (void)s; (void)i; (void)n; (void)prev;\n"
+"#endif\n"
+"    out[0] = str_map(c, m);\n"
+"    return 1;\n"
+"}\n"
+"static obj str_case(obj s, int m, const char *who) {\n"
+"    obj out;\n"
+"    intptr_t i;\n"
+"    size_t l;\n"
+"    int c, prev = 0, k, n, buf[3];\n"
+"    RT_CHECK(rt_is_string(s), who, \"string\", s);\n"
+"    if (RT_STR(s)->chars == RT_STR(s)->bytes) { /* ASCII */\n"
+"        out = rt_make_string_n(RT_STR(s)->buf, (size_t)RT_STR(s)->bytes);\n"
+"        for (i = 0; i < RT_STR(out)->bytes; i++) RT_STR(out)->buf[i] = (char)str_map((unsigned char)RT_STR(out)->buf[i], m);\n"
+"        return out;\n"
+"    }\n"
+"    out = rt_open_output_string();\n"
+"    for (i = 0; i < RT_STR(s)->bytes; i += (intptr_t)l, prev = c) {\n"
+"        c = rt_utf8_decode(RT_STR(s)->buf + i, (size_t)(RT_STR(s)->bytes - i), &l);\n"
+"        n = str_case1(c, m, RT_STR(s)->buf, i + (intptr_t)l, RT_STR(s)->bytes, prev, buf);\n",
+"        for (k = 0; k < n; k++) rt_port_putc(out, buf[k]);\n"
+"    }\n"
+"    return rt_get_output_string(out);\n"
+"}\n"
+"RT_FN obj rt_string_upcase(obj s) { return str_case(s, 0, \"string-upcase\"); }\n"
+"RT_FN obj rt_string_downcase(obj s) { return str_case(s, 1, \"string-downcase\"); }\n"
+"RT_FN obj rt_string_foldcase(obj s) { return str_case(s, 2, \"string-foldcase\"); }\n"
 "",
 0};
-static const char *const e34[] = {
+static const char *const e35[] = {
 "/* rt_sys.c -- platform layer. The ONLY runtime file that calls libc or the OS\n"
 " * (DESIGN.md \302\2473). Everything else goes through the rt_sys_* / rt_mem* functions. */\n"
 "#ifndef SHIKRA_RT_H\n"
@@ -4995,6 +5178,402 @@ static const char *const e34[] = {
 "#endif\n"
 "",
 0};
+static const char *const e36[] = {
+"/* rt_unicode.c -- GENERATED by tools/mkunicode.c from the Unicode Character Database 18.0.0\n"
+" * (https://www.unicode.org/Public/18.0.0/ucd/). Do not edit: see tools/mkunicode.c for the\n"
+" * table format and how to regenerate. Linked into a program only with --unicode=full\n"
+" * (spec \302\2479.1); the tool always contains it (REPL and interpreter: --unicode=full). */\n"
+"#ifndef SHIKRA_RT_H\n"
+"#include \"rt.h\"\n"
+"#endif\n"
+"#if !defined(SHIKRA_PROGRAM) || defined(RT_UNICODE_FULL)\n"
+"typedef struct { unsigned int c; unsigned short o[3]; } uni_full;\n"
+"static const unsigned char uni_alpha[] = {\n"
+"    42,2,10,2,4,2,5,46,1,62,1,148,7,4,24,14,10,7,2,1,2,86,2,29,\n"
+"    36,1,4,2,8,1,2,6,2,1,6,1,2,1,40,1,166,1,1,150,2,8,204,2,\n"
+"    1,76,1,4,6,82,2,4,35,28,1,2,1,4,1,4,1,6,6,54,4,8,29,22,\n"
+"    5,112,1,14,14,204,1,1,16,4,16,4,6,10,6,2,2,16,96,13,202,1,24,66,\n"
+"    9,4,4,2,5,48,2,38,19,50,7,22,5,48,1,14,7,2,8,84,10,24,3,14,\n"
+"    6,152,1,1,32,1,6,4,30,13,38,1,16,2,4,2,44,1,14,1,2,3,8,3,\n"
+"    16,2,4,2,4,1,2,8,2,4,4,1,10,12,4,10,2,4,6,1,12,4,4,2,\n"
+"    44,1,14,1,4,1,4,1,4,4,10,4,4,2,4,4,2,7,8,1,2,17,12,11,\n"
+"    6,1,18,1,6,1,44,1,14,1,4,1,10,3,18,1,6,1,4,3,2,15,8,21,\n"
+"    8,4,6,1,16,2,4,2,44,1,14,1,4,1,10,3,16,2,4,2,4,9,4,4,\n"
+"    4,1,10,13,2,16,4,1,12,3,6,1,8,3,4,1,2,1,4,3,4,3,6,3,\n"
+"    24,4,10,3,6,1,6,3,2,6,2,40,26,1,6,1,46,1,32,3,16,1,6,1,\n"
+"    6,8,4,1,6,1,4,2,8,28,8,1,16,1,6,1,46,1,20,1,10,3,16,1,\n"
+"    6,1,6,8,4,5,6,1,8,13,6,12,26,1,6,1,82,2,16,1,6,1,6,1,\n"
+"    2,5,8,7,10,22,12,1,6,1,36,3,48,1,18,1,2,2,14,8,12,1,2,1,\n"
+"    16,18,4,13,116,5,14,6,2,51,4,1,2,1,10,1,48,1,2,1,38,1,6,2,\n"
+"    10,1,2,6,2,14,8,32,2,63,16,1,72,4,38,4,32,1,72,67,110,1,2,2,\n"
+"    10,16,128,1,10,8,2,76,1,2,5,2,2,86,1,154,5,1,8,2,14,1,2,1,\n"
+"    8,2,82,1,8,2,66,1,8,2,14,1,2,1,8,2,30,1,114,1,8,2,134,1,\n"
+"    37,32,16,172,1,2,12,3,216,9,2,34,1,52,5,150,1,3,22,7,40,11,42,12,\n"
+"    40,12,26,1,6,1,4,12,104,2,38,14,2,4,2,67,178,1,7,86,5,140,1,10,\n"
+"    62,1,24,4,18,23,60,2,10,11,88,4,52,54,56,4,126,2,40,50,2,23,4,11,\n"
+"    6,49,104,1,30,1,16,51,84,2,8,10,88,1,22,14,110,22,6,10,72,2,22,5,\n"
+"    86,2,6,41,8,1,12,1,4,3,2,5,128,3,19,68,11,172,4,2,12,2,76,2,\n"
+"    12,2,16,1,9,0,60,2,106,1,14,1,2,3,6,1,14,3,8,2,12,4,26,5,\n"
+"    6,1,14,116,2,13,2,15,34,98,2,4,2,2,20,1,2,3,10,6,9,0,6,1,\n"
+"    22,2,8,5,10,4,2,17,82,173,6,104,150,14,202,3,6,8,3,4,12,76,1,2,\n"
+"    5,2,2,112,7,2,16,46,9,14,1,14,1,14,1,14,1,14,1,14,1,14,1,14,\n"
+"    1,64,47,2,213,3,6,25,18,7,10,2,10,4,172,1,6,6,1,180,1,1,8,5,\n"
+"    86,1,188,1,17,64,48,32,128,4,128,103,64,154,218,2,67,92,2,154,4,3,32,10,\n"
+"    4,20,94,5,16,3,226,1,39,18,2,206,1,2,166,1,4,2,14,42,1,66,24,104,\n"
+"    12,136,1,1,2,44,12,3,2,1,6,10,66,5,70,13,58,3,102,1,24,15,2,16,\n"
+"    32,10,10,1,110,9,28,18,46,3,138,1,1,2,1,2,24,6,2,32,2,8,11,12,\n"
+"    2,12,2,12,9,14,1,14,1,86,1,28,2,4,2,246,1,21,200,174,1,12,46,4,\n"
+"    98,132,66,220,5,2,212,1,38,14,12,10,5,24,1,26,1,10,1,2,1,4,1,4,\n"
+"    1,216,1,33,214,5,18,128,1,2,108,40,24,116,10,1,142,2,36,52,6,52,11,178,\n"
+"    1,3,12,2,12,2,12,2,6,35,24,1,52,1,38,1,4,1,30,2,28,34,246,1,\n"
+"    69,106,139,2,58,3,98,47,64,13,60,5,86,5,60,2,72,4,16,1,10,42,188,2,\n",
+"    18,72,4,72,4,80,8,104,12,22,1,30,1,14,1,4,1,22,1,30,1,14,1,4,\n"
+"    3,104,12,238,4,9,44,10,16,24,12,1,84,1,28,64,12,2,2,1,88,1,4,3,\n"
+"    2,2,46,10,46,9,62,65,38,1,4,10,44,10,52,6,52,38,112,6,4,64,8,1,\n"
+"    4,5,16,1,6,1,58,42,58,3,58,35,16,1,56,27,108,10,44,10,38,13,36,110,\n"
+"    146,1,55,102,13,102,13,80,34,56,3,2,5,46,250,1,84,1,4,3,4,16,12,3,\n"
+"    6,11,44,4,7,0,2,1,6,3,58,10,2,8,44,42,36,46,42,27,46,9,140,1,\n"
+"    43,10,10,114,9,2,13,50,23,102,17,8,8,70,3,2,9,128,1,1,8,9,4,10,\n"
+"    2,1,2,35,36,1,68,2,2,6,8,62,14,1,2,1,8,1,30,1,20,7,114,23,\n"
+"    8,1,16,2,4,2,44,1,14,1,4,1,10,3,16,2,4,2,4,3,2,6,2,5,\n"
+"    14,28,20,1,2,2,2,1,76,1,20,1,2,2,2,1,8,1,4,3,2,1,2,44,\n"
+"    132,1,1,6,1,8,20,6,30,132,1,2,4,1,2,184,1,108,2,14,25,12,34,126,\n"
+"    1,2,3,2,59,108,2,2,71,54,2,28,21,14,185,1,114,103,128,1,31,16,2,2,\n"
+"    2,16,1,4,1,60,1,4,2,4,2,8,93,16,2,92,2,12,1,2,1,4,27,102,\n"
+"    2,20,17,144,1,5,2,18,146,1,17,2,85,16,88,66,31,18,1,90,1,14,1,2,\n"
+"    49,60,2,44,1,28,73,14,1,4,1,88,3,2,1,4,1,6,1,2,2,4,24,12,\n"
+"    1,4,1,74,1,4,1,8,1,2,23,88,20,4,238,1,46,9,34,1,82,3,6,111,\n"
+"    2,79,180,14,102,224,1,5,158,3,12,238,4,137,18,194,1,15,224,16,17,12,25,182,\n"
+"    62,5,142,9,185,53,94,209,13,242,8,7,62,17,158,1,17,60,18,96,16,8,31,42,\n"
+"    5,38,176,3,90,211,1,128,1,32,50,2,50,44,150,1,4,114,7,34,64,4,1,2,\n"
+"    12,14,9,182,115,36,68,95,230,1,13,164,14,14,102,157,60,8,1,14,1,4,1,210,\n"
+"    4,9,2,29,6,2,2,14,10,7,152,6,132,18,214,1,5,26,3,18,7,20,4,2,\n"
+"    225,46,170,1,1,142,1,1,4,2,2,2,4,2,8,1,24,1,2,1,14,1,130,1,\n"
+"    1,8,2,16,1,14,1,56,1,8,1,10,1,2,3,14,1,170,5,1,50,1,50,1,\n"
+"    62,1,50,1,62,1,50,1,62,1,50,1,62,1,50,1,16,180,14,132,2,14,14,54,\n"
+"    116,1,34,2,14,1,4,1,10,5,124,33,2,112,90,10,14,16,2,193,2,60,18,88,\n"
+"    228,3,56,228,1,60,2,2,207,1,62,1,44,8,4,224,1,14,1,8,1,4,1,30,\n"
+"    1,138,3,59,136,1,3,2,3,2,180,9,8,1,54,1,4,1,2,2,2,1,20,1,\n"
+"    8,1,2,1,2,6,2,4,9,0,4,1,4,1,2,2,13,0,2,1,2,2,8,1,\n"
+"    14,1,8,1,8,1,2,1,20,1,34,5,6,1,10,1,34,244,4,52,6,52,6,52,\n"
+"    246,28,192,155,5,32,190,68,1,156,90,2,226,116,15,220,9,162,19,188,8,226,11,150,\n"
+"    77,5,212,132,1,134,183,2,128,177,1,};\n"
+"static const unsigned char uni_upper[] = {\n"
+"    64,46,1,14,33,57,2,17,2,49,0,7,3,4,1,2,1,4,1,6,2,8,1,4,\n"
+"    1,6,3,4,1,4,1,7,0,2,1,2,2,2,1,4,1,6,1,2,1,4,3,2,\n"
+"    7,2,2,2,2,2,2,17,2,19,2,2,2,2,1,6,1,59,7,4,1,4,2,2,\n"
+"    1,8,1,9,161,2,2,1,2,3,2,8,2,6,2,1,6,1,2,1,4,1,34,1,\n"
+"    18,35,2,2,6,3,25,5,2,2,2,1,4,2,102,48,35,9,57,0,15,2,97,2,\n"
+"    76,201,22,76,1,2,5,2,210,5,172,1,147,17,2,6,86,2,6,192,2,151,1,9,\n"
+"    99,9,16,8,12,10,16,8,16,8,12,11,9,8,16,72,8,12,8,12,8,12,10,11,\n"
+"    8,134,2,2,4,2,3,6,2,6,2,2,3,10,6,9,0,6,2,8,10,4,5,2,\n"
+"    26,32,19,2,178,6,52,176,14,96,48,2,1,6,2,9,0,6,1,2,2,2,8,6,\n"
+"    1,99,8,2,1,2,4,2,205,242,1,47,19,29,135,1,15,3,63,10,7,0,11,4,\n"
+"    2,1,2,2,2,1,2,3,23,0,8,1,10,1,17,0,6,1,2,1,4,1,17,0,\n"
+"    2,4,2,18,2,246,6,4,179,167,1,52,197,9,80,136,1,72,156,1,22,1,30,1,\n"
+"    14,1,4,234,13,102,157,1,44,186,22,64,128,171,1,64,64,50,199,202,1,52,26,52,\n"
+"    26,52,26,2,1,4,2,2,2,4,2,8,1,16,26,52,26,4,1,8,2,16,1,14,\n"
+"    27,4,1,8,1,10,1,2,3,14,27,52,26,52,26,52,26,52,26,52,26,52,30,50,\n",
+"    33,50,33,50,33,50,33,50,33,2,245,14,2,7,2,1,2,2,2,3,2,22,9,3,\n"
+"    15,129,19,68,142,16,52,6,52,6,52,};\n"
+"static const unsigned char uni_lower[] = {\n"
+"    42,2,10,2,4,2,36,48,1,16,1,57,0,19,0,49,2,7,0,4,2,2,1,2,\n"
+"    2,2,3,4,4,2,2,2,3,6,2,2,2,7,2,2,1,4,1,2,2,2,3,2,\n"
+"    1,2,2,4,2,6,6,2,2,2,2,19,0,21,0,2,2,2,1,2,3,61,0,12,\n"
+"    2,2,2,4,1,2,4,11,0,136,1,2,70,7,4,30,10,96,2,43,2,1,2,3,\n"
+"    2,2,8,18,2,27,70,1,4,3,6,1,25,0,8,1,2,2,2,2,4,51,96,1,\n"
+"    35,9,55,2,15,0,99,40,2,7,82,2,4,195,22,86,1,8,248,5,12,130,17,18,\n"
+"    1,2,117,128,3,65,151,1,0,16,1,99,0,16,8,12,10,16,8,16,8,12,10,16,\n"
+"    8,16,8,28,2,16,8,16,8,16,8,10,1,4,6,2,3,6,1,4,8,8,2,4,\n"
+"    8,16,10,6,1,4,121,2,13,2,16,32,106,2,3,4,3,2,27,2,4,2,4,2,\n"
+"    2,4,8,8,4,2,33,32,4,2,203,6,52,198,14,96,1,2,3,4,1,7,4,2,\n"
+"    1,4,1,16,3,101,0,2,7,2,1,2,4,2,12,76,1,2,5,2,147,242,1,47,\n"
+"    19,29,0,4,133,1,15,0,4,1,63,0,18,1,2,1,2,2,11,4,2,1,2,2,\n"
+"    2,1,6,1,21,5,2,5,17,4,2,1,2,2,17,21,8,1,2,1,6,181,6,86,\n"
+"    1,28,6,160,1,192,158,1,14,12,10,169,8,52,205,9,80,136,1,72,155,1,22,1,\n"
+"    30,1,14,1,4,195,3,2,2,6,1,84,1,28,128,10,102,125,44,186,22,64,128,171,\n"
+"    1,64,59,50,198,202,1,52,26,14,1,36,26,52,26,8,1,2,1,14,1,22,26,52,\n"
+"    26,52,26,52,26,52,26,52,26,52,26,52,26,52,26,58,27,50,1,12,26,50,1,12,\n"
+"    26,50,1,12,26,50,1,12,26,50,1,12,1,2,180,14,20,1,106,1,14,1,2,1,\n"
+"    4,1,6,1,44,1,9,0,4,1,15,16,14,54,102,48,124,180,17,68,};\n"
+"static const unsigned char uni_space[] = {\n"
+"    5,2,26,2,223,43,2,255,18,22,29,4,5,2,47,2,160,31,2,};\n"
+"static const unsigned char uni_digit[] = {\n"
+"    224,11,20,134,1,20,198,1,20,156,3,20,118,20,118,20,118,20,118,20,118,20,118,20,\n"
+"    118,20,118,20,118,20,96,20,118,20,70,20,150,2,20,70,20,198,14,20,38,20,172,2,\n"
+"    20,128,1,20,166,1,20,6,20,182,1,20,86,20,134,1,20,6,20,198,147,2,20,166,\n"
+"    5,20,38,20,198,1,20,22,20,86,20,150,3,20,150,166,1,20,134,11,20,134,17,20,\n"
+"    6,20,156,6,20,128,1,20,60,20,144,1,20,150,2,20,214,2,20,118,20,246,2,20,\n"
+"    102,20,6,40,76,20,166,3,20,102,20,150,5,20,86,20,246,1,20,70,20,54,20,230,\n"
+"    2,20,214,131,1,20,166,18,20,86,20,134,1,20,150,4,20,246,190,1,20,212,21,100,\n"
+"    192,18,20,166,3,20,246,3,20,247,1,20,213,6,20,150,37,20,};\n"
+"static const unsigned char uni_tou[] = {\n"
+"    53,2,206,11,42,46,63,1,14,63,0,2,242,1,1,49,1,1,2,207,3,1,7,1,\n"
+"    2,17,1,2,47,1,2,7,1,0,2,215,4,0,2,134,3,2,2,1,1,2,1,2,\n"
+"    2,1,3,2,1,5,2,1,2,2,194,1,3,2,1,0,2,198,2,0,2,130,153,5,\n"
+"    2,2,132,2,2,7,1,2,2,1,4,2,1,2,2,1,3,2,1,1,2,1,2,2,\n"
+"    1,3,2,1,1,2,112,5,2,1,0,2,3,1,2,1,0,2,3,1,2,1,0,2,\n"
+"    3,1,17,1,0,2,157,1,1,19,1,2,2,1,0,2,3,1,2,1,3,41,1,3,\n"
+"    19,1,8,2,1,2,4,254,168,1,1,2,1,4,11,1,0,2,190,168,1,0,2,184,\n"
+"    168,1,0,2,188,168,1,0,2,163,3,0,2,155,3,1,4,153,3,1,2,147,3,1,\n"
+"    2,149,3,0,2,158,149,5,3,2,153,3,0,2,150,149,5,1,2,157,3,0,2,206,\n"
+"    149,5,0,2,208,148,5,0,2,136,149,5,1,2,161,3,0,2,165,3,0,2,136,149,\n"
+"    5,0,2,238,167,1,0,2,130,149,5,2,2,165,3,1,2,250,167,1,0,2,169,3,\n"
+"    2,2,171,3,1,2,204,149,5,4,2,204,149,5,0,2,206,167,1,2,2,179,3,1,\n"
+"    2,134,149,5,0,2,179,3,3,2,212,148,5,0,2,179,3,0,2,137,1,0,4,177,\n",
+"    3,0,2,141,1,5,2,181,3,10,2,170,148,5,0,2,164,148,5,166,1,2,168,1,\n"
+"    43,2,1,1,2,1,3,2,1,3,6,132,2,46,2,75,0,6,73,1,34,63,0,2,\n"
+"    61,0,18,63,0,2,127,0,4,125,1,2,123,0,2,113,3,2,93,0,2,107,0,2,\n"
+"    15,1,25,1,0,2,171,1,0,2,159,1,0,2,14,0,2,231,1,1,2,191,1,2,\n"
+"    2,1,2,2,1,52,64,63,0,32,159,1,1,35,1,9,55,1,2,15,1,0,2,29,\n"
+"    1,97,1,49,76,95,201,22,86,128,47,2,6,128,47,248,5,12,15,130,17,2,219,97,\n"
+"    0,2,217,97,0,2,199,97,0,4,195,97,0,2,197,97,0,2,183,97,0,2,201,96,\n"
+"    0,2,132,167,4,1,2,1,238,1,2,136,168,4,3,2,204,59,16,2,240,168,4,114,\n"
+"    151,1,1,5,2,117,5,97,1,0,16,16,8,12,16,10,16,16,8,16,16,8,12,16,\n"
+"    11,9,16,8,16,16,8,4,148,1,0,8,172,1,0,4,200,1,0,4,128,2,0,4,\n"
+"    224,1,0,4,252,1,2,16,16,8,16,16,8,16,16,8,4,16,1,2,18,10,2,201,\n"
+"    112,4,2,18,12,4,16,14,4,16,3,2,14,13,2,18,218,2,2,55,33,32,31,4,\n"
+"    2,1,203,6,52,51,198,14,96,95,1,2,1,3,2,213,168,1,0,2,207,168,1,1,\n"
+"    7,1,6,2,1,2,2,1,10,101,1,8,2,1,1,2,1,4,2,1,12,76,191,113,\n"
+"    1,2,191,113,5,2,191,113,147,242,1,47,1,19,29,1,135,1,15,1,3,63,1,10,\n"
+"    2,1,1,2,1,2,11,1,4,2,1,4,2,1,1,2,1,0,2,96,2,21,1,11,\n"
+"    17,1,4,2,1,1,2,1,2,17,1,26,2,1,212,6,4,66,6,2,191,14,28,160,\n"
+"    1,159,223,4,129,167,1,52,63,205,9,80,79,136,1,72,79,155,1,22,77,1,30,77,\n"
+"    1,14,77,1,4,77,131,14,102,127,125,44,63,186,22,64,63,128,171,1,64,63,59,50,\n"
+"    53,237,224,1,2,1,7,2,1,1,2,1,2,2,1,3,2,1,22,9,1,3,15,1,\n"
+"    162,19,68,67,};\n"
+"static const unsigned char uni_tol[] = {\n"
+"    64,46,64,1,14,64,33,49,2,1,2,141,3,1,7,2,2,17,2,2,47,2,1,2,\n"
+"    241,1,0,7,2,3,2,164,3,0,2,2,1,2,2,1,2,156,3,0,2,2,1,4,\n"
+"    154,3,0,2,2,2,2,158,1,0,2,148,3,0,2,150,3,0,2,2,1,2,154,3,\n"
+"    0,2,158,3,1,2,166,3,0,2,162,3,0,2,2,3,2,166,3,0,2,170,3,1,\n"
+"    2,172,3,0,7,2,1,2,180,3,0,2,2,1,2,180,3,2,2,2,1,2,180,3,\n"
+"    0,2,2,1,4,178,3,0,2,2,1,2,2,1,2,182,3,0,2,2,3,2,2,7,\n"
+"    2,4,0,2,2,1,2,4,0,2,2,1,2,4,0,19,2,2,19,2,2,2,4,0,\n"
+"    2,2,1,2,2,1,2,193,1,0,2,111,0,41,2,1,2,131,2,1,19,2,7,2,\n"
+"    214,168,1,0,2,2,1,2,197,2,0,2,208,168,1,2,2,2,1,2,133,3,0,2,\n"
+"    138,1,0,2,142,1,0,11,2,161,2,2,2,1,2,2,3,2,2,8,2,232,1,6,\n"
+"    2,76,1,6,74,1,2,128,1,1,4,126,1,34,64,1,18,64,35,2,16,8,25,2,\n"
+"    5,2,119,2,2,2,1,2,13,0,2,2,2,6,131,2,0,32,160,1,0,64,64,48,\n"
+"    35,2,9,55,2,1,2,30,0,15,2,2,97,2,2,76,96,201,22,76,192,113,1,2,\n"
+"    192,113,5,2,192,113,210,5,160,1,160,223,4,0,12,16,147,17,2,2,6,86,255,46,\n"
+"    2,6,255,46,192,2,151,1,2,9,2,253,118,1,97,2,9,16,15,8,12,15,10,16,\n"
+"    15,8,16,15,8,12,15,11,9,15,8,16,15,24,16,15,8,16,15,8,16,15,8,4,\n"
+"    15,0,4,147,1,0,2,17,11,8,171,1,0,2,17,11,4,15,0,4,199,1,12,4,\n"
+"    15,0,4,223,1,0,2,13,11,4,255,1,0,4,251,1,0,2,17,169,2,2,185,117,\n"
+"    3,2,253,130,1,0,2,139,129,1,6,2,56,45,32,32,19,2,2,178,6,52,52,176,\n"
+"    14,96,96,48,2,2,1,2,237,167,1,0,2,203,59,0,2,205,167,1,2,7,2,1,\n"
+"    2,183,168,1,0,2,249,167,1,0,2,189,168,1,0,2,187,168,1,1,2,2,2,2,\n"
+"    2,8,4,253,168,1,0,101,2,8,2,2,1,2,2,4,2,2,205,242,1,47,2,19,\n"
+"    29,2,135,1,15,2,3,63,2,10,2,2,1,2,2,1,2,135,168,4,0,11,2,4,\n"
+"    2,2,1,2,207,148,5,2,2,2,1,2,2,3,21,2,1,2,135,149,5,0,2,157,\n"
+"    149,5,0,2,149,149,5,0,2,129,149,5,0,2,135,149,5,1,2,163,148,5,0,2,\n",
+"    211,148,5,0,2,169,148,5,0,2,192,14,0,17,2,1,2,95,0,2,133,149,5,0,\n"
+"    2,239,168,4,0,2,2,1,2,2,1,2,205,149,5,0,17,2,1,2,129,153,5,0,\n"
+"    2,203,149,5,4,2,203,149,5,18,2,2,246,6,4,65,179,167,1,52,64,197,9,80,\n"
+"    80,136,1,72,80,156,1,22,78,1,30,78,1,14,78,1,4,78,234,13,102,128,1,157,\n"
+"    1,44,64,186,22,64,64,128,171,1,64,64,64,50,54,135,225,1,2,2,7,2,2,1,\n"
+"    2,2,2,2,2,3,2,2,22,9,2,3,15,2,129,19,68,68,};\n"
+"static const unsigned char uni_tof[] = {\n"
+"    53,2,142,12,10,46,64,1,14,64,33,49,2,3,7,2,2,17,2,2,47,2,1,2,\n"
+"    241,1,0,7,2,1,2,151,4,1,2,164,3,0,2,2,1,2,2,1,2,156,3,0,\n"
+"    2,2,1,4,154,3,0,2,2,2,2,158,1,0,2,148,3,0,2,150,3,0,2,2,\n"
+"    1,2,154,3,0,2,158,3,1,2,166,3,0,2,162,3,0,2,2,3,2,166,3,0,\n"
+"    2,170,3,1,2,172,3,0,7,2,1,2,180,3,0,2,2,1,2,180,3,2,2,2,\n"
+"    1,2,180,3,0,2,2,1,4,178,3,0,2,2,1,2,2,1,2,182,3,0,2,2,\n"
+"    3,2,2,7,2,4,0,2,2,1,2,4,0,2,2,1,2,4,0,19,2,2,19,2,\n"
+"    2,2,4,0,2,2,1,2,2,1,2,193,1,0,2,111,0,41,2,1,2,131,2,1,\n"
+"    19,2,7,2,214,168,1,0,2,2,1,2,197,2,0,2,208,168,1,2,2,2,1,2,\n"
+"    133,3,0,2,138,1,0,2,142,1,0,11,2,246,1,2,232,1,42,2,2,1,2,2,\n"
+"    3,2,2,8,2,232,1,6,2,76,1,6,74,1,2,128,1,1,4,126,1,34,64,1,\n"
+"    18,64,22,2,2,12,2,16,0,2,59,0,2,49,3,2,29,0,2,43,1,25,2,1,\n"
+"    2,107,0,2,95,2,2,119,0,2,127,1,2,2,1,2,13,0,2,2,2,6,131,2,\n"
+"    0,32,160,1,0,64,64,48,35,2,9,55,2,1,2,30,0,15,2,2,97,2,2,76,\n"
+"    96,201,22,76,192,113,1,2,192,113,5,2,192,113,170,6,12,15,130,17,2,155,97,0,\n"
+"    2,153,97,0,2,135,97,0,4,131,97,0,2,133,97,0,2,247,96,0,2,199,96,0,\n"
+"    2,134,167,4,0,2,2,6,86,255,46,2,6,255,46,192,2,151,1,2,6,2,115,2,\n"
+"    2,253,118,1,97,2,9,16,15,8,12,15,10,16,15,8,16,15,8,12,15,11,9,15,\n"
+"    8,16,15,24,16,15,8,16,15,8,16,15,8,4,15,0,4,147,1,0,2,17,1,2,\n"
+"    137,112,9,8,171,1,0,2,17,6,2,133,113,4,4,15,0,4,199,1,7,2,229,112,\n"
+"    4,4,15,0,4,223,1,0,2,13,11,4,255,1,0,4,251,1,0,2,17,169,2,2,\n"
+"    185,117,3,2,253,130,1,0,2,139,129,1,6,2,56,45,32,32,19,2,2,178,6,52,\n"
+"    52,176,14,96,96,48,2,2,1,2,237,167,1,0,2,203,59,0,2,205,167,1,2,7,\n"
+"    2,1,2,183,168,1,0,2,249,167,1,0,2,189,168,1,0,2,187,168,1,1,2,2,\n"
+"    2,2,2,8,4,253,168,1,0,101,2,8,2,2,1,2,2,4,2,2,205,242,1,47,\n"
+"    2,19,29,2,135,1,15,2,3,63,2,10,2,2,1,2,2,1,2,135,168,4,0,11,\n"
+"    2,4,2,2,1,2,207,148,5,2,2,2,1,2,2,3,21,2,1,2,135,149,5,0,\n"
+"    2,157,149,5,0,2,149,149,5,0,2,129,149,5,0,2,135,149,5,1,2,163,148,5,\n"
+"    0,2,211,148,5,0,2,169,148,5,0,2,192,14,0,17,2,1,2,95,0,2,133,149,\n"
+"    5,0,2,239,168,4,0,2,2,1,2,2,1,2,205,149,5,0,17,2,1,2,129,153,\n"
+"    5,0,2,203,149,5,4,2,203,149,5,18,2,2,246,6,4,65,2,160,1,159,223,4,\n"
+"    197,158,1,2,2,155,8,52,64,197,9,80,80,136,1,72,80,156,1,22,78,1,30,78,\n"
+"    1,14,78,1,4,78,234,13,102,128,1,157,1,44,64,186,22,64,64,128,171,1,64,64,\n"
+"    64,50,54,135,225,1,2,2,7,2,2,1,2,2,2,2,2,3,2,2,22,9,2,3,\n"
+"    15,2,22,2,235,250,14,234,18,68,68,};\n"
+"static const uni_full uni_fullu[] = {\n"
+"    {0x00DF, {0x0053, 0x0053, 0x0000}},\n"
+"    {0x0149, {0x02BC, 0x004E, 0x0000}},\n"
+"    {0x01F0, {0x004A, 0x030C, 0x0000}},\n"
+"    {0x0390, {0x0399, 0x0308, 0x0301}},\n"
+"    {0x03B0, {0x03A5, 0x0308, 0x0301}},\n"
+"    {0x0587, {0x0535, 0x0552, 0x0000}},\n",
+"    {0x1E96, {0x0048, 0x0331, 0x0000}},\n"
+"    {0x1E97, {0x0054, 0x0308, 0x0000}},\n"
+"    {0x1E98, {0x0057, 0x030A, 0x0000}},\n"
+"    {0x1E99, {0x0059, 0x030A, 0x0000}},\n"
+"    {0x1E9A, {0x0041, 0x02BE, 0x0000}},\n"
+"    {0x1F50, {0x03A5, 0x0313, 0x0000}},\n"
+"    {0x1F52, {0x03A5, 0x0313, 0x0300}},\n"
+"    {0x1F54, {0x03A5, 0x0313, 0x0301}},\n"
+"    {0x1F56, {0x03A5, 0x0313, 0x0342}},\n"
+"    {0x1F80, {0x1F08, 0x0399, 0x0000}},\n"
+"    {0x1F81, {0x1F09, 0x0399, 0x0000}},\n"
+"    {0x1F82, {0x1F0A, 0x0399, 0x0000}},\n"
+"    {0x1F83, {0x1F0B, 0x0399, 0x0000}},\n"
+"    {0x1F84, {0x1F0C, 0x0399, 0x0000}},\n"
+"    {0x1F85, {0x1F0D, 0x0399, 0x0000}},\n"
+"    {0x1F86, {0x1F0E, 0x0399, 0x0000}},\n"
+"    {0x1F87, {0x1F0F, 0x0399, 0x0000}},\n"
+"    {0x1F88, {0x1F08, 0x0399, 0x0000}},\n"
+"    {0x1F89, {0x1F09, 0x0399, 0x0000}},\n"
+"    {0x1F8A, {0x1F0A, 0x0399, 0x0000}},\n"
+"    {0x1F8B, {0x1F0B, 0x0399, 0x0000}},\n"
+"    {0x1F8C, {0x1F0C, 0x0399, 0x0000}},\n"
+"    {0x1F8D, {0x1F0D, 0x0399, 0x0000}},\n"
+"    {0x1F8E, {0x1F0E, 0x0399, 0x0000}},\n"
+"    {0x1F8F, {0x1F0F, 0x0399, 0x0000}},\n"
+"    {0x1F90, {0x1F28, 0x0399, 0x0000}},\n"
+"    {0x1F91, {0x1F29, 0x0399, 0x0000}},\n"
+"    {0x1F92, {0x1F2A, 0x0399, 0x0000}},\n"
+"    {0x1F93, {0x1F2B, 0x0399, 0x0000}},\n"
+"    {0x1F94, {0x1F2C, 0x0399, 0x0000}},\n"
+"    {0x1F95, {0x1F2D, 0x0399, 0x0000}},\n"
+"    {0x1F96, {0x1F2E, 0x0399, 0x0000}},\n"
+"    {0x1F97, {0x1F2F, 0x0399, 0x0000}},\n"
+"    {0x1F98, {0x1F28, 0x0399, 0x0000}},\n"
+"    {0x1F99, {0x1F29, 0x0399, 0x0000}},\n"
+"    {0x1F9A, {0x1F2A, 0x0399, 0x0000}},\n"
+"    {0x1F9B, {0x1F2B, 0x0399, 0x0000}},\n"
+"    {0x1F9C, {0x1F2C, 0x0399, 0x0000}},\n"
+"    {0x1F9D, {0x1F2D, 0x0399, 0x0000}},\n"
+"    {0x1F9E, {0x1F2E, 0x0399, 0x0000}},\n"
+"    {0x1F9F, {0x1F2F, 0x0399, 0x0000}},\n"
+"    {0x1FA0, {0x1F68, 0x0399, 0x0000}},\n"
+"    {0x1FA1, {0x1F69, 0x0399, 0x0000}},\n"
+"    {0x1FA2, {0x1F6A, 0x0399, 0x0000}},\n"
+"    {0x1FA3, {0x1F6B, 0x0399, 0x0000}},\n"
+"    {0x1FA4, {0x1F6C, 0x0399, 0x0000}},\n"
+"    {0x1FA5, {0x1F6D, 0x0399, 0x0000}},\n"
+"    {0x1FA6, {0x1F6E, 0x0399, 0x0000}},\n"
+"    {0x1FA7, {0x1F6F, 0x0399, 0x0000}},\n"
+"    {0x1FA8, {0x1F68, 0x0399, 0x0000}},\n"
+"    {0x1FA9, {0x1F69, 0x0399, 0x0000}},\n"
+"    {0x1FAA, {0x1F6A, 0x0399, 0x0000}},\n"
+"    {0x1FAB, {0x1F6B, 0x0399, 0x0000}},\n"
+"    {0x1FAC, {0x1F6C, 0x0399, 0x0000}},\n"
+"    {0x1FAD, {0x1F6D, 0x0399, 0x0000}},\n"
+"    {0x1FAE, {0x1F6E, 0x0399, 0x0000}},\n"
+"    {0x1FAF, {0x1F6F, 0x0399, 0x0000}},\n"
+"    {0x1FB2, {0x1FBA, 0x0399, 0x0000}},\n"
+"    {0x1FB3, {0x0391, 0x0399, 0x0000}},\n"
+"    {0x1FB4, {0x0386, 0x0399, 0x0000}},\n"
+"    {0x1FB6, {0x0391, 0x0342, 0x0000}},\n"
+"    {0x1FB7, {0x0391, 0x0342, 0x0399}},\n"
+"    {0x1FBC, {0x0391, 0x0399, 0x0000}},\n"
+"    {0x1FC2, {0x1FCA, 0x0399, 0x0000}},\n"
+"    {0x1FC3, {0x0397, 0x0399, 0x0000}},\n"
+"    {0x1FC4, {0x0389, 0x0399, 0x0000}},\n"
+"    {0x1FC6, {0x0397, 0x0342, 0x0000}},\n"
+"    {0x1FC7, {0x0397, 0x0342, 0x0399}},\n"
+"    {0x1FCC, {0x0397, 0x0399, 0x0000}},\n"
+"    {0x1FD2, {0x0399, 0x0308, 0x0300}},\n"
+"    {0x1FD3, {0x0399, 0x0308, 0x0301}},\n"
+"    {0x1FD6, {0x0399, 0x0342, 0x0000}},\n"
+"    {0x1FD7, {0x0399, 0x0308, 0x0342}},\n"
+"    {0x1FE2, {0x03A5, 0x0308, 0x0300}},\n"
+"    {0x1FE3, {0x03A5, 0x0308, 0x0301}},\n",
+"    {0x1FE4, {0x03A1, 0x0313, 0x0000}},\n"
+"    {0x1FE6, {0x03A5, 0x0342, 0x0000}},\n"
+"    {0x1FE7, {0x03A5, 0x0308, 0x0342}},\n"
+"    {0x1FF2, {0x1FFA, 0x0399, 0x0000}},\n"
+"    {0x1FF3, {0x03A9, 0x0399, 0x0000}},\n"
+"    {0x1FF4, {0x038F, 0x0399, 0x0000}},\n"
+"    {0x1FF6, {0x03A9, 0x0342, 0x0000}},\n"
+"    {0x1FF7, {0x03A9, 0x0342, 0x0399}},\n"
+"    {0x1FFC, {0x03A9, 0x0399, 0x0000}},\n"
+"    {0xFB00, {0x0046, 0x0046, 0x0000}},\n"
+"    {0xFB01, {0x0046, 0x0049, 0x0000}},\n"
+"    {0xFB02, {0x0046, 0x004C, 0x0000}},\n"
+"    {0xFB03, {0x0046, 0x0046, 0x0049}},\n"
+"    {0xFB04, {0x0046, 0x0046, 0x004C}},\n"
+"    {0xFB05, {0x0053, 0x0054, 0x0000}},\n"
+"    {0xFB06, {0x0053, 0x0054, 0x0000}},\n"
+"    {0xFB13, {0x0544, 0x0546, 0x0000}},\n"
+"    {0xFB14, {0x0544, 0x0535, 0x0000}},\n"
+"    {0xFB15, {0x0544, 0x053B, 0x0000}},\n"
+"    {0xFB16, {0x054E, 0x0546, 0x0000}},\n"
+"    {0xFB17, {0x0544, 0x053D, 0x0000}},\n"
+"    {0x1DF95, {0x0053, 0x0053, 0x0000}},\n"
+"};\n"
+"static const uni_full uni_fulll[] = {\n"
+"    {0x0130, {0x0069, 0x0307, 0x0000}},\n"
+"};\n"
+"static const uni_full uni_fullf[] = {\n"
+"    {0, {0, 0, 0}}\n"
+"};\n"
+"/* Returns the index of c within its run of table t, or -1; *delta receives a map's delta. */\n"
+"static unsigned long uni_v(const unsigned char **p) {\n"
+"    unsigned long v = 0;\n"
+"    int s = 0;\n"
+"    do v |= (unsigned long)(**p & 127) << s, s += 7;\n"
+"    while (*(*p)++ & 128);\n"
+"    return v;\n"
+"}\n"
+"static long uni_find(const unsigned char *t, size_t n, long c, long *delta) {\n"
+"    const unsigned char *end = t + n;\n"
+"    long pos = 0x80, start, cnt, st;\n"
+"    unsigned long z;\n"
+"    while (t < end) {\n"
+"        start = pos + (long)uni_v(&t);\n"
+"        cnt = (long)uni_v(&t);\n"
+"        st = 1 + (cnt & 1);\n"
+"        cnt >>= 1;\n"
+"        if (delta) { z = uni_v(&t); *delta = z & 1 ? -(long)(z >> 1) - 1 : (long)(z >> 1); }\n"
+"        if (c < start) return -1;\n"
+"        if (c <= start + (cnt - 1) * st) return (c - start) % st ? -1 : (c - start) / st;\n"
+"        pos = start + (cnt - 1) * st + 1;\n"
+"    }\n"
+"    return -1;\n"
+"}\n"
+"#define UNI_T(t) t, sizeof t\n"
+"/* p: RT_UNI_ALPHA, _UPPER, _LOWER, _SPACE: 1 or 0; RT_UNI_DIGIT: the digit value or -1 */\n"
+"RT_FN int rt_uni_prop(int c, int p) {\n"
+"    long i = p == RT_UNI_ALPHA ? uni_find(UNI_T(uni_alpha), c, 0) : p == RT_UNI_UPPER ? uni_find(UNI_T(uni_upper), c, 0)\n"
+"           : p == RT_UNI_LOWER ? uni_find(UNI_T(uni_lower), c, 0) : p == RT_UNI_SPACE ? uni_find(UNI_T(uni_space), c, 0)\n"
+"           : uni_find(UNI_T(uni_digit), c, 0);\n"
+"    return p == RT_UNI_DIGIT ? (i < 0 ? -1 : (int)(i % 10)) : i >= 0;\n"
+"}\n"
+"/* Simple case mapping, m: 0 upper, 1 lower, 2 fold. */\n"
+"RT_FN int rt_uni_map(int c, int m) {\n"
+"    long d = 0;\n"
+"    long i = m == 0 ? uni_find(UNI_T(uni_tou), c, &d) : m == 1 ? uni_find(UNI_T(uni_tol), c, &d) : uni_find(UNI_T(uni_tof), c, &d);\n"
+"    return i < 0 ? c : (int)(c + d);\n"
+"}\n"
+"/* Full mapping (m: 0 upper, 1 lower, 2 fold exception) into out[3]: the count, 0 if none. */\n"
+"RT_FN int rt_uni_full(int c, int m, int *out) {\n"
+"    const uni_full *t = m == 0 ? uni_fullu : m == 1 ? uni_fulll : uni_fullf;\n"
+"    size_t i, n = (m == 0 ? sizeof uni_fullu : m == 1 ? sizeof uni_fulll : sizeof uni_fullf) / sizeof *t;\n",
+"    int k;\n"
+"    for (i = 0; i < n; i++)\n"
+"        if (t[i].c == (unsigned)c) {\n"
+"            for (k = 0; k < 3 && t[i].o[k]; k++) out[k] = t[i].o[k];\n"
+"            return k;\n"
+"        }\n"
+"    return 0;\n"
+"}\n"
+"#endif\n"
+"",
+0};
 
 const embed_file embed_files[] = {
     {"lib/scheme/base.sld", e0},
@@ -5011,26 +5590,28 @@ const embed_file embed_files[] = {
     {"lib/scheme/base/syntax.scm", e11},
     {"lib/scheme/base/vectors.scm", e12},
     {"lib/scheme/case-lambda.sld", e13},
-    {"lib/scheme/cxr.sld", e14},
-    {"lib/scheme/eval.sld", e15},
-    {"lib/scheme/file.sld", e16},
-    {"lib/scheme/inexact.sld", e17},
-    {"lib/scheme/lazy.sld", e18},
-    {"lib/scheme/load.sld", e19},
-    {"lib/scheme/process-context.sld", e20},
-    {"lib/scheme/read.sld", e21},
-    {"lib/scheme/repl.sld", e22},
-    {"lib/scheme/time.sld", e23},
-    {"lib/scheme/write.sld", e24},
-    {"lib/shikra/dynamic.sld", e25},
-    {"src/prims.def", e26},
-    {"src/rt.h", e27},
-    {"src/rt_core.c", e28},
-    {"src/rt_gc.c", e29},
-    {"src/rt_io.c", e30},
-    {"src/rt_num.c", e31},
-    {"src/rt_read.c", e32},
-    {"src/rt_str.c", e33},
-    {"src/rt_sys.c", e34},
+    {"lib/scheme/char.sld", e14},
+    {"lib/scheme/cxr.sld", e15},
+    {"lib/scheme/eval.sld", e16},
+    {"lib/scheme/file.sld", e17},
+    {"lib/scheme/inexact.sld", e18},
+    {"lib/scheme/lazy.sld", e19},
+    {"lib/scheme/load.sld", e20},
+    {"lib/scheme/process-context.sld", e21},
+    {"lib/scheme/read.sld", e22},
+    {"lib/scheme/repl.sld", e23},
+    {"lib/scheme/time.sld", e24},
+    {"lib/scheme/write.sld", e25},
+    {"lib/shikra/dynamic.sld", e26},
+    {"src/prims.def", e27},
+    {"src/rt.h", e28},
+    {"src/rt_core.c", e29},
+    {"src/rt_gc.c", e30},
+    {"src/rt_io.c", e31},
+    {"src/rt_num.c", e32},
+    {"src/rt_read.c", e33},
+    {"src/rt_str.c", e34},
+    {"src/rt_sys.c", e35},
+    {"src/rt_unicode.c", e36},
     {0, 0}
 };

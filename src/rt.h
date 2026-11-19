@@ -451,6 +451,31 @@ RT_FN obj rt_list_to_string(obj l);
 RT_FN obj rt_string_to_utf8(obj s);
 RT_FN obj rt_utf8_to_string(obj bv);
 RT_FN obj rt_integer_to_char(obj n);
+/* (scheme char): ASCII rules, and above 0x7F the Unicode tables of rt_unicode.c when they are
+ * enabled: program mode with RT_UNICODE_FULL (--unicode=full; the file is only appended then),
+ * tool mode when rt_unicode_full is set (shikra repl/interp --unicode=full). */
+RT_FN obj rt_char_upcase(obj c);
+RT_FN obj rt_char_downcase(obj c);
+RT_FN obj rt_char_foldcase(obj c);
+RT_FN obj rt_char_alphabetic_p(obj c);
+RT_FN obj rt_char_numeric_p(obj c);
+RT_FN obj rt_char_whitespace_p(obj c);
+RT_FN obj rt_char_upper_case_p(obj c);
+RT_FN obj rt_char_lower_case_p(obj c);
+RT_FN obj rt_digit_value(obj c);
+RT_FN obj rt_string_upcase(obj s);
+RT_FN obj rt_string_downcase(obj s);
+RT_FN obj rt_string_foldcase(obj s);
+enum { RT_UNI_ALPHA, RT_UNI_UPPER, RT_UNI_LOWER, RT_UNI_SPACE, RT_UNI_DIGIT };
+#if !defined(SHIKRA_PROGRAM) || defined(RT_UNICODE_FULL)
+#define RT_HAVE_UNICODE 1
+RT_FN int rt_uni_prop(int c, int p);          /* RT_UNI_DIGIT: digit value or -1, else 1/0 */
+RT_FN int rt_uni_map(int c, int m);           /* simple mapping, m: 0 upper, 1 lower, 2 fold */
+RT_FN int rt_uni_full(int c, int m, int *out); /* full mapping into out[3]: count, 0 if none */
+#endif
+#ifndef SHIKRA_PROGRAM
+RT_EXTVAR int rt_unicode_full;
+#endif
 
 /* ---- numbers (rt_num.c) ---- */
 RT_FN obj rt_make_flonum(double d);

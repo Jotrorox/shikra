@@ -61,6 +61,19 @@ PRIM("%string->symbol", "string->symbol", rt_string_to_symbol, 1, "s", 'y', PF_A
 PRIM("%char?", "char?", rt_char_p, 1, "a", 'b', PF_PURE)
 PRIM("%char->integer", "char->integer", rt_char_to_integer, 1, "c", 'f', PF_FAIL)
 PRIM("%integer->char", "integer->char", rt_integer_to_char, 1, "f", 'c', PF_FAIL)
+/* (scheme char): ASCII, or the Unicode tables with --unicode=full */
+PRIM("%char-upcase", "char-upcase", rt_char_upcase, 1, "c", 'c', PF_FAIL)
+PRIM("%char-downcase", "char-downcase", rt_char_downcase, 1, "c", 'c', PF_FAIL)
+PRIM("%char-foldcase", "char-foldcase", rt_char_foldcase, 1, "c", 'c', PF_FAIL)
+PRIM("%char-alphabetic?", "char-alphabetic?", rt_char_alphabetic_p, 1, "c", 'b', PF_FAIL)
+PRIM("%char-numeric?", "char-numeric?", rt_char_numeric_p, 1, "c", 'b', PF_FAIL)
+PRIM("%char-whitespace?", "char-whitespace?", rt_char_whitespace_p, 1, "c", 'b', PF_FAIL)
+PRIM("%char-upper-case?", "char-upper-case?", rt_char_upper_case_p, 1, "c", 'b', PF_FAIL)
+PRIM("%char-lower-case?", "char-lower-case?", rt_char_lower_case_p, 1, "c", 'b', PF_FAIL)
+PRIM("%digit-value", "digit-value", rt_digit_value, 1, "c", 'a', PF_FAIL)
+PRIM("%string-upcase", "string-upcase", rt_string_upcase, 1, "s", 's', PF_ALLOC | PF_FAIL)
+PRIM("%string-downcase", "string-downcase", rt_string_downcase, 1, "s", 's', PF_ALLOC | PF_FAIL)
+PRIM("%string-foldcase", "string-foldcase", rt_string_foldcase, 1, "s", 's', PF_ALLOC | PF_FAIL)
 
 /* strings */
 PRIM("%string?", "string?", rt_string_p, 1, "a", 'b', PF_PURE)

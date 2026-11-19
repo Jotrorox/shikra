@@ -350,6 +350,7 @@ static void entry(const char *text) {
 int repl_main(const char *file, interp_opts *o) {
     sbuf b = {0};
     opts = o;
+    rt_unicode_full = o->fo.unicode_full; /* --unicode=full: the tool always has the tables */
     o->fo.repl = 1;
     rt_gc_set_immortal(IMM_PURE);
     front_init(&o->fo);
@@ -381,6 +382,7 @@ int interp_main(const char *file, interp_opts *o, int nargs, char **args) {
     rt_argc = nargs + 1;
     rt_argv = av;
     opts = o;
+    rt_unicode_full = o->fo.unicode_full;
     o->fo.repl = 1;
     compile_errors_init(); /* front-end errors: diagnostics and exit 1, as for build */
     rt_gc_set_immortal(IMM_PURE);
