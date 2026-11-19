@@ -1,0 +1,47 @@
+Upstream source of the Shikra R7RS conformance suite
+====================================================
+
+r7rs-tests.scm in this directory is an unmodified copy of Chibi Scheme's
+R7RS test suite.
+
+  Repository: https://github.com/ashinn/chibi-scheme
+  File:       tests/r7rs-tests.scm
+  Fetched from the master branch at commit
+              9b0c19aa2eb92e3652f02c782c2e29f3672b40f6 (2026-11-18)
+  URL:        https://raw.githubusercontent.com/ashinn/chibi-scheme/9b0c19aa2eb92e3652f02c782c2e29f3672b40f6/tests/r7rs-tests.scm
+  Last commit touching the file: 18e561eea6f219b4676f45b522591979c923740f
+  SHA-256:    c1ef92910e70d469745a7b779658796767c1f97f7fea16a190305e396685d779
+
+The adapted per-library programs in tests/r7rs/*.scm are derived from this
+file; see ../EXCLUSIONS.md for every change. The (chibi test) library in
+../chibi/test.sld is an independent, portable re-implementation of the
+interface that upstream's lib/chibi/test.sld provides (that file was used
+as a reference only; no code was copied from it).
+
+Chibi Scheme is distributed under the following license (from COPYING at
+the same commit):
+
+Copyright (c) 2009-2021 Alex Shinn
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
