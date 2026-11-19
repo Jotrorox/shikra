@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include "util.h"
 #include "front.h"
 #include "ir.h"
@@ -49,6 +50,7 @@ typedef struct {
     char **args;            /* run: arguments for the program */
     int nargs;
     int size_all, size_tsv; /* size: --all (every procedure), --tsv (machine-readable) */
+    int no_cache;           /* --no-cache: expand every library from source */
 } options;
 
 int size_command(const char *path, int all, int tsv); /* size.c */
@@ -119,6 +121,7 @@ static void parse_args(int argc, char **argv, options *o) {
         else if (!strcmp(a, "--gc-stress")) o->gc_stress = 1;
         else if (!strcmp(a, "--no-musttail")) o->no_musttail = 1;
         else if (!strcmp(a, "-w")) o->nowarn = 1;
+        else if (!strcmp(a, "--no-cache")) o->no_cache = 1;
         else if (o->cmd == CMD_SIZE && !strcmp(a, "--all")) o->size_all = 1;
         else if (o->cmd == CMD_SIZE && !strcmp(a, "--tsv")) o->size_tsv = 1;
         else if ((v = flag_value(argc, argv, &i, "--keep"))) o->keep[o->nkeep++] = v;
@@ -160,20 +163,37 @@ static char *dir_of(const char *path) {
     return *d ? d : arena_strdup(&compiler_arena, "/");
 }
 
+static const char *cache_dir(void);
 static void front_options(const options *o, front_opts *fo) {
     memset(fo, 0, sizeof *fo);
+    if (!o->no_cache && o->cmd != CMD_REPL && o->cmd != CMD_INTERP) fo->cache_dir = cache_dir(); /* expansion cache */
     fo->progdir = o->input ? dir_of(o->input) : ".";
     fo->incdirs = o->incdirs;
     fo->nincdirs = o->nincdirs;
     fo->unicode_full = o->unicode_full;
     fo->target = o->target;
 }
+/* SHIKRA_TIME=1: the time of each phase on stderr (cache measurements, DESIGN.md "M4-3 as built"). */
+static double phase_t0;
+static void phase(const char *name) {
+    struct timespec ts;
+    double t;
+    if (!getenv("SHIKRA_TIME")) return;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    t = (double)ts.tv_sec * 1e3 + (double)ts.tv_nsec / 1e6;
+    if (name) fprintf(stderr, "shikra: %-6s %8.2f ms\n", name, t - phase_t0);
+    phase_t0 = t;
+}
 static library *run_front(const options *o) {
     front_opts fo;
+    library *prog;
+    phase(NULL);
     front_options(o, &fo);
     compile_errors_init();
     front_init(&fo);
-    return front_load_program(o->input);
+    prog = front_load_program(o->input);
+    phase("front");
+    return prog;
 }
 
 /* The middle end with the driver's options; warnings come after a successful build of the
@@ -188,6 +208,7 @@ static ir_program *middle(options *o) {
     io.unsafe = o->unsafe;
     p = ir_build(front_order, &io);
     if (io.warn) front_warn_imports();
+    phase("middle");
     return p;
 }
 static void gen_c(options *o, sbuf *out) {
@@ -202,6 +223,7 @@ static void gen_c(options *o, sbuf *out) {
     eo.gc_stress = o->gc_stress;
     eo.no_musttail = o->no_musttail;
     emit_c(p, &eo, out);
+    phase("emit");
 }
 
 static void mkdirs(const char *path) {

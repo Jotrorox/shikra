@@ -166,6 +166,7 @@ obj read_source(const char *path, int foldcase, obj where) {
         sb_free(&b);
     } else text = read_file(path, &n);
     if (!text) cerror(where, "cannot read %s", path);
+    cache_note_file(path, text, n);
     port = rt_open_input_string(rt_make_string_n(text, n));
     free(text);
     RT_PORT(port)->name = rt_cstring(path);
@@ -240,6 +241,7 @@ static void init_features(void) {
 
 obj front_features(void) { return features; } /* (%features) expands to this list, quoted */
 
+static const char *libname_id(obj name, obj where);
 static int requirement(obj r) {
     obj h, l;
     if (is_ident(r)) {
@@ -257,7 +259,11 @@ static int requirement(obj r) {
         return 0;
     }
     if (h == sym("not") && list_len(r) == 2) return !requirement(RT_CAR(RT_CDR(r)));
-    if (h == sym("library") && list_len(r) == 2) return library_exists(strip_syntax(RT_CAR(RT_CDR(r))));
+    if (h == sym("library") && list_len(r) == 2) {
+        int e = library_exists(strip_syntax(RT_CAR(RT_CDR(r))));
+        cache_note_exists(libname_id(strip_syntax(RT_CAR(RT_CDR(r))), r), e);
+        return e;
+    }
     cerror(r, "malformed cond-expand requirement");
 }
 obj cond_expand_select(obj form) {
@@ -336,11 +342,11 @@ static const char *find_library(const char *id) {
 static int repl_only(const char *id) {
     return !strcmp(id, "scheme/eval") || !strcmp(id, "scheme/load") || !strcmp(id, "scheme/repl");
 }
-int library_exists(obj name) {
-    const char *id = libname_id(name, name);
+int front_lib_exists(const char *id) {
     if (!opts.repl && repl_only(id)) return 0;
     return ht_get(&libs, id) || find_library(id);
 }
+int library_exists(obj name) { return front_lib_exists(libname_id(name, name)); }
 
 static imp *new_imp(obj name, binding *b, obj loc, imp *next) {
     imp *i = NEW(imp);
@@ -393,18 +399,25 @@ static imp *import_set(obj spec, library **from) {
         return out;
     }
     *from = load_library(spec, spec);
+    cache_note_dep(*from);
     for (pp = &out, i = (*from)->exports; i; i = i->next, pp = &(*pp)->next) *pp = new_imp(i->name, i->b, spec, NULL);
     return out;
 }
 
 /* Unused-import warnings (spec §11.3): each import set of the program or of a user library
  * gets a record; every identifier it binds remembers it, and lookup marks it used. */
-typedef struct imp_use { import_rec *rec; binding *b; struct imp_use *next; } imp_use;
 int front_builtin(library *lib) { return !strncmp(lib->path, "<builtin>", 9); }
 void front_note_use(library *lib, obj id, binding *b) {
     imp_use *u;
     for (u = (imp_use *)pm_get(&lib->imported, id); u; u = u->next)
         if (u->b == b) u->rec->used = 1;
+}
+void front_add_import_use(library *lib, obj id, import_rec *rec, binding *b) {
+    imp_use *u = NEW(imp_use);
+    u->rec = rec;
+    u->b = b;
+    u->next = (imp_use *)pm_get(&lib->imported, id);
+    pm_put(&lib->imported, id, u);
 }
 static void import_into(frame *env, obj spec) {
     library *from = NULL;
@@ -421,13 +434,7 @@ static void import_into(frame *env, obj spec) {
         binding *old = (binding *)pm_get(&env->map, i->name);
         if (old && old != i->b && !env->open) cerror(spec, "%s is imported twice with different bindings", idname(i->name));
         pm_put(&env->map, i->name, i->b);
-        if (rec) {
-            imp_use *u = NEW(imp_use);
-            u->rec = rec;
-            u->b = i->b;
-            u->next = (imp_use *)pm_get(&lib->imported, i->name);
-            pm_put(&lib->imported, i->name, u);
-        }
+        if (rec) front_add_import_use(lib, i->name, rec, i->b);
     }
 }
 void front_warn_imports(void) {
@@ -497,20 +504,24 @@ static library *load_library(obj name, obj where) {
         cerror(where, "library %s exists only in the REPL (shikra repl): compiled programs cannot use eval, load or interaction-environment", dstr(name));
     if (nloading == 64) cerror(where, "libraries nested too deeply");
     if (!(path = find_library(id))) cerror(where, "library %s not found", dstr(name));
-    for (forms = read_source(path, 0, where); forms != RT_NIL; forms = RT_CDR(forms)) {
-        obj f = RT_CAR(forms);
-        if (list_len(f) >= 2 && is_word(RT_CAR(f), "define-library") && rt_equal(strip_syntax(RT_CAR(RT_CDR(f))), strip_syntax(name))) dl = f;
-    }
-    if (dl == RT_FALSE) cerror(where, "%s does not define library %s", path, dstr(name));
     lib = new_library(strip_syntax(name), id, path);
     lib->state = 1;
     ht_put(&libs, id, lib);
     loading[nloading++] = lib;
-    loc_ctx = dl;
-    process_decls(lib, RT_CDR(RT_CDR(dl)));
-    lib->export_specs = rt_reverse(lib->export_specs);
-    expand_toplevel(lib, lib->body);
-    resolve_exports(lib);
+    if (!cache_load(lib)) { /* not in the expansion cache (or stale): read and expand it */
+        for (forms = read_source(path, 0, where); forms != RT_NIL; forms = RT_CDR(forms)) {
+            obj f = RT_CAR(forms);
+            if (list_len(f) >= 2 && is_word(RT_CAR(f), "define-library") && rt_equal(strip_syntax(RT_CAR(RT_CDR(f))), strip_syntax(name))) dl = f;
+        }
+        if (dl == RT_FALSE) cerror(where, "%s does not define library %s", path, dstr(name));
+        loc_ctx = dl;
+        process_decls(lib, RT_CDR(RT_CDR(dl)));
+        lib->export_specs = rt_reverse(lib->export_specs);
+        cache_begin_expand(lib);
+        expand_toplevel(lib, lib->body);
+        resolve_exports(lib);
+        cache_store(lib);
+    }
     nloading--;
     lib->state = 2;
     add_to_order(lib);
@@ -533,7 +544,23 @@ static void make_primitive_library(void) {
     }
     lib->state = 2;
     core_env = lib->env;
+    front_core_lib = lib;
     ht_put(&libs, lib->id, lib);
+}
+library *front_core_lib;
+library *front_library(const char *id) { return (library *)ht_get(&libs, id); }
+library *front_loading(void) { return nloading ? loading[nloading - 1] : NULL; }
+library *front_find_dep(const char *id) { /* (a b) from "a/b"; components of digits are numbers */
+    obj name = RT_NIL;
+    const char *e = id + strlen(id), *s;
+    while (e > id) {
+        for (s = e; s > id && s[-1] != '/'; s--) {}
+        if (strspn(s, "0123456789") == (size_t)(e - s) && e - s < 15) name = rt_cons(RT_FIX(atol(s)), name);
+        else name = rt_cons(rt_intern(s, (size_t)(e - s)), name);
+        e = s > id ? s - 1 : s;
+    }
+    if (!library_exists(name)) return NULL;
+    return load_library(name, RT_FALSE);
 }
 
 void front_init(const front_opts *o) {
@@ -543,6 +570,7 @@ void front_init(const front_opts *o) {
     S_set = sym("set!"); S_letrec_star = sym("letrec*"); S_begin = sym("begin"); S_case_lambda = sym("%case-lambda");
     init_features();
     make_primitive_library();
+    cache_init(o);
 }
 
 /* A program: import declarations first (cond-expand among them is spliced), then the body. */

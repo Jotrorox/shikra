@@ -66,6 +66,7 @@ typedef struct global {
     void *mid;    /* middle end: its ir_var */
     obj cell;     /* interpreter: its value cell (0 until first compiled) */
     int nowarn;   /* never reported as an unused definition (record procedures, hygienic names) */
+    int index;    /* position in lib->globals (creation order; the expansion cache refers to it) */
 } global;
 
 enum { B_CORE, B_MACRO, B_GLOBAL, B_LOCAL, B_PRIM };
@@ -85,8 +86,11 @@ struct frame {
 };
 
 typedef struct imp { obj name; binding *b; obj loc; struct imp *next; } imp;
-/* An import set of a user library or the program, for the unused-import warning. */
+/* An import set of a user library or the program, for the unused-import warning; every
+ * identifier it binds remembers it (lib->imported: identifier -> chain of imp_use). */
 typedef struct import_rec { obj spec; int used; struct import_rec *next; } import_rec;
+typedef struct imp_use { import_rec *rec; binding *b; struct imp_use *next; } imp_use;
+struct macro { obj name, ellipsis, literals, rules; frame *env; }; /* syntax-rules (ellipsis 0: ...) */
 
 struct library {
     obj name;       /* (scheme base); #f for the program */
@@ -101,6 +105,8 @@ struct library {
     library *next;  /* initialisation order (front_order) */
     import_rec *imports; /* user libraries and the program: their import sets */
     pmap imported;  /* identifier -> chain of (import set, binding) it was imported by (library.c) */
+    global **globals; /* globals defined by the library, in creation order */
+    int nglobals, capglobals;
 };
 
 /* ---- options and entry points ---- */
@@ -111,6 +117,7 @@ typedef struct {
     int unicode_full;      /* feature full-unicode */
     const char *target;    /* target triple or NULL for the host (features) */
     int repl;              /* interpreter: (scheme eval), (scheme load), (scheme repl) exist */
+    const char *cache_dir; /* expansion cache directory (cache.c), NULL: no cache */
 } front_opts;
 
 void front_init(const front_opts *o);
@@ -171,4 +178,24 @@ const char *resolve_include(obj where, const char *name);
 global *new_global(library *lib, obj id);
 binding *new_binding(int kind);
 int library_exists(obj name);
+library *front_library(const char *id);  /* a loaded (or loading) library, or NULL */
+int front_lib_exists(const char *id);    /* library_exists by id */
+library *front_find_dep(const char *id); /* load the library with that id (cache.c), NULL if not found */
+extern library *front_core_lib;           /* (shikra primitives) */
+
+/* ---- the expansion cache (cache.c; spec §4.2, DESIGN.md "M4-3 as built") ---- */
+void cache_init(const front_opts *o);     /* no-op without o->cache_dir */
+int cache_load(library *lib);             /* lib is loading (state 1); 1 if it was restored */
+void cache_note_file(const char *path, const char *text, size_t n); /* source read by the innermost loading library */
+void cache_note_dep(library *dep);        /* the innermost loading library imported dep */
+void cache_note_exists(const char *id, int r); /* its cond-expand asked (library id) */
+void cache_begin_expand(library *lib);    /* its declarations are processed; expansion starts */
+void cache_store(library *lib);           /* it was expanded: write its entry */
+library *front_loading(void);             /* the innermost library being loaded, or NULL */
+/* expand.c internals the cache restores */
+int front_alias_info(obj sym, obj *orig, frame **env); /* 1 if sym is an alias */
+obj front_alias(obj orig, frame *env);
+obj front_make_local(obj srcname, long n); /* the local symbol "srcname.n" */
+long front_counter(long set);             /* local symbol counter; set >= 0 sets it */
+void front_add_import_use(library *lib, obj id, import_rec *rec, binding *b);
 #endif

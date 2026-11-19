@@ -21,8 +21,6 @@ static pmap globals_by_sym; /* global core symbol -> global* */
 static pmap local_names;    /* local core symbol -> source name symbol */
 static long local_counter;
 
-struct macro { obj name, ellipsis, literals, rules; frame *env; };
-
 static obj expand(obj x, frame *env);
 static obj expand_body(obj body, frame *env, obj src);
 
@@ -67,6 +65,12 @@ static obj make_alias(obj id, frame *env) {
     a->env = env;
     pm_put(&aliases, s, a);
     return s;
+}
+obj front_alias(obj orig, frame *env) { return make_alias(orig, env); }
+int front_alias_info(obj sym, obj *orig, frame **env) {
+    alias_t *a = alias_of(sym);
+    if (a) { *orig = a->orig; *env = a->env; }
+    return a != NULL;
 }
 obj strip_syntax(obj x) {
     if (rt_is_symbol(x)) return strip_id(x);
@@ -141,19 +145,24 @@ static obj kquote(obj d) { return L2(kw(K_QUOTE), d); }
 static obj unspec_form(void) { return L3(kw(K_IF), RT_FALSE, RT_FALSE); }
 static obj begin_of(obj body) { return list_len(body) == 1 ? RT_CAR(body) : rt_cons(kw(K_BEGIN), body); }
 
-static obj new_local_sym(obj id) {
+obj front_local_name(obj s) { return (obj)pm_get(&local_names, s); }
+obj front_make_local(obj srcname, long n) {
     char buf[32];
-    obj name = strip_id(id), s;
+    obj s;
     sbuf b = {0};
-    snprintf(buf, sizeof buf, ".%ld", ++local_counter);
-    sb_puts(&b, RT_STR(RT_PTR(name, rt_symbol)->name)->buf);
+    snprintf(buf, sizeof buf, ".%ld", n);
+    sb_puts(&b, RT_STR(RT_PTR(srcname, rt_symbol)->name)->buf);
     sb_puts(&b, buf);
     s = rt_make_symbol(rt_cstring(b.s));
     sb_free(&b);
-    pm_put(&local_names, s, name);
+    pm_put(&local_names, s, srcname);
     return s;
 }
-obj front_local_name(obj s) { return (obj)pm_get(&local_names, s); }
+static obj new_local_sym(obj id) { return front_make_local(strip_id(id), ++local_counter); }
+long front_counter(long set) {
+    if (set >= 0) local_counter = set;
+    return local_counter;
+}
 global *new_global(library *lib, obj id) {
     global *g = NEW(global);
     sbuf b = {0};
@@ -163,6 +172,14 @@ global *new_global(library *lib, obj id) {
     g->sym = rt_make_symbol(rt_cstring(b.s));
     sb_free(&b);
     pm_put(&globals_by_sym, g->sym, g);
+    if (lib->nglobals == lib->capglobals) {
+        global **ng = NEWN(global *, lib->capglobals * 2 + 16);
+        if (lib->nglobals) memcpy(ng, lib->globals, sizeof(global *) * (size_t)lib->nglobals);
+        lib->globals = ng;
+        lib->capglobals = lib->capglobals * 2 + 16;
+    }
+    g->index = lib->nglobals;
+    lib->globals[lib->nglobals++] = g;
     return g;
 }
 global *front_global(obj s) { return rt_is_symbol(s) ? (global *)pm_get(&globals_by_sym, s) : NULL; }

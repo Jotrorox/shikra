@@ -377,6 +377,76 @@ run_size() {
     else bad "shikra size of a non-binary: expected an error"; cat "$TMP/size.err"; fi
 }
 
+# run_cache (M4-3): the expansion cache (spec §4.2) in a private directory. For every case and
+# r7rs program, `emit-c` with a cold cache, then warm, equals `emit-c --no-cache` byte for byte;
+# a cache shared by all programs too. Editing a library, an included file or a library's
+# dependency invalidates the entries that depend on it; corrupted and truncated entries are
+# ignored; concurrent cold builds agree and leave no temporary files.
+cache_emit() { # $1 cache dir, $2 output, rest: emit-c arguments
+    d=$1 o=$2; shift 2
+    SHIKRA_CACHE_DIR=$d $SHIKRA emit-c -w "$@" > "$o" 2>&1
+}
+run_cache() {
+    C=$(pwd)/$TMP/cachetest
+    for f in tests/cases/*.scm tests/r7rs/*.scm; do
+        fl=
+        [ -f "${f%.scm}.flags" ] && fl=$(cat "${f%.scm}.flags")
+        case $f in */char-unicode.scm) fl=--unicode=full ;; */eval.scm) continue ;; esac
+        rm -rf "$C"
+        # shellcheck disable=SC2086
+        cache_emit "$C" "$TMP/k.cold" $fl "$f"; cache_emit "$C" "$TMP/k.warm" $fl "$f"; cache_emit "$C.shared" "$TMP/k.shared" $fl "$f"
+        # shellcheck disable=SC2086
+        $SHIKRA emit-c -w --no-cache $fl "$f" > "$TMP/k.none" 2>&1
+        if cmp -s "$TMP/k.cold" "$TMP/k.none" && cmp -s "$TMP/k.warm" "$TMP/k.none" && cmp -s "$TMP/k.shared" "$TMP/k.none"; then ok
+        else bad "$f [cache: cold, warm, shared and --no-cache output differ]"; fi
+    done
+    [ "$(ls "$C.shared/expand" | wc -l)" -ge 5 ] && ok || bad "cache: built-in libraries were not cached"
+    # invalidation: a dependency of a library, a library, an included file
+    L=$TMP/cachelib
+    rm -rf "$L" "$C"; mkdir -p "$L/a"
+    printf '(define-library (a c) (export k twice) (import (scheme base))\n (begin (define k 1) (define-syntax twice (syntax-rules () ((_ e) (+ e e))))))\n' > "$L/a/c.sld"
+    printf '(define-library (a b) (export f) (import (scheme base) (a c))\n (include "b-body.scm"))\n' > "$L/a/b.sld"
+    printf '(define (f) (twice k))\n' > "$L/a/b-body.scm"
+    printf '(import (scheme base) (scheme write) (a b))\n(display (f))\n(newline)\n' > "$L/p.scm"
+    for step in none dep lib include; do
+        case $step in
+        dep) sed 's/(define k 1)/(define k 21)/' "$L/a/c.sld" > "$L/x" && mv "$L/x" "$L/a/c.sld" ;;
+        lib) sed 's/(export f)/(export f g)/; s/(include/(begin (define (g) 0)) (include/' "$L/a/b.sld" > "$L/x" && mv "$L/x" "$L/a/b.sld" ;;
+        include) printf '(define (f) (twice (twice k)))\n' > "$L/a/b-body.scm" ;;
+        esac
+        cache_emit "$C" "$TMP/k.cached" "$L/p.scm"
+        $SHIKRA emit-c -w --no-cache "$L/p.scm" > "$TMP/k.none" 2>&1
+        if cmp -s "$TMP/k.cached" "$TMP/k.none"; then ok; else bad "cache: stale entry used after editing ($step)"; fi
+    done
+    if SHIKRA_CACHE_DIR=$C $SHIKRA build -w "$L/p.scm" -o "$TMP/k.prog" && [ "$("$TMP/k.prog")" = 84 ]; then ok
+    else bad "cache: edited program gives $("$TMP/k.prog" 2>&1)"; fi
+    # corrupted and truncated entries are ignored (and rewritten)
+    $SHIKRA emit-c -w --no-cache tests/cases/libraries.scm > "$TMP/k.none" 2>&1
+    for how in flip truncate garbage; do
+        rm -rf "$C"; cache_emit "$C" "$TMP/k.cold" tests/cases/libraries.scm
+        for e in "$C"/expand/*; do
+            sz=$(wc -c < "$e")
+            case $how in
+            flip) { head -c $((sz / 2)) "$e"; printf 'X'; tail -c $((sz - sz / 2 - 1)) "$e"; } > "$e.x" ;;
+            truncate) head -c $((sz / 3)) "$e" > "$e.x" ;;
+            garbage) printf 'not a cache entry' > "$e.x" ;;
+            esac
+            mv "$e.x" "$e"
+        done
+        cache_emit "$C" "$TMP/k.bad" tests/cases/libraries.scm; cache_emit "$C" "$TMP/k.again" tests/cases/libraries.scm
+        if cmp -s "$TMP/k.bad" "$TMP/k.none" && cmp -s "$TMP/k.again" "$TMP/k.none"; then ok; else bad "cache: $how entries changed the output"; fi
+    done
+    # concurrent cold builds
+    rm -rf "$C"
+    for i in 1 2 3 4; do cache_emit "$C" "$TMP/k.par$i" tests/r7rs/base.scm & done
+    wait
+    $SHIKRA emit-c -w --no-cache tests/r7rs/base.scm > "$TMP/k.none" 2>&1
+    pok=1
+    for i in 1 2 3 4; do cmp -s "$TMP/k.par$i" "$TMP/k.none" || pok=0; done
+    if [ $pok = 1 ] && [ -z "$(ls "$C/expand" | grep tmp)" ]; then ok; else bad "cache: concurrent builds"; fi
+    rm -rf "$C" "$C.shared"
+}
+
 # run_stress: cases and r7rs files with a collection at every allocation, at -O2 and -O0.
 run_stress() {
     for opt in 2 0; do
@@ -416,9 +486,10 @@ gcc) opt=2; run_cases gcc
     opt= ;;
 shape) run_shape ;;
 size) run_size ;;
-all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_size; run_cases interp; run_repl; run_tramp
+cache) run_cache ;;
+all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_size; run_cache; run_cases interp; run_repl; run_tramp
     run_stress ;;
-*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape|size]"; exit 2 ;;
+*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape|size|cache]"; exit 2 ;;
 esac
 if [ "$skip" -gt 0 ]; then echo "tests: $pass passed, $fail failed, $skip skipped (see above)"
 else echo "tests: $pass passed, $fail failed"; fi
