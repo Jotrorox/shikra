@@ -1,0 +1,28 @@
+;; (scheme process-context) and (scheme time): command-line (the program's arguments come
+;; from process_time.args; the program name differs between engines and is only checked to
+;; be a string), the environment, and the clocks.
+(import (scheme base) (scheme write) (scheme process-context) (scheme time) (util check))
+
+(define cl (command-line))
+(check (string? (car cl)) #t)
+(check (cdr cl) '("alpha" "beta" "--gamma"))
+(define env (get-environment-variables))
+(check (and (list? env) (pair? env)) #t)
+(check (let loop ((e env)) (or (null? e) (and (string? (caar e)) (string? (cdar e)) (loop (cdr e))))) #t)
+(check (equal? (get-environment-variable "PATH") (cdr (assoc "PATH" env))) #t)
+(check (get-environment-variable "SHIKRA_SURELY_UNSET_VARIABLE") #f)
+(check (exact-integer? (jiffies-per-second)) #t)
+(check (> (current-second) 1.7e9) #t)
+(check (inexact? (current-second)) #t)
+(define (non-decreasing? n)
+  (let loop ((i 0) (prev (current-jiffy)))
+    (or (= i n) (let ((j (current-jiffy))) (and (exact-integer? j) (>= j prev) (loop (+ i 1) j))))))
+(check (non-decreasing? 100000) #t)
+(define t0 (current-jiffy))
+(define s0 (current-second))
+(let loop ((i 0)) (when (< i 2000000) (loop (+ i 1))))
+(check (> (current-jiffy) t0) #t)
+(check (>= (current-second) s0) #t)
+(check (< (/ (- (current-jiffy) t0) (jiffies-per-second)) 60) #t)
+(check-done)
+(exit 3)

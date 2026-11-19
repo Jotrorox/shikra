@@ -1,0 +1,8 @@
+43 passed, 0 failed
+(define (f x) (* x 2))
+#(1 2.5 "three" #\4)
+|five six|
+#0=(loop . #0#)
+-1.0e-10
+#u8(1 2)
+(quote q)

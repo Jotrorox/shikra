@@ -1,0 +1,15 @@
+full-unicode feature: #f
+features: absent
+alphabetic: (#t #t #f #f #f #f #f #f #f #f #f #f #f #f)
+numeric: (#f #f #t #f #f #f #f #f #f #f #f #f #f #f)
+whitespace: (#f #f #f #t #f #f #f #f #f #f #f #f #f #f)
+upper-case: (#f #t #f #f #f #f #f #f #f #f #f #f #f #f)
+lower-case: (#t #f #f #f #f #f #f #f #f #f #f #f #f #f)
+digit-value: (#f #f 5 #f #f #f #f #f #f #f #f #f #f #f)
+upcase: (#\A #\Z #\5 #\space #\λ #\Λ #\ß #\İ #\ſ #\٠ #\５ #\  #\  #\😀)
+downcase: (#\a #\z #\5 #\space #\λ #\Λ #\ß #\İ #\ſ #\٠ #\５ #\  #\  #\😀)
+foldcase: (#\a #\z #\5 #\space #\λ #\Λ #\ß #\İ #\ſ #\٠ #\５ #\  #\  #\😀)
+string-upcase: "STRAßE ǰ ﬁ λάμδα"
+string-downcase: "ΟΔΥΣΣΕΥΣ İ abc"
+string-foldcase: "straße ΣΊΣΥΦΟΣ ſ ẞ"
+ci: (#f #f #t #f #t)

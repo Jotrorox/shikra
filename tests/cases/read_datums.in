@@ -1,0 +1,4 @@
+(define (f x) (* x 2)) ; a comment
+#(1 2.5 "three" #\4) |five six|
+#0=(loop . #0#)
+-1e-10 #u8(1 2) 'q

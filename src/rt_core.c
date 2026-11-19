@@ -203,16 +203,18 @@ RT_FN intptr_t *rt_addrtab_get(rt_addrtab *t, obj a, obj b, int insert) {
 }
 
 /* equal? terminates on circular structures (R7RS 6.1): a first pass gives up after visiting
- * CORE_EQ_BUDGET pairs and vectors; the second pass records every pair of compound objects it
+ * CORE_EQ_BUDGET pairs and vectors or nesting CORE_EQ_DEPTH levels deep (a cycle through cars
+ * would otherwise recurse that far on the C stack); the second pass records every pair of compound objects it
  * enters and treats a pair met again as equal (the comparison is a bisimulation), so it
  * terminates. Returns 1, 0, or -1 when the budget ran out. */
 #define CORE_EQ_BUDGET 100000
-static int core_equal(obj a, obj b, intptr_t *budget, rt_addrtab *seen) {
+#define CORE_EQ_DEPTH 1000
+static int core_equal(obj a, obj b, intptr_t *budget, int depth, rt_addrtab *seen) {
     for (;;) {
         if (rt_eqv(a, b)) return 1;
         if (rt_is_pair(a) ? !rt_is_pair(b) : !rt_is_heap(a) || !rt_is_heap(b) || RT_HTYPE(a) != RT_HTYPE(b)) return 0;
         if (rt_is_pair(a) || RT_HTYPE(a) == RT_T_VECTOR) {
-            if (!seen) { if (--*budget < 0) return -1; }
+            if (!seen) { if (--*budget < 0 || depth > CORE_EQ_DEPTH) return -1; }
             else {
                 intptr_t *v = rt_addrtab_get(seen, a, b, 1);
                 if (*v) return 1;
@@ -220,7 +222,7 @@ static int core_equal(obj a, obj b, intptr_t *budget, rt_addrtab *seen) {
             }
         }
         if (rt_is_pair(a)) {
-            int r = core_equal(RT_CAR(a), RT_CAR(b), budget, seen);
+            int r = core_equal(RT_CAR(a), RT_CAR(b), budget, depth + 1, seen);
             if (r != 1) return r;
             a = RT_CDR(a); b = RT_CDR(b);
             continue;
@@ -237,7 +239,7 @@ static int core_equal(obj a, obj b, intptr_t *budget, rt_addrtab *seen) {
             int r;
             if (n != RT_HLEN(b)) return 0;
             if (n == 0) return 1;
-            for (i = 0; i < n - 1; i++) if ((r = core_equal(RT_VEC(a)[i], RT_VEC(b)[i], budget, seen)) != 1) return r;
+            for (i = 0; i < n - 1; i++) if ((r = core_equal(RT_VEC(a)[i], RT_VEC(b)[i], budget, depth + 1, seen)) != 1) return r;
             a = RT_VEC(a)[n - 1]; b = RT_VEC(b)[n - 1];
             continue;
         }
@@ -247,9 +249,9 @@ static int core_equal(obj a, obj b, intptr_t *budget, rt_addrtab *seen) {
 }
 RT_FN int rt_equal(obj a, obj b) {
     intptr_t budget = CORE_EQ_BUDGET;
-    int r = core_equal(a, b, &budget, 0);
+    int r = core_equal(a, b, &budget, 0, 0);
     rt_addrtab seen = {0, 0, 0};
-    return r >= 0 ? r : core_equal(a, b, &budget, &seen);
+    return r >= 0 ? r : core_equal(a, b, &budget, 0, &seen);
 }
 RT_FN obj rt_eqv_p(obj a, obj b) { return RT_BOOL(rt_eqv(a, b)); }
 RT_FN obj rt_equal_p(obj a, obj b) { return RT_BOOL(rt_equal(a, b)); }
