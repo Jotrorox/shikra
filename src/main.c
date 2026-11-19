@@ -218,6 +218,7 @@ static char **cc_argv(const options *o, const char *cfile, const char *out) {
     av[n++] = "-o";
     av[n++] = (char *)out;
     av[n++] = (char *)cfile;
+    if (!darwin) av[n++] = "-lm"; /* rt_sys_pow; libm is part of libSystem on macOS */
     av[n] = NULL;
     return av;
 }

@@ -32,7 +32,7 @@ const char *const keyword_names[NKEYWORDS] = {
     "cond", "case", "and", "or", "when", "unless", "do", "quasiquote", "define-syntax",
     "let-syntax", "letrec-syntax", "syntax-rules", "syntax-error", "define-record-type",
     "case-lambda", "let-values", "let*-values", "define-values", "include", "include-ci",
-    "cond-expand", "delay", "delay-force",
+    "cond-expand", "delay", "delay-force", "%features",
     "else", "=>", "...", "_", "unquote", "unquote-splicing"};
 
 /* ---- pointer map ---- */
@@ -209,6 +209,8 @@ static void init_features(void) {
     if (a64) { add_feature("arm64"); add_feature("aarch64"); }
     if (x64 || a64) { add_feature("little-endian"); add_feature("lp64"); }
 }
+
+obj front_features(void) { return features; } /* (%features) expands to this list, quoted */
 
 static int requirement(obj r) {
     obj h, l;

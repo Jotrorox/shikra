@@ -1,14 +1,17 @@
 /* rt_io.c -- ports and the printer (write/display).
  * A port is a fixed-field object (rt_port in rt.h) over either an OS descriptor (with a
- * byte buffer) or a string buffer. Textual ports decode/encode UTF-8 here. Binary ports
- * (M1) reuse the same structure with RT_PF_BINARY; write-shared / cycle labels (M5) hook
- * into rt_print. */
+ * byte buffer) or an in-memory buffer (RT_PF_STRING: string and bytevector ports).
+ * Textual ports decode/encode UTF-8 here; binary ports (RT_PF_BINARY) move raw bytes over
+ * the same buffer. A port is textual or binary, never both; the standard ports are
+ * textual. write-shared / cycle labels (M5) hook into rt_print. */
 #ifndef SHIKRA_RT_H
 #include "rt.h"
 #endif
 
 #define IO_BUFSZ 4096
+#define IO_ANY 0x100 /* io_check: textual or binary */
 RT_VAR obj rt_stdin, rt_stdout, rt_stderr;
+RT_VAR obj rt_ports = RT_NIL;
 
 static obj io_make(int flags, intptr_t fd, intptr_t cap, obj name) {
     char *buf = (char *)rt_alloc_raw((size_t)cap);
@@ -22,20 +25,40 @@ static obj io_make(int flags, intptr_t fd, intptr_t cap, obj name) {
     p->name = name;
     return RT_TAGPTR(p);
 }
-RT_FN obj rt_make_fd_port(int fd, int flags, obj name) { return io_make(flags, fd, IO_BUFSZ, name); }
-RT_FN obj rt_open_output_string(void) { return io_make(RT_PF_OUT | RT_PF_STRING, -1, 64, RT_FALSE); }
-RT_FN obj rt_open_input_string(obj s) {
-    obj p;
-    RT_CHECK(rt_is_string(s), "open-input-string", "string", s);
-    p = io_make(RT_PF_IN | RT_PF_STRING, -1, RT_STR(s)->bytes + 1, RT_FALSE);
-    rt_memcpy(RT_PORT(p)->buf, RT_STR(s)->buf, (size_t)RT_STR(s)->bytes);
-    RT_PORT(p)->len = RT_STR(s)->bytes;
+RT_FN obj rt_make_fd_port(int fd, int flags, obj name) {
+    obj p = io_make(flags, fd, IO_BUFSZ, name);
+    if ((flags & RT_PF_OUT) && fd > 2) rt_ports = rt_cons(p, rt_ports);
     return p;
 }
+static obj io_input_mem(const void *data, intptr_t n, int flags) {
+    obj p = io_make(RT_PF_IN | RT_PF_STRING | flags, -1, n + 1, RT_FALSE);
+    rt_memcpy(RT_PORT(p)->buf, data, (size_t)n);
+    RT_PORT(p)->len = n;
+    return p;
+}
+RT_FN obj rt_open_input_string(obj s) {
+    RT_CHECK(rt_is_string(s), "open-input-string", "string", s);
+    return io_input_mem(RT_STR(s)->buf, RT_STR(s)->bytes, 0);
+}
+RT_FN obj rt_open_input_bytevector(obj bv) {
+    RT_CHECK(rt_is_bytevector(bv), "open-input-bytevector", "bytevector", bv);
+    return io_input_mem(RT_PTR(bv, rt_bytevector)->b, RT_HLEN(bv), RT_PF_BINARY);
+}
+RT_FN obj rt_open_output_string(void) { return io_make(RT_PF_OUT | RT_PF_STRING, -1, 64, RT_FALSE); }
+RT_FN obj rt_open_output_bytevector(void) { return io_make(RT_PF_OUT | RT_PF_STRING | RT_PF_BINARY, -1, 64, RT_FALSE); }
+static int io_is(obj port, int flags) {
+    return rt_is_port(port) && (RT_HFLAGS(port) & (RT_PF_OUT | RT_PF_STRING | RT_PF_BINARY)) == flags;
+}
 RT_FN obj rt_get_output_string(obj port) {
-    RT_CHECK(rt_is_port(port) && (RT_HFLAGS(port) & RT_PF_STRING) && (RT_HFLAGS(port) & RT_PF_OUT),
-             "get-output-string", "output string port", port);
+    RT_CHECK(io_is(port, RT_PF_OUT | RT_PF_STRING), "get-output-string", "output string port", port);
     return rt_make_string_n(RT_PORT(port)->buf, (size_t)RT_PORT(port)->len);
+}
+RT_FN obj rt_get_output_bytevector(obj port) {
+    obj bv;
+    RT_CHECK(io_is(port, RT_PF_OUT | RT_PF_STRING | RT_PF_BINARY), "get-output-bytevector", "output bytevector port", port);
+    bv = rt_make_bytevector(RT_FIX(RT_PORT(port)->len), RT_FIX(0));
+    rt_memcpy(RT_PTR(bv, rt_bytevector)->b, RT_PORT(port)->buf, (size_t)RT_PORT(port)->len);
+    return bv;
 }
 static obj io_open_file(obj path, int mode, const char *who) {
     int fd;
@@ -59,22 +82,47 @@ static void io_flush(rt_port *p) {
 RT_FN void rt_flush(obj port) {
     if (rt_is_port(port) && (RT_HFLAGS(port) & RT_PF_OUT)) io_flush(RT_PORT(port));
 }
+RT_FN void rt_flush_all(void) {
+    obj l;
+    if (rt_stdout) rt_flush(rt_stdout);
+    for (l = rt_ports; rt_is_pair(l); l = RT_CDR(l)) rt_flush(RT_CAR(l));
+    if (rt_stderr) rt_flush(rt_stderr);
+}
 RT_FN obj rt_close_port(obj port) {
     rt_port *p;
+    obj *l;
     RT_CHECK(rt_is_port(port), "close-port", "port", port);
     p = RT_PORT(port);
     if (!(RT_HFLAGS(port) & RT_PF_OPEN)) return RT_UNSPEC;
     if (RT_HFLAGS(port) & RT_PF_OUT) io_flush(p);
     if (p->fd > 2) rt_sys_close((int)p->fd);
     RT_SETFLAGS(port, RT_HFLAGS(port) & ~RT_PF_OPEN);
+    for (l = &rt_ports; rt_is_pair(*l); l = &RT_CDR(*l))
+        if (RT_CAR(*l) == port) { *l = RT_CDR(*l); break; }
     return RT_UNSPEC;
 }
 
-static rt_port *io_check(obj port, int dir, const char *who) {
-    if (!rt_is_port(port) || (RT_HFLAGS(port) & (dir | RT_PF_BINARY)) != dir)
-        rt_type_error(who, dir == RT_PF_IN ? "textual input port" : "textual output port", port);
+/* want: RT_PF_IN or RT_PF_OUT, plus RT_PF_BINARY (binary) or IO_ANY (either); else textual. */
+static rt_port *io_check(obj port, int want, const char *who) {
+    int dir = want & (RT_PF_IN | RT_PF_OUT), mask = dir | (want & IO_ANY ? 0 : RT_PF_BINARY);
+    if (!rt_is_port(port) || (RT_HFLAGS(port) & mask) != (want & mask))
+        rt_type_error(who, want & IO_ANY ? (dir == RT_PF_IN ? "input port" : "output port")
+                         : want & RT_PF_BINARY ? (dir == RT_PF_IN ? "binary input port" : "binary output port")
+                         : dir == RT_PF_IN ? "textual input port" : "textual output port", port);
     if (!(RT_HFLAGS(port) & RT_PF_OPEN)) rt_error(who, "port is closed", rt_cons(port, RT_NIL));
     return RT_PORT(port);
+}
+RT_FN obj rt_input_port_p(obj x) { return RT_BOOL(rt_is_port(x) && (RT_HFLAGS(x) & RT_PF_IN)); }
+RT_FN obj rt_output_port_p(obj x) { return RT_BOOL(rt_is_port(x) && (RT_HFLAGS(x) & RT_PF_OUT)); }
+RT_FN obj rt_textual_port_p(obj x) { return RT_BOOL(rt_is_port(x) && !(RT_HFLAGS(x) & RT_PF_BINARY)); }
+RT_FN obj rt_binary_port_p(obj x) { return RT_BOOL(rt_is_port(x) && (RT_HFLAGS(x) & RT_PF_BINARY)); }
+RT_FN obj rt_input_port_open_p(obj x) {
+    RT_CHECK(rt_is_port(x) && (RT_HFLAGS(x) & RT_PF_IN), "input-port-open?", "input port", x);
+    return RT_BOOL(RT_HFLAGS(x) & RT_PF_OPEN);
+}
+RT_FN obj rt_output_port_open_p(obj x) {
+    RT_CHECK(rt_is_port(x) && (RT_HFLAGS(x) & RT_PF_OUT), "output-port-open?", "output port", x);
+    return RT_BOOL(RT_HFLAGS(x) & RT_PF_OPEN);
 }
 
 /* ---- input ---- */
@@ -115,8 +163,6 @@ RT_FN int rt_port_getc(obj port) {
     else p->col++;
     return c;
 }
-RT_FN obj rt_input_port_p(obj x) { return RT_BOOL(rt_is_port(x) && (RT_HFLAGS(x) & RT_PF_IN)); }
-RT_FN obj rt_output_port_p(obj x) { return RT_BOOL(rt_is_port(x) && (RT_HFLAGS(x) & RT_PF_OUT)); }
 RT_FN obj rt_read_char(obj port) {
     int c;
     io_check(port, RT_PF_IN, "read-char");
@@ -138,6 +184,46 @@ RT_FN obj rt_read_line(obj port) {
     for (; c >= 0 && c != '\n'; c = rt_port_getc(port)) rt_port_putc(buf, c);
     if (RT_PORT(buf)->len > 0 && RT_PORT(buf)->buf[RT_PORT(buf)->len - 1] == '\r') RT_PORT(buf)->len--;
     return rt_get_output_string(buf);
+}
+RT_FN obj rt_read_string(obj k, obj port) {
+    intptr_t n = rt_is_fix(k) ? RT_FIXVAL(k) : -1;
+    obj buf;
+    int c;
+    if (n < 0) rt_type_error("read-string", "nonnegative exact integer", k);
+    io_check(port, RT_PF_IN, "read-string");
+    if (n == 0) return rt_make_string_n("", 0);
+    if ((c = rt_port_getc(port)) < 0) return RT_EOF;
+    buf = rt_open_output_string();
+    do rt_port_putc(buf, c);
+    while (--n > 0 && (c = rt_port_getc(port)) >= 0);
+    return rt_get_output_string(buf);
+}
+/* A read will not block: buffered data, an in-memory port, or the OS says so (data or EOF). */
+static obj io_ready(rt_port *p) { return RT_BOOL(p->pos < p->len || p->fd < 0 || rt_sys_ready((int)p->fd)); }
+RT_FN obj rt_char_ready_p(obj port) { return io_ready(io_check(port, RT_PF_IN, "char-ready?")); }
+RT_FN obj rt_u8_ready_p(obj port) { return io_ready(io_check(port, RT_PF_IN | RT_PF_BINARY, "u8-ready?")); }
+RT_FN obj rt_read_u8(obj port) {
+    rt_port *p = io_check(port, RT_PF_IN | RT_PF_BINARY, "read-u8");
+    return io_ensure(p, 1) <= 0 ? RT_EOF : RT_FIX((unsigned char)p->buf[p->pos++]);
+}
+RT_FN obj rt_peek_u8(obj port) {
+    rt_port *p = io_check(port, RT_PF_IN | RT_PF_BINARY, "peek-u8");
+    return io_ensure(p, 1) <= 0 ? RT_EOF : RT_FIX((unsigned char)p->buf[p->pos]);
+}
+/* Reads end - start bytes, or as many as come before end of file; eof if none came. */
+RT_FN obj rt_read_bytevector_x(obj bv, obj port, obj start, obj end) {
+    intptr_t s, e, n = 0, avail;
+    rt_port *p;
+    RT_CHECK(rt_is_bytevector(bv) && !(RT_HFLAGS(bv) & RT_F_RO), "read-bytevector!", "mutable bytevector", bv);
+    s = rt_check_range(start, end, RT_HLEN(bv), &e, "read-bytevector!");
+    p = io_check(port, RT_PF_IN | RT_PF_BINARY, "read-bytevector!");
+    while (n < e - s && (avail = io_ensure(p, 1)) > 0) {
+        if (avail > e - s - n) avail = e - s - n;
+        rt_memcpy(RT_PTR(bv, rt_bytevector)->b + s + n, p->buf + p->pos, (size_t)avail);
+        p->pos += avail;
+        n += avail;
+    }
+    return n == 0 && e > s ? RT_EOF : RT_FIX(n);
 }
 
 /* ---- output ---- */
@@ -299,7 +385,23 @@ RT_FN obj rt_write_string(obj s, obj port) {
     rt_port_write(port, RT_STR(s)->buf, (size_t)RT_STR(s)->bytes);
     return RT_UNSPEC;
 }
+RT_FN obj rt_write_u8(obj b, obj port) {
+    char c;
+    if (!rt_is_fix(b) || (uintptr_t)RT_FIXVAL(b) > 255) rt_type_error("write-u8", "byte", b);
+    io_check(port, RT_PF_OUT | RT_PF_BINARY, "write-u8");
+    c = (char)RT_FIXVAL(b);
+    rt_port_write(port, &c, 1);
+    return RT_UNSPEC;
+}
+RT_FN obj rt_write_bytevector(obj bv, obj port, obj start, obj end) {
+    intptr_t s, e;
+    RT_CHECK(rt_is_bytevector(bv), "write-bytevector", "bytevector", bv);
+    s = rt_check_range(start, end, RT_HLEN(bv), &e, "write-bytevector");
+    io_check(port, RT_PF_OUT | RT_PF_BINARY, "write-bytevector");
+    rt_port_write(port, (const char *)RT_PTR(bv, rt_bytevector)->b + s, (size_t)(e - s));
+    return RT_UNSPEC;
+}
 RT_FN obj rt_write(obj x, obj port) { io_check(port, RT_PF_OUT, "write"); rt_print(x, port, 1); return RT_UNSPEC; }
 RT_FN obj rt_display(obj x, obj port) { io_check(port, RT_PF_OUT, "display"); rt_print(x, port, 0); return RT_UNSPEC; }
 RT_FN obj rt_newline(obj port) { io_check(port, RT_PF_OUT, "newline"); rt_port_putc(port, '\n'); return RT_UNSPEC; }
-RT_FN obj rt_flush_output_port(obj port) { io_check(port, RT_PF_OUT, "flush-output-port"); rt_flush(port); return RT_UNSPEC; }
+RT_FN obj rt_flush_output_port(obj port) { io_check(port, RT_PF_OUT | IO_ANY, "flush-output-port"); rt_flush(port); return RT_UNSPEC; }

@@ -30,14 +30,14 @@ RT_FN void rt_init(int argc, char **argv, void *stack_base) {
     rt_gc_add_roots(&rt_stdin, &rt_stdin + 1);
     rt_gc_add_roots(&rt_stdout, &rt_stdout + 1);
     rt_gc_add_roots(&rt_stderr, &rt_stderr + 1);
+    rt_gc_add_roots(&rt_ports, &rt_ports + 1);
     rt_stdin = rt_make_fd_port(0, RT_PF_IN, RT_FALSE);
     rt_stdout = rt_make_fd_port(1, RT_PF_OUT, RT_FALSE);
     rt_stderr = rt_make_fd_port(2, RT_PF_OUT | RT_PF_UNBUF, RT_FALSE);
 }
 
 RT_FN void rt_exit(int code) {
-    if (rt_stdout) rt_flush(rt_stdout);
-    if (rt_stderr) rt_flush(rt_stderr);
+    rt_flush_all();
     rt_sys_exit(code);
 }
 
@@ -252,7 +252,7 @@ RT_FN obj rt_list_to_vector(obj l) {
     return v;
 }
 /* Validate start/end against len; returns start, sets *e. */
-static intptr_t core_range(obj start, obj end, intptr_t len, intptr_t *e, const char *who) {
+RT_FN intptr_t rt_check_range(obj start, obj end, intptr_t len, intptr_t *e, const char *who) {
     intptr_t s = rt_is_fix(start) ? RT_FIXVAL(start) : -1;
     *e = end == RT_DEFAULT ? len : rt_is_fix(end) ? RT_FIXVAL(end) : -1;
     if (start == RT_DEFAULT) s = 0;
@@ -264,7 +264,7 @@ RT_FN obj rt_vector_to_list(obj v, obj start, obj end) {
     intptr_t s, e;
     obj r = RT_NIL;
     RT_CHECK(rt_is_vector(v), "vector->list", "vector", v);
-    s = core_range(start, end, RT_HLEN(v), &e, "vector->list");
+    s = rt_check_range(start, end, RT_HLEN(v), &e, "vector->list");
     while (e > s) r = rt_cons(RT_VEC(v)[--e], r);
     return r;
 }
@@ -283,10 +283,20 @@ RT_FN obj rt_bytevector_copy(obj bv, obj start, obj end) {
     intptr_t s, e;
     obj r;
     RT_CHECK(rt_is_bytevector(bv), "bytevector-copy", "bytevector", bv);
-    s = core_range(start, end, RT_HLEN(bv), &e, "bytevector-copy");
+    s = rt_check_range(start, end, RT_HLEN(bv), &e, "bytevector-copy");
     r = core_bytevector_n(e - s);
     rt_memcpy(RT_PTR(r, rt_bytevector)->b, RT_PTR(bv, rt_bytevector)->b + s, (size_t)(e - s));
     return r;
+}
+RT_FN obj rt_bytevector_copy_x(obj to, obj at, obj from, obj start, obj end) {
+    intptr_t s, e, k;
+    RT_CHECK(rt_is_bytevector(from), "bytevector-copy!", "bytevector", from);
+    RT_CHECK(rt_is_bytevector(to) && !(RT_HFLAGS(to) & RT_F_RO), "bytevector-copy!", "mutable bytevector", to);
+    s = rt_check_range(start, end, RT_HLEN(from), &e, "bytevector-copy!");
+    k = rt_is_fix(at) ? RT_FIXVAL(at) : -1;
+    if (k < 0 || k > RT_HLEN(to) - (e - s)) rt_range_error("bytevector-copy!", at);
+    rt_memmove(RT_PTR(to, rt_bytevector)->b + k, RT_PTR(from, rt_bytevector)->b + s, (size_t)(e - s));
+    return RT_UNSPEC;
 }
 RT_FN obj rt_make_box(obj x) {
     rt_vector *b = (rt_vector *)rt_alloc(RT_HDR(RT_T_BOX, 0, 1), 2 * sizeof(obj));

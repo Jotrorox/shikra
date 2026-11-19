@@ -108,31 +108,42 @@ RT_FN obj rt_string_ref(obj s, obj k) {
     return RT_CHAR(rt_utf8_decode(p->buf + i, (size_t)(p->bytes - i), &l));
 }
 
-RT_FN obj rt_string_set(obj s, obj k, obj c) {
-    rt_string *p;
-    intptr_t i = str_index(s, k, rt_is_string(s) ? RT_STR(s)->chars : 0, "string-set!"), w, old;
-    char enc[4];
-    size_t l;
-    str_check_char(c, "string-set!");
-    p = RT_STR(s);
-    if (RT_HFLAGS(s) & RT_F_RO) rt_type_error("string-set!", "mutable string", s);
-    if (p->chars == p->bytes && RT_CHARVAL(c) < 0x80) { p->buf[i] = (char)RT_CHARVAL(c); return RT_UNSPEC; }
-    i = str_offset(p, i);
-    rt_utf8_decode(p->buf + i, (size_t)(p->bytes - i), &l);
-    old = (intptr_t)l;
-    w = rt_utf8_encode(enc, RT_CHARVAL(c));
-    if (w != old) { /* re-encode into a new buffer */
-        intptr_t nb = p->bytes - old + w;
+/* Make bytes [da, db) of s room for n bytes and return a pointer to them; a size change
+ * moves the string to a new buffer (the old one stays valid for the caller). The character
+ * count is unchanged, so RT_F_ASCII (chars == bytes) is recomputed. */
+static char *str_gap(obj s, intptr_t da, intptr_t db, intptr_t n) {
+    rt_string *p = RT_STR(s);
+    if (n != db - da) {
+        intptr_t nb = p->bytes - (db - da) + n;
         char *buf = (char *)rt_alloc_raw((size_t)nb + 1);
         p = RT_STR(s);
-        rt_memcpy(buf, p->buf, (size_t)i);
-        rt_memcpy(buf + i + w, p->buf + i + old, (size_t)(p->bytes - i - old));
+        rt_memcpy(buf, p->buf, (size_t)da);
+        rt_memcpy(buf + da + n, p->buf + db, (size_t)(p->bytes - db));
         buf[nb] = 0;
         p->buf = buf;
         p->bytes = nb;
         RT_SETFLAGS(s, p->chars == nb ? RT_F_ASCII : 0);
     }
-    rt_memcpy(p->buf + i, enc, (size_t)w);
+    return p->buf + da;
+}
+static void str_mut(obj s, const char *who) {
+    RT_CHECK(rt_is_string(s) && !(RT_HFLAGS(s) & RT_F_RO), who, "mutable string", s);
+}
+
+RT_FN obj rt_string_set(obj s, obj k, obj c) {
+    rt_string *p;
+    intptr_t i, w;
+    char enc[4];
+    size_t l;
+    str_mut(s, "string-set!");
+    i = str_index(s, k, RT_STR(s)->chars, "string-set!");
+    str_check_char(c, "string-set!");
+    p = RT_STR(s);
+    if (p->chars == p->bytes && RT_CHARVAL(c) < 0x80) { p->buf[i] = (char)RT_CHARVAL(c); return RT_UNSPEC; }
+    i = str_offset(p, i);
+    rt_utf8_decode(p->buf + i, (size_t)(p->bytes - i), &l);
+    w = rt_utf8_encode(enc, RT_CHARVAL(c));
+    rt_memcpy(str_gap(s, i, i + (intptr_t)l, w), enc, (size_t)w);
     return RT_UNSPEC;
 }
 
@@ -153,6 +164,35 @@ RT_FN obj rt_substring(obj s, obj start, obj end) {
     r = str_alloc(b - a, ob - oa);
     rt_memcpy(RT_STR(r)->buf, RT_STR(s)->buf + oa, (size_t)(ob - oa));
     return r;
+}
+
+/* string-copy! and string-fill! replace a character range in place; the bytes are moved
+ * once (variable-width replacement), so both are linear, also for non-ASCII strings. */
+RT_FN obj rt_string_copy_x(obj to, obj at, obj from, obj start, obj end) {
+    intptr_t a, b, k, oa, ob, da;
+    str_range(from, start, end, &a, &b, "string-copy!");
+    str_mut(to, "string-copy!");
+    k = rt_is_fix(at) ? RT_FIXVAL(at) : -1;
+    if (k < 0 || k > RT_STR(to)->chars - (b - a)) rt_range_error("string-copy!", at);
+    oa = str_offset(RT_STR(from), a);
+    ob = str_offset(RT_STR(from), b);
+    da = str_offset(RT_STR(to), k);
+    {
+        const char *src = RT_STR(from)->buf + oa; /* stays valid if str_gap moves `to` */
+        rt_memmove(str_gap(to, da, str_offset(RT_STR(to), k + b - a), ob - oa), src, (size_t)(ob - oa));
+    }
+    return RT_UNSPEC;
+}
+RT_FN obj rt_string_fill_x(obj s, obj c, obj start, obj end) {
+    intptr_t a, b, i, w;
+    char enc[4], *d;
+    str_range(s, start, end, &a, &b, "string-fill!");
+    str_mut(s, "string-fill!");
+    str_check_char(c, "string-fill!");
+    w = rt_utf8_encode(enc, RT_CHARVAL(c));
+    d = str_gap(s, str_offset(RT_STR(s), a), str_offset(RT_STR(s), b), (b - a) * w);
+    for (i = 0; i < b - a; i++) rt_memcpy(d + i * w, enc, (size_t)w);
+    return RT_UNSPEC;
 }
 
 RT_FN obj rt_string_append(obj a, obj b) {

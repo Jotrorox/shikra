@@ -18,6 +18,8 @@
 #include <string.h>
 #include <time.h>
 #include <sys/mman.h>
+#include <poll.h>
+#include <math.h>
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
 #endif
@@ -37,6 +39,15 @@ RT_FN int rt_sys_open(const char *path, int mode) {
     return open(path, O_WRONLY | O_CREAT | (mode == RT_O_APPEND ? O_APPEND : O_TRUNC), 0666);
 }
 RT_FN int rt_sys_close(int fd) { return close(fd); }
+RT_FN int rt_sys_ready(int fd) {
+    struct pollfd p;
+    p.fd = fd;
+    p.events = POLLIN;
+    p.revents = 0;
+    return poll(&p, 1, 0) != 0; /* readable, at end of file, or in error: a read will not block */
+}
+/* Math needed by (scheme base) (expt on flonums). M6 supplies its own pow. */
+RT_FN double rt_sys_pow(double x, double y) { return pow(x, y); }
 RT_FN void rt_sys_exit(int code) { exit(code); }
 RT_FN void *rt_sys_mem(size_t n) {
     void *p = mmap(0, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

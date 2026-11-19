@@ -48,7 +48,7 @@ enum {
     K_COND, K_CASE, K_AND, K_OR, K_WHEN, K_UNLESS, K_DO, K_QUASIQUOTE, K_DEFINE_SYNTAX,
     K_LET_SYNTAX, K_LETREC_SYNTAX, K_SYNTAX_RULES, K_SYNTAX_ERROR, K_DEFINE_RECORD_TYPE,
     K_CASE_LAMBDA, K_LET_VALUES, K_LETSTAR_VALUES, K_DEFINE_VALUES, K_INCLUDE, K_INCLUDE_CI,
-    K_COND_EXPAND, K_DELAY, K_DELAY_FORCE,
+    K_COND_EXPAND, K_DELAY, K_DELAY_FORCE, K_FEATURES,
     K_ELSE, K_ARROW, K_ELLIPSIS, K_UNDERSCORE, K_UNQUOTE, K_UNQUOTE_SPLICING, NKEYWORDS
 };
 extern const char *const keyword_names[NKEYWORDS];
@@ -147,6 +147,7 @@ obj strip_id(obj id);
 obj strip_syntax(obj x);
 void expand_toplevel(library *lib, obj forms);
 obj cond_expand_select(obj form);     /* chosen clause body, or () */
+obj front_features(void);              /* feature identifiers (spec §3.4), newest first */
 obj read_source(const char *path, int foldcase, obj loc); /* list of datums */
 const char *resolve_include(obj where, const char *name);
 global *new_global(library *lib, obj id);

@@ -199,6 +199,8 @@ RT_FN intptr_t rt_sys_write(int fd, const void *buf, size_t n); /* bytes written
 RT_FN intptr_t rt_sys_read(int fd, void *buf, size_t n);        /* 0 at EOF, -1 on error */
 RT_FN int rt_sys_open(const char *path, int mode);              /* fd or -1 */
 RT_FN int rt_sys_close(int fd);
+RT_FN int rt_sys_ready(int fd);                      /* 1 if a read would not block */
+RT_FN double rt_sys_pow(double x, double y);         /* libm pow: (scheme base) expt */
 RT_FN RT_NORETURN void rt_sys_exit(int code);
 RT_FN void *rt_sys_mem(size_t n);                    /* zeroed memory from the OS, never freed; NULL on failure */
 /* Non-local exits (tier 2 continuations, spec §8.2): rt_sys_catch runs fn(arg) and returns 0
@@ -302,8 +304,10 @@ RT_FN obj rt_make_vector(obj k, obj fill);
 RT_FN obj rt_vector_n(intptr_t n, obj fill); /* unchecked n */
 RT_FN obj rt_list_to_vector(obj l);
 RT_FN obj rt_vector_to_list(obj v, obj start, obj end);
+RT_FN intptr_t rt_check_range(obj start, obj end, intptr_t len, intptr_t *e, const char *who); /* -> start */
 RT_FN obj rt_make_bytevector(obj k, obj fill);
 RT_FN obj rt_bytevector_copy(obj bv, obj start, obj end);
+RT_FN obj rt_bytevector_copy_x(obj to, obj at, obj from, obj start, obj end);
 RT_FN obj rt_make_box(obj v);
 RT_FN obj rt_make_rtd(obj name, obj fields);
 RT_FN obj rt_make_record(obj rtd);
@@ -386,6 +390,8 @@ RT_FN obj rt_make_string(obj k, obj ch);
 RT_FN obj rt_string_ref(obj s, obj k);
 RT_FN obj rt_string_set(obj s, obj k, obj ch);
 RT_FN obj rt_substring(obj s, obj start, obj end);
+RT_FN obj rt_string_copy_x(obj to, obj at, obj from, obj start, obj end);
+RT_FN obj rt_string_fill_x(obj s, obj c, obj start, obj end);
 RT_FN obj rt_string_append(obj a, obj b);
 RT_FN obj rt_string_compare(obj a, obj b); /* -1, 0, 1 (code point order) */
 RT_FN obj rt_string_to_list(obj s, obj start, obj end);
@@ -410,6 +416,9 @@ RT_FN obj rt_quotient(obj a, obj b);
 RT_FN obj rt_remainder(obj a, obj b);
 RT_FN obj rt_modulo(obj a, obj b);
 RT_FN obj rt_floor_quotient(obj a, obj b);
+RT_FN obj rt_neg(obj x);
+RT_FN obj rt_abs(obj x);
+RT_FN obj rt_expt(obj a, obj b);
 RT_FN obj rt_exact(obj x);
 RT_FN obj rt_inexact(obj x);
 RT_FN obj rt_floor(obj x);
@@ -454,10 +463,14 @@ RT_INLINE obj rt_gt(obj a, obj b) {
 
 /* ---- ports and printing (rt_io.c) ---- */
 RT_EXTVAR obj rt_stdin, rt_stdout, rt_stderr;
+RT_EXTVAR obj rt_ports; /* open OS-descriptor output ports other than stdout/stderr (flushed at exit) */
 RT_FN obj rt_make_fd_port(int fd, int flags, obj name);
 RT_FN obj rt_open_input_string(obj s);
 RT_FN obj rt_open_output_string(void);
 RT_FN obj rt_get_output_string(obj port);
+RT_FN obj rt_open_input_bytevector(obj bv);
+RT_FN obj rt_open_output_bytevector(void);
+RT_FN obj rt_get_output_bytevector(obj port);
 RT_FN obj rt_open_input_file(obj path);  /* raises a file error */
 RT_FN obj rt_open_output_file(obj path);
 RT_FN obj rt_close_port(obj port);
@@ -467,12 +480,25 @@ RT_FN void rt_port_write(obj port, const char *s, size_t n);
 RT_FN void rt_port_putc(obj port, int cp);
 RT_FN void rt_port_puts(obj port, const char *s);
 RT_FN void rt_flush(obj port);
+RT_FN void rt_flush_all(void);
 RT_FN void rt_print(obj x, obj port, int write); /* write = 1: external representation */
 RT_FN obj rt_input_port_p(obj x);
 RT_FN obj rt_output_port_p(obj x);
+RT_FN obj rt_textual_port_p(obj x);
+RT_FN obj rt_binary_port_p(obj x);
+RT_FN obj rt_input_port_open_p(obj port);
+RT_FN obj rt_output_port_open_p(obj port);
 RT_FN obj rt_read_char(obj port);
 RT_FN obj rt_peek_char(obj port);
 RT_FN obj rt_read_line(obj port);
+RT_FN obj rt_read_string(obj k, obj port);
+RT_FN obj rt_char_ready_p(obj port);
+RT_FN obj rt_read_u8(obj port);
+RT_FN obj rt_peek_u8(obj port);
+RT_FN obj rt_u8_ready_p(obj port);
+RT_FN obj rt_read_bytevector_x(obj bv, obj port, obj start, obj end); /* count or eof */
+RT_FN obj rt_write_u8(obj b, obj port);
+RT_FN obj rt_write_bytevector(obj bv, obj port, obj start, obj end);
 RT_FN obj rt_write_char(obj c, obj port);
 RT_FN obj rt_write_string(obj s, obj port);
 RT_FN obj rt_write(obj x, obj port);

@@ -137,6 +137,42 @@ RT_FN obj rt_remainder(obj a, obj b) { return num_idiv(a, b, 1, "remainder"); }
 RT_FN obj rt_modulo(obj a, obj b) { return num_idiv(a, b, 2, "modulo"); }
 RT_FN obj rt_floor_quotient(obj a, obj b) { return num_idiv(a, b, 3, "floor-quotient"); }
 
+/* Negation and abs: the most negative fixnum has no fixnum opposite. */
+static obj num_neg(obj x, const char *who) {
+    if (rt_is_fix(x)) {
+        if (RT_FIXVAL(x) == RT_FIX_MIN) rt_error(who, "fixnum overflow", rt_cons(x, RT_NIL));
+        return RT_FIX(-RT_FIXVAL(x));
+    }
+    return rt_make_flonum(-num_d(x, who));
+}
+RT_FN obj rt_neg(obj x) { return num_neg(x, "-"); }
+RT_FN obj rt_abs(obj x) {
+    if (rt_is_fix(x) ? RT_FIXVAL(x) >= 0 : (num_dbits(num_d(x, "abs")) >> 63) == 0) return x;
+    return num_neg(x, "abs");
+}
+
+/* expt: exact base and exponent stay exact (overflow raises); a negative exact exponent
+ * gives 1/b^-e, exact when that divides, like /; anything inexact goes to pow. */
+RT_FN obj rt_expt(obj a, obj b) {
+    double x = num_d(a, "expt"), y = num_d(b, "expt");
+    if (rt_is_fix(a) && rt_is_fix(b)) {
+        intptr_t base = RT_FIXVAL(a), e = RT_FIXVAL(b), r = 1, ovf = 0;
+        if (e < 0) {
+            if (base == 0) rt_error("expt", "division by zero", rt_cons(a, rt_cons(b, RT_NIL)));
+            if (base == 1 || base == -1) return RT_FIX(base == 1 || e % 2 == 0 ? 1 : -1);
+            return rt_make_flonum(rt_sys_pow(x, y));
+        }
+        for (;;) {
+            if ((e & 1) && rt_mul_ovf(r, base, &r)) ovf = 1;
+            if ((e >>= 1) == 0) break;
+            if (rt_mul_ovf(base, base, &base)) ovf = 1;
+        }
+        if (ovf || r < RT_FIX_MIN || r > RT_FIX_MAX) rt_error("expt", "fixnum overflow", rt_cons(a, rt_cons(b, RT_NIL)));
+        return RT_FIX(r);
+    }
+    return rt_make_flonum(rt_sys_pow(x, y));
+}
+
 RT_FN obj rt_exact(obj x) {
     double d;
     if (rt_is_fix(x)) return x;
@@ -334,7 +370,10 @@ static int num_real(const char *s, const char *e, int radix, int exactness, obj 
         }
         if (!nd || s != e) return -1;
         if (dd == 0) return -2;
-        if (exactness != 'i' && !ovf && !dovf && mant % den == 0) { mant /= den; goto exact; }
+        if (exactness != 'i') { /* both parts must be exact integers Shikra can represent */
+            if (ovf || dovf || mant > (uint64_t)RT_FIX_MAX + (uint64_t)neg || den > (uint64_t)RT_FIX_MAX) return -2;
+            if (mant % den == 0) { mant /= den; goto exact; }
+        }
         if (exactness == 'e') return -2;
         v = dv / dd;
         *out = rt_make_flonum(neg ? -v : v);
