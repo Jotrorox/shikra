@@ -1,0 +1,7 @@
+/shikra
+/build/
+*.o
+*.dSYM/
+.DS_Store
+/bench/r7rs-benchmarks/
+/tests/tmp/

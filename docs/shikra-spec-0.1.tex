@@ -1,0 +1,826 @@
+\documentclass[a4paper,11pt]{article}
+\usepackage[margin=2.5cm]{geometry}
+
+\title{Shikra 0.1 Specification\\[4pt]
+\large A small, fast R7RS-small Scheme compiler}
+\author{Johannes M\"uller}
+\date{19 November 2026 \\ Draft}
+
+\begin{document}
+\maketitle
+
+\noindent\textbf{Status.} This is a design specification. Nothing has been
+built or measured yet. All size and speed figures are targets.
+
+\tableofcontents
+\newpage
+
+% ---------------------------------------------------------------
+\section{Overview}
+
+Shikra is an ahead-of-time compiler that turns a whole R7RS-small program
+into one small native executable. Compiled programs contain no interpreter
+and no \texttt{eval}, so every call target, type and library is visible at
+compile time. That is where the speed and the small binaries come from. A
+separate interpreter inside the \texttt{shikra} tool provides a REPL for
+development.
+
+\subsection{Goals}
+
+In priority order:
+
+\begin{enumerate}
+\item \textbf{Runtime speed.} Loops over fixnums, flonums and vectors
+  compile to the C loop you would write by hand.
+\item \textbf{Small executables.} A binary contains only the code the
+  program can reach. Target: hello world under 30\,KB, statically linked on
+  Linux.
+\item \textbf{The standard language.} R7RS-small as written, with no dialect
+  to learn. Any R7RS book or tutorial applies unchanged.
+\item \textbf{A small toolchain in plain C99.} One binary, six commands, and
+  no dependency beyond a C compiler. Budget: about 15,000 lines for the
+  compiler, 2,000 for the REPL interpreter and 4,000 for the runtime.
+\end{enumerate}
+
+\subsection{Non-goals}
+
+\begin{itemize}
+\item \texttt{eval} or \texttt{load} in compiled programs.
+\item R6RS, R7RS-large or \texttt{syntax-case}.
+\item Threads in version 1.
+\item A full numeric tower by default.
+\end{itemize}
+
+\subsection{Design decisions}
+
+\begin{description}
+\item[Implementation language] C99 for the compiler, the interpreter and
+  the runtime. It builds anywhere with only a C compiler.
+\item[Compilation unit] Whole program, closed world. This gives known
+  calls, inlining and tree shaking.
+\item[Backend] C99 output, compiled by the system \texttt{cc}. This gives a
+  mature optimizer and every target for free.
+\item[REPL] A bytecode interpreter inside the tool, never in output
+  binaries. Interactive development at no cost to compiled programs.
+\item[Values] 64-bit tagged words with 63-bit fixnums. Integer and pointer
+  operations stay cheap.
+\item[Collector] Mark-region, conservative stack, precise heap. Bump
+  allocation with no shadow stack.
+\item[Tail calls] Loops for known calls, \texttt{musttail} for the rest.
+  Guaranteed, with no trampoline cost.
+\item[Continuations] Escape-only \texttt{call/cc} is free; re-entrant
+  \texttt{call/cc} copies the stack. Ordinary calls pay nothing.
+\item[Numbers] Fixnum and flonum. Overflow raises an error and never wraps.
+\item[Safety] Checked by default, with an \texttt{--unsafe} opt-out.
+\item[Strings] UTF-8 with an ASCII fast path.
+\item[Macros] \texttt{syntax-rules} only, exactly what the report requires.
+\end{description}
+
+% ---------------------------------------------------------------
+\section{Name}
+
+The shikra (\emph{Accipiter badius}) is a small hawk that hunts in short,
+fast sprints, which matches a compiler aiming for small and fast output. The
+name works as a command: \texttt{shikra build}.
+
+A quick web search found no programming language called Shikra. Two
+near-collisions exist: Shirka, a small hobby language
+(\texttt{github.com/hashmal/shirka}), and ``The Shikra'', a USB debugging
+tool for JTAG, SPI and UART.
+
+Source files keep the standard extensions: \texttt{.scm} for programs and
+\texttt{.sld} for library definitions.
+
+% ---------------------------------------------------------------
+\section{Language}
+
+Compiled programs get all of \texttt{(scheme base)} and ten of the fifteen
+optional libraries. The three evaluator libraries exist in the REPL only.
+Complex numbers and \texttt{(scheme r5rs)} are omitted. R7RS-small requires
+only the base library; each other library may be provided whole or left out,
+so this subset is conformant.
+
+\subsection{Libraries}
+
+\begin{center}
+\begin{tabular}{lll}
+\hline
+Library & Status & Note \\
+\hline
+\texttt{(scheme base)} & Full & continuations, records, bytevectors, ports \\
+\texttt{(scheme case-lambda)} & Full & resolved at compile time for known calls \\
+\texttt{(scheme char)} & Full & ASCII tables unless \texttt{--unicode=full} \\
+\texttt{(scheme cxr)} & Full & inlined to chained loads \\
+\texttt{(scheme file)} & Full & \\
+\texttt{(scheme inexact)} & Full & \\
+\texttt{(scheme lazy)} & Full & \texttt{delay-force} runs in constant space \\
+\texttt{(scheme process-context)} & Full & \\
+\texttt{(scheme read)} & Full & linked only when \texttt{read} is reachable \\
+\texttt{(scheme time)} & Full & \\
+\texttt{(scheme write)} & Full & datum labels for cycles \\
+\texttt{(scheme eval)} & REPL only & \texttt{eval} and \texttt{environment} \\
+\texttt{(scheme load)} & REPL only & \texttt{load} \\
+\texttt{(scheme repl)} & REPL only & \texttt{interaction-environment} \\
+\texttt{(scheme r5rs)} & Omitted & exports \texttt{eval} and environments \\
+\texttt{(scheme complex)} & Omitted & no complex numbers \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{Implementation restrictions}
+
+The report allows each of these. They are where Shikra trades generality for
+speed and size.
+
+\begin{itemize}
+\item \textbf{Exact integers are 63-bit fixnums.} Overflow raises an error
+  and never wraps. Optional bignums may come later, behind a flag.
+\item \textbf{No exact rationals.} \texttt{(/ 1 3)} returns the flonum
+  0.333\ldots; \texttt{(/ 6 3)} returns the exact 2.
+\item \textbf{Inexact reals are IEEE doubles.}
+\item \textbf{Strings are UTF-8.} \texttt{string-ref} is constant time on
+  ASCII-only strings and linear otherwise. The report does not require
+  constant time.
+\item \textbf{Macros are \texttt{syntax-rules} only}, fully hygienic. The
+  compiler never runs user code at compile time.
+\item \textbf{Literal constants are read-only.} Mutating a quoted list or
+  string literal is an error per the report; Shikra places them in read-only
+  data.
+\end{itemize}
+
+\subsection{Errors}
+
+Where the report says ``it is an error'', Shikra in its default safe mode
+detects the situation and raises a catchable error object with the procedure
+name. That covers wrong types, out-of-range indexes, wrong argument counts
+and fixnum overflow. With \texttt{--unsafe} the remaining checks are removed
+and behaviour is undefined, as in C.
+
+\subsection{Feature identifiers}
+
+\texttt{cond-expand} sees \texttt{r7rs}, \texttt{shikra},
+\texttt{ieee-float}, the operating system and architecture, and
+\texttt{full-unicode} when the Unicode tables are enabled. It never sees
+\texttt{ratios} or \texttt{exact-complex}.
+
+% ---------------------------------------------------------------
+\section{Compilation model}
+
+Shikra compiles the program and every library it imports as one closed unit,
+and nothing can be added at run time. This single rule is what makes a
+dynamic language compile like a static one.
+
+\subsection{What the closed world gives}
+
+\begin{itemize}
+\item \textbf{Known calls.} A top-level definition that is never
+  \texttt{set!} is a constant. Calls to it become direct C calls, argument
+  counts are checked at compile time, and small procedures are inlined.
+\item \textbf{Primitives stay primitive.} R7RS makes it an error to redefine
+  or mutate an imported binding. So \texttt{car} and \texttt{+} imported
+  from \texttt{(scheme base)} always mean the built-ins and compile to a few
+  instructions.
+\item \textbf{Private calling conventions.} If every call site of a
+  procedure is known, the compiler can pass unboxed integers and doubles,
+  drop unused parameters and skip the closure argument.
+\item \textbf{Tree shaking.} Anything unreachable from the program body is
+  never emitted, including unused parts of the standard library and the
+  runtime.
+\item \textbf{Closed record types.} Every constructor, accessor and
+  predicate of a record type is known, so field access is one tag check and
+  one load.
+\end{itemize}
+
+\subsection{What it costs}
+
+\begin{itemize}
+\item \textbf{Two engines.} The REPL runs an interpreter with an open top
+  level, where redefinition is allowed. Compiled code is closed and
+  optimized. Both share the front end and the runtime, and one test suite
+  runs under both to keep them in agreement.
+\item \textbf{Whole-program rebuilds.} Every build recompiles everything.
+  Expanded libraries are cached on disk, and the C compiler dominates build
+  time.
+\end{itemize}
+
+\subsection{How a program is found}
+
+\texttt{shikra build main.scm} treats \texttt{main.scm} as an R7RS program:
+import declarations first, then definitions and expressions.
+\texttt{(import (geometry vec))} resolves to \texttt{geometry/vec.sld},
+searched in the program's directory, then each \texttt{-I} directory, then
+the built-in libraries. There is no package manager and no project file.
+
+% ---------------------------------------------------------------
+\section{Compiler pipeline}
+
+The compiler runs eight passes over one intermediate representation and
+hands a single C file to the system compiler.
+
+\begin{enumerate}
+\item \textbf{Read.} Parse source text into datums that carry file, line and
+  column.
+\item \textbf{Resolve libraries.} Process \texttt{define-library}, import
+  sets, \texttt{include} and \texttt{cond-expand}. Build the library graph
+  and order it.
+\item \textbf{Expand.} Apply hygienic \texttt{syntax-rules} macros. Lower
+  derived forms (\texttt{let}, \texttt{cond}, \texttt{do}, \texttt{guard},
+  \texttt{parameterize}, \texttt{define-record-type}, \texttt{case-lambda})
+  to a core of \texttt{lambda}, \texttt{if}, \texttt{set!}, \texttt{quote},
+  \texttt{letrec*} and calls.
+\item \textbf{Normalize.} Rename every variable uniquely. Sort
+  \texttt{letrec*} bindings into simple, procedure and complex groups. Box
+  variables that are both captured and assigned. Convert to the IR.
+\item \textbf{Analyze.} One whole-program flow analysis answers two
+  questions: which procedures can reach each call site, and which types can
+  reach each variable.
+\item \textbf{Optimize.} Inline, fold constants, remove dead code, turn
+  tail-recursive procedures into loops, remove closures for procedures
+  without free variables, delete proven type checks, unbox fixnums and
+  flonums.
+\item \textbf{Emit C.} Write static data for literals and symbols, then one
+  C function per surviving procedure.
+\item \textbf{Compile and link.} Run \texttt{cc} on the generated file
+  together with the runtime source, as one translation unit.
+\end{enumerate}
+
+Passes 1 to 3 are the front end, 4 to 6 the middle end, and 7 the back end.
+The REPL's interpreter branches off after the front end.
+
+\subsection{The IR}
+
+The IR is A-normal form with join points: every intermediate value has a
+name, and loops and merges are explicit labelled blocks with parameters. It
+is close enough to C that pass 7 is a tree walk, and regular enough that
+each optimization is a short rewrite.
+
+\subsection{The type lattice}
+
+The analysis tracks a small set of types: fixnum, flonum, char, boolean,
+pair, null, string, symbol, vector, bytevector, procedure, each record type,
+and ``any''. It is monovariant, meaning one result per variable and not one
+per call path. That keeps compile time roughly linear and the analysis under
+about 1,000 lines. Precision comes from inlining small procedures before
+analysis.
+
+\subsection{Why C output}
+
+Emitting C gives a production-grade optimizer and every target the C
+compiler supports, for a pass of about 1,500 lines. The cost is a dependency
+on \texttt{cc}. The IR is designed so a direct arm64 or x86-64 backend can
+replace passes 7 and 8 later without touching the rest.
+
+\subsection{Written in C99}
+
+The compiler, the interpreter and the runtime are plain C99 with no
+dependencies. Generated code is C99 as well, plus two compiler builtins
+hidden behind macros: checked addition and the guaranteed tail call. Both
+have portable fallbacks.
+
+\begin{itemize}
+\item \textbf{Build.} One command, no configure step, no generated sources,
+  no existing Scheme needed to bootstrap:
+\begin{verbatim}
+cc -std=c99 -O2 src/*.c -o shikra
+\end{verbatim}
+\item \textbf{Memory.} The compiler is a batch program. It allocates from
+  arenas and frees nothing until exit.
+\item \textbf{IR nodes.} One tagged union with a kind field. Each pass is a
+  \texttt{switch} over the kind.
+\item \textbf{Shared code.} The reader and the value representation are
+  written once. The compiler, the REPL and any compiled program that calls
+  \texttt{read} use the same source.
+\item \textbf{Standard library.} Most of it is Scheme source embedded in the
+  \texttt{shikra} binary as text and compiled with each program.
+\end{itemize}
+
+The cost of C is length: tree rewrites that take five lines with pattern
+matching in Scheme take twenty in C. That is why the compiler budget is
+15,000 lines.
+
+\subsection{The interpreter}
+
+The REPL shares passes 1 to 3 with the compiler, then compiles the core
+forms to a compact bytecode that a small virtual machine executes. It never
+touches the optimizer or the C backend, so each entry evaluates instantly.
+
+\begin{itemize}
+\item \textbf{Same runtime.} The interpreter uses the same tagged values,
+  collector and primitives as compiled programs, so values behave and print
+  identically.
+\item \textbf{Explicit stack.} The virtual machine keeps its own value
+  stack. Tail calls run in constant space and re-entrant continuations copy
+  that stack, with no dependence on the C stack.
+\item \textbf{Open top level.} Global definitions live in a table and can be
+  redefined at any time, as the report describes for a REPL.
+\item \textbf{Always checked.} There is no unsafe mode in the interpreter.
+\item \textbf{Never shipped.} The interpreter is part of the \texttt{shikra}
+  tool and is not linked into compiled programs.
+\end{itemize}
+
+% ---------------------------------------------------------------
+\section{Value representation}
+
+Every Scheme value is one 64-bit word whose low bits say what it is. Fixnums
+get the cheapest tag because integer arithmetic is the most common
+operation.
+
+\begin{center}
+\begin{tabular}{lll}
+\hline
+Low bits & Kind & Payload \\
+\hline
+\texttt{...0} & Fixnum & 63-bit signed integer, stored as \texttt{n << 1} \\
+\texttt{001} & Pair & pointer to two words, no header \\
+\texttt{011} & Procedure & pointer to code address plus captured values \\
+\texttt{101} & Other heap object & pointer to header plus fields \\
+\texttt{111} & Immediate & character, \texttt{\#t}, \texttt{\#f},
+  \texttt{()}, end-of-file, unspecified \\
+\hline
+\end{tabular}
+\end{center}
+
+Consequences of this layout:
+
+\begin{itemize}
+\item \textbf{Fixnum add, subtract and compare work on tagged words
+  directly.} \texttt{(+ a b)} is one machine add and one overflow branch.
+  Multiply untags one operand.
+\item \textbf{\texttt{pair?} and \texttt{procedure?} need no memory access.}
+  The answer is in the pointer. \texttt{car} is a tag check and one load.
+\item \textbf{Pairs take 16 bytes.} Leaving out the header saves a third of
+  the memory in list-heavy programs.
+\end{itemize}
+
+\subsection{Heap objects}
+
+Every object except a pair starts with an 8-byte header: 8 bits of type,
+8 bits of flags and a 48-bit length. After the header:
+
+\begin{description}
+\item[Vector] Elements, one word each.
+\item[Bytevector] Raw bytes.
+\item[String] Character count, byte count and a pointer to a UTF-8 buffer.
+  An ``ASCII only'' flag sits in the header.
+\item[Symbol] Pointer to its name. Symbols in source are static and compared
+  by address.
+\item[Flonum] One IEEE double.
+\item[Record] Pointer to its type descriptor, then fields.
+\item[Port, promise, parameter, error object] Fixed fields.
+\end{description}
+
+A procedure with no free variables is a static constant and is never
+allocated.
+
+\subsection{Flonums}
+
+A flonum in a generic position is a 16-byte heap box. The optimizer removes
+the box wherever the type analysis proves a variable always holds a flonum:
+locals, loop variables, and arguments and results of known procedures are
+plain C doubles. Flonum literals are static.
+
+NaN-boxing was the alternative. It makes every float free but shrinks
+fixnums and adds a mask to every pointer dereference. Shikra bets on
+integers and pointers, and relies on static unboxing for float loops. The
+known weak spot is floats stored in generic vectors or lists, where each one
+is boxed; \texttt{(shikra f64vector)} covers that case.
+
+% ---------------------------------------------------------------
+\section{Memory management}
+
+The default collector is a non-moving mark-region design in the style of
+Immix, with a conservatively scanned stack and a precisely scanned heap. It
+puts no cost on ordinary code: no shadow stack, no stack maps and no write
+barrier.
+
+\begin{itemize}
+\item \textbf{Allocation is a pointer bump.} The heap is split into 32\,KB
+  blocks, each divided into lines. The allocator bumps a pointer through
+  runs of free lines. The fast path is inlined: add, compare, store.
+\item \textbf{Collection marks, then reclaims lines.} Marking starts from
+  the roots; any line with no marked object becomes free again. Mark bits
+  live in a side table, so headerless pairs work.
+\item \textbf{The stack is scanned conservatively.} Generated C keeps Scheme
+  values in ordinary locals and registers. Any stack word that looks like a
+  tagged pointer to the start of a live object keeps that object alive.
+\item \textbf{The heap is scanned precisely.} Headers and the pair tag tell
+  the collector exactly which fields are values.
+\item \textbf{Static data is never scanned or freed.} Literals, symbols and
+  closure-free procedures live in the executable's data sections.
+\end{itemize}
+
+The collector should fit in about 1,200 lines of C. It is single-threaded in
+version 1.
+
+\subsection{No-collector mode}
+
+\texttt{--gc=bump} replaces the collector with a bump allocator that never
+frees. It suits short-running command-line tools, removes the collector from
+the binary, and makes allocation as cheap as it can be.
+
+\subsection{Possible later additions}
+
+\begin{itemize}
+\item Stack allocation of objects that escape analysis proves do not outlive
+  their procedure.
+\item A generational mode using sticky mark bits. It adds a write barrier,
+  so it stays optional.
+\end{itemize}
+
+% ---------------------------------------------------------------
+\section{Control flow}
+
+Shikra runs Scheme on the native C stack with ordinary calls and returns,
+and pays for continuations only where a program really uses them.
+
+\subsection{Tail calls}
+
+Proper tail calls are guaranteed, as the report requires, in two ways:
+
+\begin{itemize}
+\item \textbf{Loops.} Self-recursion and mutual recursion among known
+  procedures compile to jumps inside one C function. A named \texttt{let}
+  becomes a C loop.
+\item \textbf{\texttt{musttail}.} Every other tail call uses the compiler's
+  guaranteed tail-call attribute, supported by clang and recent GCC. These
+  procedures share one C signature, with further arguments in a buffer:
+\begin{verbatim}
+obj f(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3);
+\end{verbatim}
+\end{itemize}
+
+For a C compiler with no such attribute, the backend falls back to a
+trampoline, which is correct but slower.
+
+\subsection{Continuations}
+
+Each \texttt{call/cc} site is classified at compile time by what the program
+does with the continuation \texttt{k}.
+
+\begin{description}
+\item[Tier 1] The program calls \texttt{k} within the same procedure, such
+  as an early exit from a loop. Compiled as a jump or a return. No cost.
+\item[Tier 2] The program passes \texttt{k} down to callees that only call
+  it before \texttt{call/cc} returns. Compiled as a saved stack position and
+  a non-local jump. Costs a few words per capture.
+\item[Tier 3] The program stores \texttt{k}, returns it, or re-enters it
+  later. Compiled as a copy of the live stack into the heap, copied back on
+  re-entry. Cost is proportional to stack depth, per capture and per
+  re-entry.
+\end{description}
+
+Because the standard library is analysed with the program, common patterns
+stay in tier 1 or 2. An example is calling \texttt{k} from a
+\texttt{lambda} passed to \texttt{for-each}. Generators and coroutines built
+on re-entrant continuations land in tier 3 and will be slower than in a
+Scheme designed around them. That is the deliberate trade.
+
+\subsection{Exceptions}
+
+\texttt{raise}, \texttt{raise-continuable}, \texttt{error},
+\texttt{with-exception-handler} and \texttt{guard} are implemented directly
+on a handler stack, not through general \texttt{call/cc}. \texttt{guard}
+evaluates its clauses on top of the raising frame and unwinds only when a
+clause matches, so no stack is copied. An uncaught error prints its message
+and irritants to standard error and exits with a non-zero status.
+
+\subsection{Dynamic state}
+
+\texttt{dynamic-wind} keeps a list of active before and after thunks; any
+non-local jump walks that list. \texttt{parameterize} stores its bindings in
+the same list, so parameters and unwinding stay consistent.
+
+\subsection{Multiple values}
+
+\texttt{(values a b)} returning to a known \texttt{let-values} or
+\texttt{call-with-values} receiver comes back in registers through a small C
+struct. Only values flowing to an unknown receiver are packed into a heap
+object.
+
+% ---------------------------------------------------------------
+\section{Small-binary strategy}
+
+A Shikra executable contains the procedures the program can reach, the
+runtime pieces those procedures need, and nothing else. Size is handled as a
+reachability problem at three levels.
+
+\begin{enumerate}
+\item \textbf{Scheme level.} The compiler emits only definitions reachable
+  from the program body. Most of the standard library is written in Scheme,
+  so it is shaken and inlined by the same passes as user code.
+\item \textbf{Type level.} Generic procedures pull in code for every type.
+  The type analysis narrows them: \texttt{(display "hi")} becomes a string
+  write, and \texttt{(display n)} with a fixnum \texttt{n} links only the
+  integer printer.
+\item \textbf{Linker level.} Program and runtime compile as one translation
+  unit with one section per function, and the linker drops unreferenced
+  sections.
+\end{enumerate}
+
+\subsection{Pay only for what you use}
+
+Each runtime piece is linked only under its condition:
+
+\begin{description}
+\item[Collector] The program allocates and \texttt{--gc=bump} is not set.
+\item[Symbol table] \texttt{string->symbol} or \texttt{read} is reachable.
+\item[Float printing and parsing] A flonum can reach a printer, or
+  \texttt{string->number} is reachable.
+\item[Stack-copying continuations] Some \texttt{call/cc} site is tier 3.
+\item[Datum reader] \texttt{read} is reachable.
+\item[File ports] \texttt{(scheme file)} procedures are reachable.
+\item[Unicode tables] \texttt{--unicode=full} is set.
+\end{description}
+
+\subsection{No C library on Linux}
+
+On Linux the runtime makes system calls directly and provides its own entry
+point, so the result is a static executable with no libc. On macOS every
+executable must link the system library dynamically, and the Mach-O format
+page-aligns each segment. Expect a floor of a few tens of kilobytes there,
+whatever the program does.
+
+\subsection{Size targets}
+
+\begin{center}
+\begin{tabular}{lll}
+\hline
+Program & Linux x86-64, static & macOS arm64 \\
+\hline
+Hello world & under 30\,KB & about 50\,KB (format floor) \\
+1,000 to 2,000 lines & 60 to 150\,KB & 100 to 200\,KB \\
+\hline
+\end{tabular}
+\end{center}
+
+\texttt{shikra size} prints bytes per library and per procedure, so growth
+can be traced to its cause.
+
+% ---------------------------------------------------------------
+\section{Extensions}
+
+Shikra adds five small libraries under the \texttt{(shikra ...)} prefix and
+one compiler-known form, \texttt{define-c}. Standard programs never need
+them; they exist for the cases where the optimizer needs a hint or the
+program needs C.
+
+\begin{description}
+\item[\texttt{(shikra fixnum)}] \texttt{fx+}, \texttt{fx-}, \texttt{fx*},
+  \texttt{fxquotient}, \texttt{fx<?} and the rest of the SRFI 143 names. For
+  integer hot paths that must stay fixnum-only.
+\item[\texttt{(shikra flonum)}] \texttt{fl+}, \texttt{fl*}, \texttt{flsqrt}
+  and the rest of the SRFI 144 names. For float hot paths that must stay
+  unboxed.
+\item[\texttt{(shikra f64vector)}] Vectors of raw doubles, with SRFI 4
+  names. For numeric arrays, signal and matrix code.
+\item[\texttt{(shikra assume)}] The form \texttt{(assume expr)} from
+  SRFI 145. Checked in safe mode, trusted with \texttt{--unsafe}.
+\item[\texttt{(shikra ffi)}] \texttt{define-c}, for calling C functions.
+\end{description}
+
+A C binding is one line. Arguments and results are converted to and from
+unboxed C values at the call:
+
+\begin{verbatim}
+(import (scheme base) (shikra ffi))
+
+(define-c c-hypot "hypot" (double double) double)
+(define-c c-getpid "getpid" () int)
+\end{verbatim}
+
+Portable code guards these imports with \texttt{cond-expand} on the
+\texttt{shikra} feature.
+
+% ---------------------------------------------------------------
+\section{Toolchain}
+
+The whole toolchain is one executable, \texttt{shikra}, with six commands.
+
+\begin{description}
+\item[\texttt{shikra build main.scm -o app}] Compiles the program to a
+  native executable.
+\item[\texttt{shikra run main.scm}] Builds at \texttt{-O0} into a cache
+  directory and runs it.
+\item[\texttt{shikra repl [main.scm]}] Starts the interactive interpreter;
+  with a file, loads it first.
+\item[\texttt{shikra check main.scm}] Expands and analyses only; reports
+  errors without generating code.
+\item[\texttt{shikra emit-c main.scm}] Prints the generated C, for reading
+  or for an unusual build setup.
+\item[\texttt{shikra size app}] Breaks the binary down by library and
+  procedure.
+\end{description}
+
+\subsection{Flags}
+
+\begin{center}
+\begin{tabular}{lll}
+\hline
+Flag & Values & Default \\
+\hline
+\texttt{-O} & \texttt{0} fast build, \texttt{2} speed, \texttt{s} size & \texttt{2} \\
+\texttt{--unsafe} & removes remaining run-time checks & off \\
+\texttt{--gc} & \texttt{immix}, \texttt{bump} & \texttt{immix} \\
+\texttt{--unicode} & \texttt{ascii}, \texttt{full} & \texttt{ascii} \\
+\texttt{-I dir} & adds a library search directory & none \\
+\texttt{--cc} & the C compiler to invoke & \texttt{cc} \\
+\texttt{--target} & a target triple for cross-compiling & the host \\
+\texttt{-g} & adds source locations to run-time errors & off \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{The REPL}
+
+\texttt{shikra repl} is for exploring and learning; \texttt{shikra build} is
+for the result. The REPL evaluates each entry with the bytecode interpreter
+and prints the value.
+
+\begin{verbatim}
+$ shikra repl
+shikra> (define (square x) (* x x))
+shikra> (map square '(1 2 3))
+(1 4 9)
+shikra> ,expand (when (> 1 0) 'yes)
+(if (> 1 0) (begin 'yes))
+\end{verbatim}
+
+\begin{itemize}
+\item \textbf{Multi-line input.} An entry continues until its parentheses
+  balance.
+\item \textbf{Loading a program.} \texttt{shikra repl main.scm} evaluates
+  the file, then prompts with its imports and definitions available.
+\item \textbf{Errors return to the prompt.} An uncaught error prints its
+  message and irritants; the session and its definitions survive.
+\item \textbf{Three meta-commands.} \texttt{,expand expr} shows a macro
+  expansion, \texttt{,c name} prints the C the compiler would emit for a
+  definition, and \texttt{,quit} exits.
+\item \textbf{No line-editing library.} History and editing come from a
+  terminal wrapper such as \texttt{rlwrap}, which keeps the tool
+  dependency-free.
+\end{itemize}
+
+Two things to keep in mind. The interpreter is much slower than compiled
+output, so measure with \texttt{shikra run}, never in the REPL. And the REPL
+accepts things the compiler rejects, such as redefining a procedure or
+calling \texttt{eval}; \texttt{shikra check} is the test for whether a
+program will build.
+
+\subsection{Diagnostics}
+
+Because the compiler sees the whole program, many mistakes that other
+Schemes report at run time are compile-time errors here:
+
+\begin{itemize}
+\item An unbound identifier, or an import that no library exports.
+\item The wrong number of arguments to a known procedure.
+\item A value of a provably wrong type, such as \texttt{(car 5)} or
+  \texttt{(vector-ref "abc" 0)}.
+\item A \texttt{set!} on an imported binding.
+\end{itemize}
+
+Unused imports and definitions are warnings. Every message uses the
+\texttt{file:line:column} form that editors understand. Run-time errors in
+safe mode name the procedure, and add the source location when built with
+\texttt{-g}.
+
+% ---------------------------------------------------------------
+\section{Worked example}
+
+A plain R7RS loop should come out as a plain C loop with one overflow check
+and no allocation. This is standard Scheme with nothing Shikra-specific in
+it:
+
+\begin{verbatim}
+(import (scheme base) (scheme write))
+
+(define (sum-to n)
+  (let loop ((i 0) (acc 0))
+    (if (> i n)
+        acc
+        (loop (+ i 1) (+ acc i)))))
+
+(display (sum-to 1000000))
+(newline)
+\end{verbatim}
+
+The C below is a sketch of the intended output, not output from a working
+compiler. \texttt{FIX(n)} is \texttt{n << 1}.
+
+\begin{verbatim}
+static obj sum_to(obj n) {      /* n proven fixnum at its only call site */
+    intptr_t i = FIX(0), acc = FIX(0);
+    for (;;) {
+        if (i > (intptr_t)n) return (obj)acc;
+        if (__builtin_add_overflow(acc, i, &acc)) fix_overflow();
+        i += FIX(1);            /* i <= n, so this cannot overflow */
+    }
+}
+
+int main(void) {
+    write_fixnum(STDOUT, sum_to(FIX(1000000)));
+    write_char(STDOUT, '\n');
+    return 0;
+}
+\end{verbatim}
+
+How each pass contributed:
+
+\begin{itemize}
+\item \textbf{Closed world:} \texttt{sum-to} is never reassigned and has one
+  call site, so it is called directly and \texttt{n} is known to be a
+  fixnum.
+\item \textbf{Loop conversion:} the named \texttt{let} calls itself only in
+  tail position, so it becomes a \texttt{for} loop.
+\item \textbf{Type analysis:} \texttt{i} and \texttt{acc} start as fixnums
+  and are only ever updated by fixnum addition, so every type check
+  disappears.
+\item \textbf{Tagged arithmetic:} comparison and addition run on the tagged
+  words without shifting.
+\item \textbf{Tree shaking:} \texttt{display} of a known fixnum links the
+  integer printer alone. No collector is linked because nothing allocates.
+\end{itemize}
+
+\subsection{Where the speed runs out}
+
+The optimizer cannot help in these cases, and code that depends on them runs
+at ordinary dynamic-language speed:
+
+\begin{itemize}
+\item Calls through procedures stored in data structures, where the target
+  is unknown.
+\item Floats kept in generic lists or vectors.
+\item \texttt{apply} on lists built at run time.
+\item Tier 3 continuations.
+\item Generic \texttt{equal?}, \texttt{write} or arithmetic on values whose
+  type the analysis could not narrow.
+\end{itemize}
+
+% ---------------------------------------------------------------
+\section{Roadmap}
+
+Seven milestones take Shikra from hello world to a complete, portable
+toolchain, and each ends with a test that either passes or does not. The
+first target is arm64 macOS with Apple clang; static Linux follows at M6.
+
+\begin{description}
+\item[M0 Hello] Reader, library resolution, \texttt{syntax-rules} expander,
+  naive C backend, bump allocator. \emph{Done when} hello world and
+  \texttt{fib} build and run.
+\item[M1 Language] All of \texttt{(scheme base)}: tail calls, multiple
+  values, \texttt{dynamic-wind}, exceptions, tier 1 and 2 continuations,
+  strings, bytevectors, ports. \emph{Done when} the \texttt{(scheme base)}
+  part of an R7RS test suite passes, for example Chibi's
+  \texttt{r7rs-tests}.
+\item[M2 Collector] Mark-region collector, static literals and symbols.
+  \emph{Done when} a stress mode that collects at every allocation passes
+  the same suite.
+\item[M3 REPL] Bytecode compiler and virtual machine, \texttt{shikra repl},
+  the three evaluator libraries. \emph{Done when} the suite passes in the
+  interpreter with output identical to the compiled run.
+\item[M4 Optimizer] Flow analysis, inlining, loop conversion, closure
+  removal, check elimination, flonum unboxing, tree shaking,
+  \texttt{shikra size}. \emph{Done when} size targets are met and the
+  \texttt{r7rs-benchmarks} suite runs, with results recorded against Chez
+  and Gambit.
+\item[M5 Complete] Tier 3 continuations, \texttt{(scheme read)}, cyclic
+  \texttt{write}, float printing, the remaining libraries. \emph{Done when}
+  the full R7RS test suite passes both compiled and interpreted.
+\item[M6 Portable] Static Linux without libc on x86-64 and arm64; optional
+  bignums. \emph{Done when} the suite passes on macOS arm64, Linux x86-64
+  and Linux arm64.
+\end{description}
+
+Shikra is C99 from the first commit, so building it never needs an existing
+Scheme. From M3 on the interpreter doubles as a reference: any program whose
+compiled and interpreted outputs differ has found a bug in one of the two.
+
+% ---------------------------------------------------------------
+\section{Risks}
+
+Five risks could force a redesign.
+
+\begin{itemize}
+\item \textbf{Stack-copying continuations.} Tier 3 relies on copying the C
+  stack, which the C standard does not define, although several long-lived
+  Scheme and Lisp systems have done it. Hardware shadow stacks (Intel CET,
+  Arm GCS) reject it. Fallback: convert only the procedures that can be live
+  during a tier 3 capture to continuation-passing style.
+\item \textbf{Analysis precision.} The speed goal stands or falls with the
+  type analysis. If it is too coarse, the checks stay in and Shikra performs
+  like any other Scheme-to-C compiler. M4 should get the largest share of
+  the effort.
+\item \textbf{Two engines drifting apart.} The interpreter and the compiler
+  implement the same language twice. A difference between them is a bug
+  users will hit when moving from the REPL to a build. Mitigation: shared
+  front end and runtime, and one test suite run under both.
+\item \textbf{Conservative stack scanning.} It can keep a dead object alive
+  and it rules out a moving collector. Both are rare problems on 64-bit
+  targets, but fragmentation under long-running workloads is untested.
+\item \textbf{Whole-program build time.} Every build recompiles everything,
+  and \texttt{cc -O2} on one large file gets slow as programs grow. The
+  \texttt{-O0} mode and the expansion cache are the mitigation; splitting
+  the C output is the fallback.
+\end{itemize}
+
+\end{document}
