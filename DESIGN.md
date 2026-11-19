@@ -328,6 +328,15 @@ engines and the outputs must be identical.
   condition. Those are "it is an error" situations; calling such a `k` later raises the safe-mode
   error "tier-2 continuation called after its extent (bug)" -- nothing is corrupted.
 
+- *Extensions* (details in "Extensions as built"): `define-c` in the interpreter calls only functions
+  of the running process (dlsym) with at most 6 integer-class and 8 `double` arguments and no `float`,
+  through one function-pointer type that relies on the AAPCS64 / x86-64 System V register assignment
+  (not ISO C; other ABIs refuse define-c at definition time); variadic C functions are not supported in
+  either engine. Compiled programs declare each C function under a private name bound to the real
+  symbol with an asm label (GCC/clang; plain names otherwise). A fixnum check of a loop-invariant value of
+  unknown type stays inside the loop (no loop peeling; the C compiler may hoist it). The math accuracy
+  figures are measured against the host libm, which is itself not correctly rounded.
+
 ## 11. As built
 
 ### M0 part A (build, runtime foundation, reader)
@@ -2427,3 +2436,281 @@ timings, so they are compared interleaved).
   no failure.
 - `make test` (each mode of `tests/run.sh all` plus check-embed): 960 checks, 0 failures, no skip
   left (the interpreter runs reentry.scm too); `tests/run.sh gcc` (gcc-16): 192 checks, 0 failures.
+
+### Extensions as built (spec §10: the five `(shikra ...)` libraries and `define-c`)
+
+**File map** (runtime: `rt_ext.c` 515 lines, a separate file pasted only into programs that use an
+extension, plus 68 lines in the shared runtime: rt.h 37 (declarations, guarded), the f64vector cases of
+the printer, reader and `equal?`, `--unsafe` warning fixes; compiler +420 lines in analyze.c, emit.c,
+expand.c, bytecode.c, vm.c, main.c, headers, plus `ffi.c` 91; Scheme library 672 lines)
+
+```
+lib/shikra/fixnum.sld         (shikra fixnum): SRFI 143, 44 names, each a primitive of its own name
+lib/shikra/flonum.sld         (shikra flonum): SRFI 144, 124 names
+lib/shikra/flonum/core.scm    constants, predicates, folds, small procedures
+lib/shikra/flonum/math.scm    cbrt hypot expm1 log1p log2 log10, hyperbolic + inverses, gamma, log-gamma,
+                              erf erfc, Bessel J_n Y_n -- Scheme over the flonum primitives
+lib/shikra/f64vector.sld      (shikra f64vector): SRFI 4 f64 names, 8
+lib/shikra/assume.sld         (shikra assume): re-exports the compiler-known assume
+lib/shikra/ffi.sld            (shikra ffi): re-exports the compiler-known define-c
+src/rt_ext.c                  fixnum helpers on tagged words, bit operations, carry operations; flonum
+                              rounding, bit-level operations, exact fmod/remainder, fused multiply-add;
+                              f64vectors; failed assumptions; define-c conversions
+src/prims.def                 the extension rows (end of the file): %fx*, %fl*, %f64vector*, %assume-failed
+src/expand.c                  assume and define-c (keywords K_ASSUME, K_DEFINE_C), #f64 self-evaluating
+src/analyze.c                 T_F64, type letter w, %flonum?/%f64vector? predicates, fx comparisons as
+                              order relations, fx+/fx- overflow elimination, %c-call types, float slots
+src/emit.c                    ext_special (the extension primitives), ccall (define-c), f64vector
+                              literals, RT_EXT and the placement of rt_ext.c
+src/ffi.c, vm.c, bytecode.c   define-c in the interpreter: OP_CCALL, dlsym
+src/main.c                    --link FILE, -l NAME
+tests/cases/ext_*.scm, tests/shape/ext_*, tests/errors/ext_*, tests/repl/ffi, tests/unit/flmath.scm,
+tests/cases/inc/fixnum_ref.py (writes ext_fixnum_ref.out), bench/ext/
+```
+
+**Engine boundary and pay-for-use.** Every extension procedure is either a leaf primitive (prims.def,
+so the interpreter calls the same C function the compiler falls back to) or Scheme in `lib/shikra/`
+(run by both engines). Importable only by name; `cond-expand` sees `(library (shikra fixnum))` etc.,
+and the spec's guard `(cond-expand (shikra (import ...)) (else ...))` works at program level
+(tests/cases/ext_cond_expand.scm). The emitter defines `RT_EXT` and pastes `rt_ext.c` right after
+rt.h -- before the program, so the generated code calls its inline helpers -- only when a reachable
+primitive is an extension one, a `%c-call` or an f64vector literal; the f64vector cases in the printer,
+reader and `equal?` are under the same guard (`RT_HAVE_EXT`). A program that imports none of the
+libraries compiles exactly as before: hello world 50,888 bytes at -O2 (the same as `main` built here),
+and 16 test programs at -O2, -Os and -O0 (hello fib records stdlib closures numbers_edges float_text
+write_labels strings_utf8 exceptions callcc tail_calls char_ascii files lazy_space reentry) are
+byte-identical binaries before and after (emit-c, then cc with a fixed file name and `-Wl,-no_uuid`).
+
+**How the compiler treats an extension primitive** (emit.c `ext_special`). An operand the analysis
+proved (S_OK, or its type alone) is used directly -- a tagged `intptr_t`, a `double`, an f64vector obj;
+an unproven one is checked first by a one-tag-test inline (`rt_fxchk`, `rt_flchk`, `rt_f64chk`, gone
+with `--unsafe`), the checks of a primitive's operands in order in a comma expression, so the operation
+itself is identical straight-line code either way and the error names the procedure. The analysis
+refines the checked variable afterwards (prims.def letters), so the next use is unchecked. Results:
+fixnum operations `R_FIX`, flonum operations and `f64vector-ref` `R_DBL` (unboxed; `ir_represent`
+counts their arguments as float slots), comparisons and predicates obj booleans.
+
+**(shikra fixnum)** -- 44 names (`fx-width` 63, `fx-greatest` 2^62-1, `fx-least` -2^62). Primitives:
+every procedure of SRFI 143 except the folds and `fxsqrt` (Scheme: Newton from above). Inline C: `fx+ fx-
+fx*` (`rt_fx{add,sub,mul}w`, overflow raises "fx+: fixnum overflow" with both operands; with S_NOOVF --
+after `fx<?`/`fx>?` the analysis records the same order relations as for `<` -- a plain add), `fxneg fxabs
+fxsquare fxquotient fxremainder` (division by zero and `(fxquotient fx-least -1)` raise), comparisons,
+`fxzero? fxpositive? fxnegative? fxodd? fxeven? fxmax fxmin`, `fxnot fxand fxior fxxor fxif` (on the
+tagged words directly), the three shifts (count 0..62, else "index out of range"; a left shift that
+loses bits raises overflow), `fxbit-set?`. Leaf calls (straight-line, result type known): `fxbit-count
+fxlength fxfirst-set-bit fxcopy-bit fxbit-field fxbit-field-rotate fxbit-field-reverse` and the carry
+operations (`fx*/carry`: the exact 128-bit value i*j+k from 32-bit limbs, split as q*2^63 + r with r
+balanced). Bit fields are on the 63-bit two's complement pattern (fields up to bit 62, results sign-
+extended from bit 62). `--unsafe`: no checks; overflow wraps.
+
+**(shikra flonum)** -- 124 names. Primitives (inline doubles): `fl+ fl- fl* fl/ fl+* flmax flmin`,
+comparisons, `flabs`, rounding (`flround` ties to even, via the 2^52 trick; truncation via int64),
+`flsqrt flexp fllog flsin flcos fltan flasin flacos flatan` (the platform layer's `rt_sys_*`),
+`flexpt` (`rt_sys_pow`), `flcopysign fladjacent flsign-bit make-flonum flexponent flinteger-exponent`
+(bit manipulation; `make-flonum` scales by powers of two so that only the last step rounds),
+`flremainder` (exact fmod by integer long division of the significands) and `flremquo` (IEEE remainder,
+and 30 low quotient bits), `fl+*` (`__builtin_fma` where the target has a fused multiply-add -- one
+instruction, `fl-fast-fl+*` is #t; otherwise exact integer arithmetic: the 106-bit product and the
+addend aligned in a 128-bit window with a sticky bit, one rounding; checked against libm `fma` on 3·10^6
+random and near-cancelling cases under Rosetta x86-64: 0 differences). Everything else is Scheme on
+these: constants (correctly rounded; 60-digit decimal computation), predicates, folds,
+`flinteger-fraction`, `flnormalized-fraction-exponent` (from `flinteger-exponent`), `flnumerator`, and
+the functions below. `fl-integer-exponent-zero` = -2^31, `fl-integer-exponent-nan` = -2^31+1,
+`(flinteger-exponent +inf.0)` = 2^31-1. `flmax`/`flmin` ignore a NaN argument (C99 fmax/fmin).
+
+Math algorithms (own implementations, lib/shikra/flonum/math.scm):
+- `flexp-1`, `fllog1+`: Kahan's corrections (u-1)·x/log u and log(u)·x/(u-1) for |x| < 1/2.
+- `fllog2`: x = f·2^e, e + log1p(f-1)/ln 2 with f in [sqrt 1/2, sqrt 2); `fllog10`: log(x)/ln 10.
+- `flcbrt`: m = x·2^-3k in [1, 8), exp(log(m)/3), one Newton step whose residual y^3 - m is formed with
+  fused multiply-adds. `flhypot`: scaled by 2^-ilogb(max), sqrt(fma(a, a, b·b)).
+- `flsinh flcosh fltanh`: expm1 for |x| < 1, (e^x ± e^-x)/2 to 22, e^x/2, then (e^(x/2)/2)·e^(x/2).
+  `flasinh flacosh flatanh`: log1p forms near 0 / 1, log(2x ∓ ...) above 2, log x + ln 2 above 2^28.
+- `flgamma`: exact factorials up to 23; x >= 1/2: shifted up to w >= 12, Stirling's series (12 terms),
+  w^(w-1/2) as the square of pow(w, (w-1/2)/2) (no overflow), the rounding of x + n corrected by
+  ψ(w)·(lost part); x < 1/2: reflection with sin(πx) on the exactly reduced argument; below -140 the
+  reciprocal is formed without overflow. `flloggamma`: Stirling for x >= 12; around 1 and 2 the series
+  log Γ(2+z) = (1-γ)z + Σ (-1)^k (ζ(k)-1) z^k/k (40 terms, ζ(k)-1 correctly rounded), so the zeros at 1
+  and 2 are accurate; otherwise log Γ; x < 0 by reflection; returns the sign as ±1.0.
+- `flerf`: |x| < 1 the Maclaurin series by Horner's rule (21 correctly rounded coefficients),
+  otherwise 1 - erfc. `flerfc`: |x| < 1/2 1 - erf; otherwise the even part of Laplace's continued
+  fraction, evaluated backwards with 12 + 1200/x^2 terms, times e^(-x^2) with x^2 split exactly
+  (x = xh + xl, xh of 26 bits); 0 above 27.3; x < 0: 1 + erf.
+- Bessel `flfirst-bessel n x`, `flsecond-bessel n x` (n any exact integer; J_-n = (-1)^n J_n, negative x
+  for J by parity, Y of negative x is NaN, Y_n(0) = -inf): x < 1 power series (J_n, Y_0, Y_1 with the
+  harmonic numbers); 1 <= x < 25, or n > x: Miller's backward recurrence from an even m >= max(n, x) + 24
+  + sqrt(60 max), normalised by J_0 + 2ΣJ_2k = 1, which also sums the Neumann series of Y_0 and Y_1
+  (Y_1 = 2/π((log(x/2)+γ)J_1 - J_0/x + Σ(-1)^k (J_2k-1 - J_2k+1)/k), rescaling at 10^250; x >= 25:
+  Hankel's asymptotic expansions for orders 0 and 1, phases from cos x and sin x, then forward
+  recurrence (J for n <= x, Y always).
+
+Measured accuracy (tests/unit/flmath.scm, part of `tests/run.sh unit`: 10^5 pseudo-random arguments
+per range -- typically three ranges per function: around 0 / the hard region, log-uniform over the whole
+domain, the overflow region -- plus special values; errors against macOS libm, i.e. including libm's
+own error; bounds pinned in the file):
+
+| function | max error | | function | max error |
+|---|---|---|---|---|
+| flcbrt | 1 ulp | | flhypot | 1 ulp |
+| flexp-1, fllog1+ | 2 ulp | | fllog2 | 3 ulp |
+| fllog10 | 2 ulp | | flsinh, fltanh | 3 ulp |
+| flcosh | 2 ulp | | flasinh, flacosh, flatanh | 3 ulp |
+| flerf | 4 ulp (libm's erf is 2 ulp off at the worst point; ours 1 ulp from the exact value) | | flerfc | 1.1e-15 relative |
+| flgamma | 7.0e-14 relative (x near -128; 1e-15 for x > 0) | | flloggamma | 1.3e-14 relative (x > -2), 1.1e-15 absolute/relative below -2 |
+| flfirst-bessel | 1.4e-14 relative where |J| >= 0.1·sqrt(2/(πx)); 3.1e-16 absolute near zeros | | flsecond-bessel | 1.8e-14 relative / 4.5e-16 absolute likewise |
+| fl+*, flremainder, flremquo, fladjacent, make-flonum, flexponent | exact (bit-identical to libm) | | | |
+
+Ranges: Bessel n in 0..10 with x in (0,1), (1,25), (25,200), and n in 0..60 with x in (0,50). The
+log-gamma reference is log |tgamma| for x < 0 (macOS lgamma is off by 2.5e-13 near x = -1). The figures
+depend on the platform's exp/log/pow; on Linux (libm-free rt_math.c) the bounds may need adjusting.
+
+**(shikra f64vector)** -- 8 names. Object: header type `RT_T_F64VECTOR` (raw class: never scanned,
+length = 8·elements), doubles after the header. Primitives: make (fill: any real, default 0.0), `?`,
+length, ref (an unboxed double), set! (any real; a proven double is stored as it is), ->list, list->.
+`f64vector` is `list->f64vector` of the rest list. Bounds and literal (read-only) checks stay in safe
+mode; type `T_F64` in the lattice. `write`/`display` print `#f64(1.0 2.0)` (shortest round-trip
+doubles), the reader and source code accept `#f64(...)` (any real numbers; self-evaluating, static
+read-only literals), `equal?` compares the IEEE bits element-wise (eqv? on flonums).
+
+**(shikra assume)** -- `(assume e msg ...)` expands (expand.c) to `(let ((v e)) (if v v
+(%assume-failed (list msg ...))))`. `%assume-failed` raises "assume: assumption violated" with the
+messages as irritants (located under -g), and the analysis treats it as never returning, so the join
+after the `if` has exactly the facts of its true branch -- types after predicates, order relations after
+`< > <= >=` and `fx` comparisons -- in safe mode too. With `--unsafe` the emitter writes
+`RT_UNREACHABLE()` (`__builtin_unreachable`) instead of the call: the test is dead and the C compiler
+removes it; the facts remain. The interpreter always checks. Messages are evaluated only on failure.
+
+**define-c** -- `(define-c name "c-name" (arg-type ...) result-type)` is a definition (top level or
+body) that expands to `(define name (lambda (a ...) (%c-call '(name "c-name" (types) result) a ...)))`:
+an ordinary known procedure (inlined at known calls, first class elsewhere). Types:
+
+| type | argument (safe-mode check) | C type | result |
+|---|---|---|---|
+| int | fixnum in [-2^31, 2^31) ("argument out of range for int") | int | fixnum |
+| long | fixnum | long | fixnum ("result out of fixnum range" beyond ±2^62) |
+| double | any real (exact integers converted) | double | flonum, unboxed |
+| float | any real | float | flonum (from float), unboxed |
+| bool | #t or #f | _Bool | #t / #f |
+| char | character with code < 256 | char | character (the byte) |
+| string | string: its NUL-terminated UTF-8 buffer, valid during the call, not to be modified | const char * | fresh string (copied, UTF-8 decoded); NULL → #f |
+| pointer | exact integer >= 0 (the address; NULL = 0) | void * | exact integer |
+| void | (not allowed) | void | unspecified |
+
+Errors name the Scheme procedure ("c-abs: expected fixnum"); `--unsafe` removes the checks (arguments
+are converted unchecked). The analysis knows the argument and result types (`ir_ccall_letters`), so
+`(fl+ (c-hypot x y) 1.0)` stays a double computation (tests/shape/ext_ffi). The emitter writes one
+prototype per C function, `extern double rt_c_hypot(double, double) RT_CNAME("hypot");` where `RT_CNAME`
+is an asm label (`__USER_LABEL_PREFIX__` + name) on GCC and clang -- so no header is needed and the
+program's own declaration cannot clash with a system header the runtime includes (e.g. `strlen` bound as
+returning `long`) -- and a direct call. Binding one C function twice with different types is a compile
+error. Malformed forms, unknown types, `void` arguments and names that are not C identifiers are
+located compile errors (tests/errors/ext_define_c_*).
+
+*Link inputs*: `--link FILE` (repeatable; a `.c`, `.o`, `.a` or library given to cc after the program)
+and `-l NAME` (cc `-lNAME`), for `build` and `run` (the run cache key covers the files' contents);
+`--help` lists them. *Interpreter*: `%c-call` is resolved when its definition is compiled to bytecode
+(`ffi_resolve`): `dlsym(RTLD_DEFAULT, name)` in the shikra process (the C library and libm on macOS
+and Linux; not user files). Support matrix: any non-variadic function with at most 6 arguments of the
+integer class (int long bool char string pointer) and at most 8 `double` arguments, in any order,
+returning int, long, double, bool, char, string, pointer or void, on AArch64 and x86-64 System V;
+`float` anywhere, more arguments, or other ABIs: "define-c: signature of NAME not supported in the
+interpreter (...); use shikra build"; a symbol not in the process: "define-c: C function NAME is not
+available in the interpreter ...; use shikra build" -- both at definition time (REPL: back to the
+prompt; tests/repl/ffi). Test marker: tests/cases/ext_ffi_user.compiled-only (functions in a user C file).
+dlsym is tool code (on glibc older than 2.34 the tool needs -ldl).
+
+**Open point for the Linux no-libc target** (integration with the M6 work): a program that uses
+`define-c` needs the C library that provides the function, so it cannot be a libc-free static
+executable. Expected resolution: programs whose IR contains a `%c-call` (the emitter knows: `RT_EXT` +
+`ffi_protos`) are linked against libc on Linux (dynamically, or statically with libc), and the asm-label
+prototypes keep working (empty `__USER_LABEL_PREFIX__` on ELF). Not done here. Also on Linux: the
+accuracy bounds of tests/unit/flmath.scm were measured against macOS libm and over the macOS platform
+math; they may need adjusting for rt_math.c / glibc.
+
+**Shape tests** (tests/shape/ext_*): `ext_fx_loop` -- the loop of `(fx<? i n) (fx+ i 1) (fx+ acc i)`
+with n of unknown type is
+
+```
+j56:;
+    v_t_237 = (rt_fxchk(v_n_83, "fx<\077"), RT_BOOL(v_i_235 < (intptr_t)v_n_83));
+    if (v_t_237 != RT_FALSE) {
+        v_t_238 = v_i_235 + (intptr_t)RT_FIX(1);
+        v_t_239 = rt_fxaddw(v_acc_236, v_i_235, "fx+");
+        v_i_235 = v_t_238;
+        v_acc_236 = v_t_239;
+        goto j56;
+```
+
+i.e. the loop of `<`/`+` on a proven fixnum n (`RT_BOOL(v_i < ...)`, a plain add, `rt_fxadd`) plus the
+one check of n; `ext_fl_loop` -- doubles only, no box made or opened, `rt_flfma`, `rt_sys_exp`;
+`ext_dot` / `ext_dot_unsafe` -- the dot product of two f64vectors:
+
+```
+j85:;
+    v_t_324 = (rt_f64chk(v_a_94, "f64vector-length"), (intptr_t)RT_FIX(RT_HLEN(v_a_94) >> 3));
+    v_t_325 = RT_BOOL(v_i_322 < v_t_324);
+    if (v_t_325 != RT_FALSE) {
+        v_t_326 = v_i_322 + (intptr_t)RT_FIX(1);
+        v_t_327 = rt_f64ref(v_a_94, v_i_322);
+        v_t_328 = (rt_f64chk(v_b_95, "f64vector-ref"), rt_f64ref(v_b_95, v_i_322));
+        v_t_329 = v_t_327 * v_t_328;
+        v_t_330 = v_s_323 + v_t_329;
+        ...
+        goto j85;
+```
+
+(kept first-class, so a and b arrive unknown: one check each; inlined at its call, where they are proven,
+the checks are gone); no allocation, no boxed flonum, `rt_f64ref` = bounds check + load (the check
+vanishes with `--unsafe`); `ext_assume` / `ext_assume_unsafe` -- after `(assume (exact-integer? x))`
+`(+ x 1)` is `rt_fxadd`, after `(assume (pair? p))` `car` is `RT_CAR`; with `--unsafe` no
+`rt_assume_failed` remains; `ext_ffi` -- the asm-label prototype, a direct call, no box.
+
+**Benchmarks** (bench/ext; Apple M5, best of 3, loaded machine): `matmul` (400x400 doubles, 5 products)
+portable (vectors of boxed flonums, generic arithmetic) 1.90 s, with `(shikra flonum)`, `(shikra
+f64vector)`, `(shikra fixnum)` 0.20 s: 9.5x; `vhash` (polynomial hash and odd count over a vector of 10^6
+integers, 200 passes) portable 1.04 s, with `(shikra fixnum)` 0.18 s: 5.8x (values out of a vector are
+"any" for the analysis; the fx version checks each once). Both extension variants are guarded with
+`cond-expand` and give the same results under Gambit (the `else` branch). Inner loop of matmul-ext:
+
+```
+j170:;
+    v_t_864 = (rt_fxchk(rt_g[2], "fx<\077"), RT_BOOL(v_k_862 < (intptr_t)rt_g[2]));
+    if (v_t_864 != RT_FALSE) {
+        v_t_865 = v_k_862 + (intptr_t)RT_FIX(1);
+        v_t_866 = rt_fxmulw(v_i_857, (intptr_t)(rt_g[2]), "fx*");
+        v_t_867 = rt_fxaddw(v_t_866, v_k_862, "fx+");
+        v_t_868 = rt_f64ref(rt_g[4], v_t_867);
+        v_t_869 = rt_fxmulw(v_k_862, (intptr_t)(rt_g[2]), "fx*");
+        v_t_870 = rt_fxaddw(v_t_869, v_j_859, "fx+");
+        v_t_871 = rt_f64ref(rt_g[5], v_t_870);
+        v_t_872 = v_t_868 * v_t_871;
+        v_t_873 = v_s_863 + v_t_872;
+        v_k_862 = v_t_865;
+        v_s_863 = v_t_873;
+        goto j170;
+```
+
+(n comes from the command line, so it is checked where it enters; a and b are globals proven to be
+f64vectors). r7rs-benchmarks are untouched.
+
+**Tests.** tests/cases (both engines, -O2/-O0/-Os, trampoline, stress at -O2/-O0 and in the
+interpreter, gcc-16): `ext_fixnum_ref` (7,301 results of arithmetic, overflow, bitwise, shift, bit-field
+and carry operations at boundary values against Python's unbounded integers, tests/cases/inc/
+fixnum_ref.py), `ext_fixnum`, `ext_flonum`, `ext_f64vector`, `ext_assume`, `ext_unsafe` (`--unsafe`),
+`ext_ffi` (the spec's two bindings verbatim, libc calls of every type, first-class use, type and range
+errors), `ext_ffi_user` (a user C file through `--link`; compiled-only), `ext_cond_expand`,
+`ext_exports` (every SRFI 143 / 144 / 4-f64 name referenced: a missing binding is a compile error);
+tests/errors `ext_*` (11: malformed define-c and assume, unknown and void types, non-identifier C
+names, define-c in expression context, missing imports, a nonexistent `(shikra ...)` library, a
+provably wrong flonum argument); tests/repl/ffi; tests/shape `ext_*` (7); tests/unit/flmath.scm.
+
+**Bugs found in existing code**: programs built with `--unsafe` produced C with unused-parameter
+warnings (rt_str.c, rt_num.c, rt_io.c: no test compiled an unsafe program with -Werror before); a
+procedure whose name contains `*/` (SRFI 143's `fx*/carry`) ended the emitter's comment line and broke
+the C. Both fixed.
+
+**Known gaps**
+- Interpreter define-c is limited to the process's own functions and the shapes above.
+- An `fx`/`fl`/f64vector check of a loop-invariant unknown value is repeated per iteration (no peeling).
+- `fl+*` is a call into exact integer code on targets without a hardware fused multiply-add.
+- Results of the special functions near their zeros are accurate in absolute, not relative, terms
+  (Bessel, log-gamma below -2), as is inherent in their evaluation by recurrences and reflection.
