@@ -262,12 +262,10 @@ engines and the outputs must be identical.
 - *No exact rationals beyond `/`* (M1 part B): `expt` with a negative exact exponent follows
   `/` (flonum unless it divides); `string->number`/the reader give `#f`/a read error for ratio
   parts outside the fixnum range. See "M1 part B, Decisions" for the remaining small choices.
-- *Hello world on macOS arm64 is 70 KB*, not ~50 KB (§9.4, M1 part A; 70,128 bytes since M2):
-  `raise` is always linked (runtime errors are raised through it) and `display` reads the
-  `current-output-port` parameter. Since M2 hello world also links the collector (+5.3 KB
-  text): the library's top-level `make-parameter` calls allocate, and tree shaking keeps
-  every impure top-level form of a built-in library. M4's type-level shaking and inlining
-  are expected to win this back; with `--gc=bump` hello world is 69,312 bytes.
+- (Resolved in M4-2: hello world on macOS arm64 is 50,880 bytes at -O2, `__text` 1,568 bytes -- the
+  spec's ~50 KB format floor. The port parameters are static cells, `display` of a string to the
+  proven standard output is a buffered write, nothing allocates and nothing can raise, so neither
+  the collector nor `raise` is linked. Before: 70 KB since M1, 69,920 after M4-1.)
 - *The REPL echoes its input when stdin is not a terminal* (M3; spec §11.2 shows a terminal
   session): piped input then produces a transcript identical to the spec's session, which is
   what tests/repl compares.
@@ -288,11 +286,17 @@ engines and the outputs must be identical.
   applied; a ratio whose denominator has more than 780 significant digits is not a number
   Shikra can represent (`string->number` gives `#f`).
 - *Generic `display` and the uncaught-error printer link the datum-label pre-pass* (§9.1:
-  hello world never prints a cycle): both must terminate on circular data. Hello world's
-  `__text` still shrank in M5 (21,060 → 20,368 bytes: the float parser is no longer linked and
-  the printer is smaller); the file grew by 264 bytes of symbol table (70,144 → 70,408). M4's
-  type narrowing of `display` can drop the pre-pass (strings and chars already have their own
-  primitives).
+  hello world never prints a cycle): both must terminate on circular data. (M4-2: only when they
+  are reachable on a value whose type may be a pair or a non-empty vector; `display` of a proven
+  string, char, fixnum or other non-compound value uses its own writer, and a program with no
+  exception handler reports errors without the generic printer when the irritants are fixnums.)
+- *A provably wrong type is a compile error only when the proof is local* (§11.3 lists `(car 5)`
+  as an error; M4-2): when the value reaches the primitive through a user procedure's parameter or
+  result, or the code is in a guard body or a procedure passed to other code (which may run it
+  under an exception handler, as `test-error` does), or behind an undecided conditional, it is a
+  warning and the code raises at run time, so no valid program is rejected. Likewise an arity
+  mismatch at a call only the analysis made known is a warning (syntactically known calls remain
+  errors, M0).
 - *Stress mode collects at every allocation for all but five cases* (§13 M2 "done when"):
   the r7rs gate and 36 of the 41 programs in tests/cases collect at every allocation, at
   -O2 and -O0; five whose live set or allocation count makes a full collection per
@@ -1736,9 +1740,9 @@ the interpreter and -O0, -O2, -Os and the trampoline.
 - No jump threading through a join point whose body tests its parameter (`(if (not x) ...)`
   materialises a boolean; the C compiler threads it). FIX members referenced only by each other
   but unreachable are kept until nothing references them at all.
-- Parameter objects (`current-output-port`) are closures stored in globals: `(display x)` still
+- (M4-2: the port parameters are static cells; analysis-known calls.) Parameter objects (`current-output-port`) are closures stored in globals: `(display x)` still
   makes an unknown call to read the port (M4-2: the analysis knows the global's value).
-- Hello world still links the collector (the library's `make-parameter` allocates) and generic
+- (Resolved in M4-2.) Hello world still links the collector (the library's `make-parameter` allocates) and generic
   `display` (M4-2/M4-3, type-directed specialisation and pay-for-use).
 - Mutual recursion through procedures that escape (stored, passed as values) still uses
   `musttail`; so do cycles through case-lambda clauses.
