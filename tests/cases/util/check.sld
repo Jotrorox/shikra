@@ -1,0 +1,36 @@
+;; (util check) -- tiny self-checking harness for tests/cases: failures print the expression,
+;; the expected and the actual value; (check-done) prints the totals.
+;;   (check expr expected)       equal?, and inexact results must be eqv? (sign of zero, NaN)
+;;   (check-error "who" expr)    expr raises an error object whose message starts "who: "
+(define-library (util check)
+  (import (scheme base) (scheme write))
+  (export check check-error check-done)
+  (begin
+    (define passed 0)
+    (define failed 0)
+    (define (same? a b)
+      (if (and (number? a) (number? b) (inexact? a)) (eqv? a b) (equal? a b)))
+    (define (report src expected got)
+      (set! failed (+ failed 1))
+      (display "FAIL: ") (write src)
+      (display " expected ") (write expected)
+      (display " got ") (write got) (newline))
+    (define (run src thunk expected)
+      (let ((r (guard (e (#t (list 'raised (if (error-object? e) (error-object-message e) e))))
+                 (thunk))))
+        (if (same? r expected) (set! passed (+ passed 1)) (report src expected r))))
+    (define (prefix? p s)
+      (and (<= (string-length p) (string-length s)) (string=? p (substring s 0 (string-length p)))))
+    (define (run-error src who thunk)
+      (let ((r (guard (e ((error-object? e) (list 'error (error-object-message e)))
+                         (#t (list 'raised e)))
+                 (list 'value (thunk)))))
+        (if (and (eq? (car r) 'error) (prefix? (string-append who ": ") (cadr r)))
+            (set! passed (+ passed 1))
+            (report src (string-append who ": ...") r))))
+    (define-syntax check
+      (syntax-rules () ((_ expr expected) (run 'expr (lambda () expr) expected))))
+    (define-syntax check-error
+      (syntax-rules () ((_ who expr) (run-error 'expr who (lambda () expr)))))
+    (define (check-done)
+      (display passed) (display " passed, ") (display failed) (display " failed") (newline))))

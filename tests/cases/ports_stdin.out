@@ -1,0 +1,14 @@
+line 4106 353924 b
+line 5000 711233 €
+line 4 62304 f
+line 0 0
+str 3000 31731 9
+str 3000 770784 9
+peek 0
+str 4004 486179 d
+line eof
+char eof
+str eof
+read-u8: expected binary input port
+(lines #t 96390)
+(chunks #t)

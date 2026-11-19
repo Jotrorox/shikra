@@ -199,6 +199,16 @@ int main(int argc, char **argv) {
     CHECK(rt_srcloc_lookup(y, &file, &line, &col) && line == 3 && col == 8);
     CHECK(rt_read(port) == RT_EOF);
 
+    /* open file output ports are flushed by rt_exit (run.sh checks the file afterwards);
+     * closing one takes it off the list */
+    port = rt_open_output_file(S("tests/tmp/closed.txt"));
+    CHECK(rt_is_pair(rt_ports) && RT_CAR(rt_ports) == port);
+    rt_close_port(port);
+    CHECK(rt_ports == RT_NIL);
+    port = rt_open_output_file(S("tests/tmp/flush.txt"));
+    rt_write_string(S("flushed at exit\n"), port);
+    CHECK(rt_ports != RT_NIL);
+
     printf("rt_unit: %d checks, %d failures\n", checks, fails);
     rt_exit(fails != 0);
 }

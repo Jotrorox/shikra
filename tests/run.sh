@@ -55,8 +55,10 @@ run_reader() {
 
 run_unit() {
     if $CC -std=c99 -O2 -Wall -Wextra -Werror -Isrc tests/unit/rt_unit.c src/rt_*.c -o "$TMP/rt_unit" &&
-        "$TMP/rt_unit" > "$TMP/unit.out"; then ok
+        rm -f "$TMP/flush.txt" && "$TMP/rt_unit" > "$TMP/unit.out"; then ok
     else bad "tests/unit/rt_unit.c"; fi
+    if [ "$(cat "$TMP/flush.txt" 2>/dev/null)" = "flushed at exit" ]; then ok
+    else bad "tests/unit/rt_unit.c (open file port not flushed at exit)"; fi
     grep -v '^rt_unit:' "$TMP/unit.out" 2>/dev/null
     tail -1 "$TMP/unit.out" 2>/dev/null
 }
