@@ -43,13 +43,16 @@ struct ir_var {
     int id;
     obj name;          /* source name (symbol) */
     unsigned flags;
-    int nrefs, nsets;  /* def/use counts, recomputed by ir_count */
+    int nrefs, nsets;  /* def/use counts, recomputed by ir_count / the optimizer's census */
+    int ncalls;        /* references that are the callee of a known call (optimizer census) */
     ir_lambda *owner;  /* binding procedure; NULL for globals */
     ir_lambda *known;  /* bound once to this procedure and never assigned: known callee */
     global *g;         /* globals: the front-end global */
     int type;          /* M4: T_* bits */
     int def_index;     /* globals: index of the defining top-level form, -1 if none */
     int slot;          /* globals: slot in the C globals array (emitter) */
+    ir_node *subst;    /* optimizer: every reference reads this atom instead (copy propagation) */
+    int mark;          /* scratch for passes */
 };
 
 enum ir_kind {
@@ -61,7 +64,8 @@ enum ir_kind {
     IR_SET,    /* rhs: u.set, value unspecified (unboxed local or global) */
     IR_LET,    /* term: u.let; v NULL = evaluate rhs for effect */
     IR_FIX,    /* term: mutually recursive closures, u.fix */
-    IR_LETJ,   /* term: declare join point u.letj.j, then run u.letj.body */
+    IR_LETJ,   /* term: declare join points u.letj.j (and its ->next chain: mutually
+                  recursive, each visible in the others' bodies), then run u.letj.body */
     IR_JUMP,   /* tail: u.jump */
     IR_IF,     /* tail: u.if_ */
     IR_RET     /* tail: return atom u.ret */
@@ -99,8 +103,11 @@ struct ir_join {
     int n;
     ir_var **params;
     ir_node *body;
-    int njumps;        /* recomputed by ir_count */
-    ir_lambda *owner;
+    int njumps;        /* recomputed by ir_count / the census; never lower than the real count */
+    ir_lambda *owner;  /* the procedure whose C function holds the label */
+    ir_join *next;     /* further join points of the same LETJ (mutually recursive group) */
+    obj site;          /* optimistic tier-1 continuation: the call/cc core form, else 0 */
+    int state;         /* optimizer scratch */
 };
 
 struct ir_lambda {
@@ -124,7 +131,18 @@ struct ir_lambda {
     library *lib;          /* library whose code creates it (C names, shikra size) */
     ir_lambda *next;       /* all procedures, in creation order */
     int reached;           /* closure layout reached it (others were dead code) */
+    int dead;              /* optimizer: inlined, contified or unreachable; not emitted */
+    int keep;              /* never removed and always a first-class closure (raise, --keep) */
+    int escapes;           /* its closure may reach unknown code (so it keeps the uniform signature) */
+    int direct;            /* direct C signature: obj f(params...), no self, no argc (M4-1 rule) */
+    int mark, low;         /* scratch for passes */
+    int size, sround;      /* optimizer: node count with nested procedures, and its round */
+    int sidx, slow, onstack, rec; /* optimizer: SCC numbering; rec = can reach itself */
+    int onstack2;          /* optimizer scratch (merging of mutual tail recursion) */
 };
+
+/* Optimisation levels (-O): budgets in opt.c. */
+enum { OPT_0, OPT_S, OPT_2 };
 
 typedef struct {
     ir_lambda *lambdas;    /* every procedure (clauses included), creation order */
@@ -134,16 +152,41 @@ typedef struct {
     ir_var **vars;         /* every variable, indexed by id */
     int nvars;
     ir_lambda *raise;      /* (scheme base) raise: the engine's raise entry, or NULL */
+    ir_lambda *travel;     /* (shikra dynamic) travel-to!: tier-2 continuations' winders walk, or NULL */
+    int opt;               /* OPT_* */
 } ir_program;
 
-/* Middle end (normalize.c): tree shaking, normalization to IR, closure layout.
- * Reports the compile-time diagnostics of the middle end (arity of known calls). */
-ir_program *ir_build(library *order);
+/* Options of the middle end. */
+typedef struct {
+    int opt;               /* OPT_* */
+    int warn;              /* report unused definitions and imports (warnings) */
+    const char **keep;     /* program definitions to keep as functions (REPL ,c), NULL-terminated */
+} ir_opts;
+
+/* Middle end (normalize.c): tree shaking, normalization to IR, optimisation (opt.c),
+ * closure layout. Reports the compile-time diagnostics of the middle end (arity of known
+ * calls) and, with warn, unused definitions. */
+ir_program *ir_build(library *order, const ir_opts *o);
 void ir_count(ir_program *p);
 void ir_print(ir_program *p, obj port);
 void c_mangle(sbuf *b, const char *scheme_name); /* readable C identifier characters */
 
+/* Shared constructors (normalize.c) for the passes. */
+ir_var *ir_new_var(obj name, ir_lambda *owner);
+ir_node *ir_new_node(int kind, obj loc);
+ir_lambda *ir_new_lambda(obj name, ir_lambda *parent, library *lib);
+ir_join *ir_new_join(int n, ir_lambda *owner);
+int ir_call_self(ir_node *call); /* known call: 0 no self argument (direct), 1 the callee atom, 2 #f */
+
+/* Optimizer (opt.c, DESIGN.md §11 M4-1). ir_optimize runs the structural passes;
+ * ir_tier1_failures lists the optimistic tier-1 call/cc sites (core forms) whose
+ * continuation is still reached from another C function (they are rebuilt as tier 2);
+ * ir_finish computes escapes, direct signatures, lambda lifting and the closure layout. */
+void ir_optimize(ir_program *p);
+obj ir_tier1_failures(ir_program *p);
+void ir_finish(ir_program *p);
+
 /* Back end (emit.c): the complete C translation unit (DESIGN.md §3). */
-typedef struct { int unsafe, debug, gc_bump, unicode_full, gc_stress; } emit_opts;
+typedef struct { int unsafe, debug, gc_bump, unicode_full, gc_stress, no_musttail; } emit_opts;
 void emit_c(ir_program *p, const emit_opts *o, sbuf *out);
 #endif

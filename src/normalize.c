@@ -1,14 +1,19 @@
-/* normalize.c -- the middle end (spec §5 passes 4 and 6-lite; DESIGN.md §7, §11 M0 part B).
+/* normalize.c -- the middle end (spec §5 passes 4 and 6; DESIGN.md §7, §11 M0 part B, M4-1).
  *
  *   1. tree shaking: keep the top-level forms reachable from the program body and from
- *      side-effecting top-level forms of the libraries;
+ *      side-effecting top-level forms of the libraries (all user code is normalized so its
+ *      diagnostics are complete; the optimizer drops what stays unreachable); unused user
+ *      definitions are reported as warnings;
  *   2. variable analysis on the core forms: one ir_var per binder, assigned / captured;
- *   3. known top-level procedures (defined once by lambda / %case-lambda, never set!);
+ *   3. known top-level procedures (defined once by lambda / %case-lambda, never set!), and
+ *      the first top-level form from which each can run (undefined-global checks);
  *   4. normalization of core forms to the ANF IR (ir.h): letrec* grouping, boxes,
  *      undefined checks, direct lambda application as let, known calls (arity checked
  *      at compile time), self tail calls as jumps to the procedure's entry join point,
- *      call-with-values with a literal receiver as a join point, tier 1 call/cc as jumps;
- *   5. closure layout (free variables), static closures, C names. */
+ *      call-with-values with a literal receiver as a join point, tier 1 call/cc as jumps
+ *      (optimistically also from inside lambdas: verified after optimization, else the
+ *      site is rebuilt as tier 2);
+ *   5. the optimizer (opt.c), then closure layout, static closures, C names. */
 #include "ir.h"
 #include <stdio.h>
 #include <string.h>
@@ -23,11 +28,15 @@ static ir_lambda *cur_lam, *last_lam;
 static library *cur_lib;
 static int cur_form, in_static;
 static obj UNSPEC_FORM;
+static ir_var *new_var(obj name, ir_lambda *owner);
+static pmap demoted;       /* tier-1 sites rebuilt as tier 2 (core form -> 1) */
+static int cur_ff;         /* first_form of the known procedure being normalized */
+static const ir_opts *opts;
 /* (scheme base) procedures the middle end knows (M1 part A): calls to values,
  * call-with-values and apply become the control primitives; call/cc sites may be tier 1;
  * raise is the engine's raise entry. */
-static global *g_values, *g_cwv, *g_apply, *g_callcc1, *g_callcc2, *g_raise;
-static obj S_pvalues, S_pcwv, S_papply;
+static global *g_values, *g_cwv, *g_apply, *g_callcc1, *g_callcc2, *g_raise, *g_travel;
+static obj S_pvalues, S_pcwv, S_papply, S_pcallcc;
 static pmap kctx;          /* tier-1 continuation variable symbol -> ir_join*, or &ret_ctx */
 static ir_join ret_ctx;    /* "k returns from the procedure" */
 static ir_node *dead_sink; /* code after a jump of a tier-1 k goes here and is dropped */
@@ -37,6 +46,7 @@ static ir_node *dead_sink; /* code after a jump of a tier-1 k goes here and is d
 #define CADDR(x) RT_CAR(CDDR(x))
 
 /* ---- constructors ---- */
+ir_var *ir_new_var(obj name, ir_lambda *owner) { return new_var(name, owner); }
 static ir_var *new_var(obj name, ir_lambda *owner) {
     ir_var *v = NEW(ir_var);
     v->id = nvars++;
@@ -62,6 +72,7 @@ static ir_node *node(int kind, obj loc) {
     n->loc = loc;
     return n;
 }
+ir_node *ir_new_node(int kind, obj loc) { return node(kind, loc); }
 static ir_node *mk_const(obj v) { ir_node *n = node(IR_CONST, 0); n->u.value = v; return n; }
 static ir_node *mk_ref(ir_var *v) { ir_node *n = node(IR_REF, 0); n->u.ref.v = v; return n; }
 static ir_node *mk_prim(int op, int n, obj loc) {
@@ -96,6 +107,15 @@ static ir_join *new_join(int n) {
     j->params = NEWN(ir_var *, n);
     j->owner = cur_lam;
     return j;
+}
+ir_join *ir_new_join(int n, ir_lambda *owner) { ir_join *j = new_join(n); j->owner = owner; return j; }
+ir_lambda *ir_new_lambda(obj name, ir_lambda *parent, library *lib) {
+    library *saved = cur_lib;
+    ir_lambda *L;
+    cur_lib = lib;
+    L = new_lambda(name, parent);
+    cur_lib = saved;
+    return L;
 }
 static int is_atom(ir_node *n) { return n->kind == IR_CONST || n->kind == IR_REF; }
 static int prim_index(obj head) {
@@ -149,13 +169,20 @@ static int occurs(obj x, obj s) {
     for (; rt_is_pair(x); x = RT_CDR(x)) if (occurs(RT_CAR(x), s)) return 1;
     return x == s;
 }
+static int k_crossed; /* k is called from inside a lambda: an optimistic site */
 static int k_ok(obj x, obj k) {
     obj h, l;
     if (x == k) return 0;
     if (!rt_is_pair(x)) return 1;
     h = RT_CAR(x);
     if (h == S_quote) return 1;
-    if (is_lambda_form(x)) return !occurs(x, k);
+    if (is_lambda_form(x)) {
+        if (!occurs(x, k)) return 1;
+        k_crossed = 1; /* only calls of k inside: fine if the lambda ends up in this C function */
+        if (h == S_lambda) return k_ok(CADDR(x), k);
+        for (l = RT_CDR(x); l != RT_NIL; l = RT_CDR(l)) if (!k_ok(CADR(RT_CAR(l)), k)) return 0;
+        return 1;
+    }
     if (cwv_inline(x))
         return (is_thunk(CADR(x)) ? k_ok(CADDR(CADR(x)), k) : k_ok(CADR(x), k)) && k_ok(CADDR(CADDR(x)), k);
     if (tier1_site(x)) return k_ok(CADDR(CADR(x)), k);
@@ -167,17 +194,30 @@ static int k_ok(obj x, obj k) {
     for (; rt_is_pair(l); l = RT_CDR(l)) if (!k_ok(RT_CAR(l), k)) return 0;
     return 1;
 }
-static pmap t1memo; /* site -> 1 (no) / 2 (yes) */
-static int tier1_site(obj x) {
+static pmap t1memo; /* site -> 1 (no) / 2 (yes) / 3 (yes, optimistic: k called inside a lambda) */
+static int tier1_kind(obj x) {
     global *g;
     obj f;
     intptr_t m;
     if (!rt_is_pair(x) || !(g = front_global(RT_CAR(x))) || (g != g_callcc1 && g != g_callcc2) || list_len(x) != 2) return 0;
-    if ((m = (intptr_t)pm_get(&t1memo, x))) return m == 2;
+    if ((m = (intptr_t)pm_get(&t1memo, x))) return (int)m - 1;
     f = CADR(x);
-    m = rt_is_pair(f) && RT_CAR(f) == S_lambda && list_len(CADR(f)) == 1 && k_ok(CADDR(f), RT_CAR(CADR(f)));
+    {
+        int saved = k_crossed;
+        k_crossed = 0;
+        m = !pm_get(&demoted, x) && rt_is_pair(f) && RT_CAR(f) == S_lambda && list_len(CADR(f)) == 1 && k_ok(CADDR(f), RT_CAR(CADR(f)));
+        if (m && k_crossed) m = 2;
+        k_crossed = saved;
+    }
     pm_put(&t1memo, x, (void *)(m + 1));
     return (int)m;
+}
+static int tier1_site(obj x) { return tier1_kind(x) != 0; }
+/* Any other call of base's call/cc is %call/cc itself in compiled code: the compiled
+ * continuation walks the winders on its own (rt_core.c), no escape procedure is needed. */
+static int plain_callcc(obj x) {
+    global *g;
+    return rt_is_pair(x) && (g = front_global(RT_CAR(x))) && (g == g_callcc1 || g == g_callcc2) && list_len(x) == 2 && !tier1_site(x);
 }
 
 /* ---- 1. tree shaking ----
@@ -220,11 +260,11 @@ static void mark_refs(obj x) {
     }
     if ((g = front_global(x))) mark_global(g);
 }
+static pmap defs; /* global* -> list of form indices (as fixnums) */
 static void shake(library *order) {
     library *l;
     obj f;
     int i, n = 0, done = 0;
-    pmap defs = {0}; /* global* -> list of form indices (as fixnums) */
     for (l = order; l; l = l->next) n += list_len(l->core);
     tops = NEWN(topform, n);
     for (l = order; l; l = l->next)
@@ -232,7 +272,7 @@ static void shake(library *order) {
             topform *t = &tops[ntops];
             t->form = RT_CAR(f);
             t->lib = l;
-            if (strncmp(l->path, "<builtin>", 9) != 0) t->root = 1; /* user code: always compiled */
+            if (!front_builtin(l)) t->root = 1; /* user code: always compiled (diagnostics) */
             if (rt_is_pair(t->form) && RT_CAR(t->form) == S_define) {
                 obj prev;
                 t->g = front_global(CADR(t->form));
@@ -252,6 +292,101 @@ static void shake(library *order) {
             topform *t = &tops[RT_FIXVAL(RT_CAR(d))];
             if (!t->keep) { t->keep = 1; mark_refs(t->form); }
         }
+    }
+}
+
+/* ---- 3b. the first top-level form from which each known procedure can run ----
+ * Walks the top-level forms in order; a known procedure becomes reachable at the first form
+ * that references it (directly or through procedures reachable from there). Its reads of
+ * globals defined by earlier forms need no undefined check. raise can run at any time. */
+static pmap ffmap; /* global* -> first form index + 1 */
+static int known_def(topform *t) {
+    return t->keep && t->g && t->g->defined == 1 && !t->g->assigned && is_lambda_form(CADDR(t->form));
+}
+static void ff_refs(obj x, int i);
+static void ff_global(global *g, int i) {
+    obj d;
+    if (pm_get(&ffmap, g)) return;
+    pm_put(&ffmap, g, (void *)(intptr_t)(i + 1));
+    for (d = (obj)pm_get(&defs, g); d && d != RT_NIL; d = RT_CDR(d)) {
+        topform *t = &tops[RT_FIXVAL(RT_CAR(d))];
+        if (known_def(t)) ff_refs(CADDR(t->form), i);
+    }
+}
+static void ff_refs(obj x, int i) {
+    global *g;
+    while (rt_is_pair(x)) {
+        if (RT_CAR(x) == S_quote) return;
+        ff_refs(RT_CAR(x), i);
+        x = RT_CDR(x);
+    }
+    if ((g = front_global(x))) ff_global(g, i);
+}
+/* The program's definitions named by --keep (REPL ,c): roots that stay functions. */
+static global *keep_global(library *order, int k) {
+    library *l;
+    binding *b;
+    if (!opts->keep || !opts->keep[k]) return NULL;
+    for (l = order; l; l = l->next)
+        if (l->name == RT_FALSE && (b = (binding *)pm_get(&l->env->map, sym(opts->keep[k]))) && b->kind == B_GLOBAL) return b->g;
+    return NULL;
+}
+static int nkeep(void) { int k = 0; while (opts->keep && opts->keep[k]) k++; return k; }
+static void first_forms(library *order) {
+    int i;
+    if (g_raise) ff_global(g_raise, 0);
+    for (i = 0; i < nkeep(); i++) if (keep_global(order, i)) ff_global(keep_global(order, i), 0);
+    for (i = 0; i < ntops; i++)
+        if (tops[i].keep && !known_def(&tops[i])) ff_refs(tops[i].g ? CADDR(tops[i].form) : tops[i].form, i);
+}
+
+/* Unused definitions (spec §11.3): a definition of the program or of a user library that
+ * nothing reachable refers to. Reachable: the expressions of all code, the right-hand sides
+ * of definitions that are impure (they run) or reachable, the exports of user libraries. */
+static pmap wmarked;
+static global **wwork;
+static int nwwork, wwork_cap;
+static void wmark(global *g) {
+    if (!g || pm_get(&wmarked, g)) return;
+    pm_put(&wmarked, g, (void *)1);
+    if (nwwork == wwork_cap) {
+        global **n = NEWN(global *, wwork_cap * 2 + 64);
+        if (wwork) memcpy(n, wwork, sizeof(global *) * (size_t)nwwork);
+        wwork = n;
+        wwork_cap = wwork_cap * 2 + 64;
+    }
+    wwork[nwwork++] = g;
+}
+static void wmark_refs(obj x) {
+    while (rt_is_pair(x)) {
+        if (RT_CAR(x) == S_quote) return;
+        wmark_refs(RT_CAR(x));
+        x = RT_CDR(x);
+    }
+    wmark(front_global(x));
+}
+static void warn_unused(library *order) {
+    library *l;
+    int i, done = 0;
+    for (l = order; l; l = l->next)
+        if (!front_builtin(l) && l->name != RT_FALSE) {
+            imp *e;
+            for (e = l->exports; e; e = e->next) if (e->b->kind == B_GLOBAL) wmark(e->b->g);
+        }
+    for (i = 0; i < nkeep(); i++) wmark(keep_global(order, i));
+    for (i = 0; i < ntops; i++)
+        if (tops[i].keep) {
+            if (!tops[i].g) wmark_refs(tops[i].form);
+            else if (!pure_rhs(CADDR(tops[i].form))) wmark_refs(CADDR(tops[i].form));
+        }
+    while (done < nwwork) {
+        obj d;
+        for (d = (obj)pm_get(&defs, wwork[done++]); d && d != RT_NIL; d = RT_CDR(d)) wmark_refs(CADDR(tops[RT_FIXVAL(RT_CAR(d))].form));
+    }
+    for (i = 0; i < ntops; i++) {
+        topform *t = &tops[i];
+        if (t->g && !front_builtin(t->lib) && !t->g->nowarn && !pm_get(&wmarked, t->g))
+            cwarning(t->g->defloc ? t->g->defloc : t->form, "unused definition %s", idname(t->g->name));
     }
 }
 
@@ -376,10 +511,12 @@ static void norm_effect(obj x, bld *b) {
 static void put_tail(bld *b, ir_node *n) { *b->hole = n; b->hole = NULL; }
 static ir_node *mk_ret(ir_node *a) { ir_node *r = node(IR_RET, 0); r->u.ret = a; return r; }
 
+/* A global read is checked unless its definition has run: in the program body when the
+ * defining form comes earlier; in a known procedure (and the lambdas inside it) when the
+ * defining form comes before the first top-level form from which the procedure can run. */
 static int global_needs_check(ir_var *v) {
     if (v->known) return 0;
-    if (in_static) return 1;
-    return !(v->def_index >= 0 && v->def_index < cur_form);
+    return !(v->def_index >= 0 && v->def_index < (in_static ? cur_ff : cur_form));
 }
 /* Value of a variable reference: an atom, or a %box-ref (checked through a temporary). */
 static ir_node *ref_value(obj s, bld *b) {
@@ -687,6 +824,16 @@ static ir_node *norm_callcc1(obj x, bld *b, int tail) {
     ir_join *j;
     ir_node **a;
     bld bb;
+    if (tail && tier1_kind(x) == 2) { /* optimistic: k may be called from a lambda, so a join */
+        j = new_join(1);
+        j->params[0] = new_var(sym("k"), cur_lam);
+        j->site = x;
+        mk_letj(b, j, x);
+        pm_put(&kctx, RT_CAR(CADR(f)), j);
+        norm_tail(body, b);
+        j->body = mk_ret(mk_ref(j->params[0]));
+        return NULL;
+    }
     if (tail) {
         pm_put(&kctx, RT_CAR(CADR(f)), &ret_ctx);
         norm_tail(body, b);
@@ -694,6 +841,7 @@ static ir_node *norm_callcc1(obj x, bld *b, int tail) {
     }
     j = new_join(1);
     j->params[0] = new_var(sym("k"), cur_lam);
+    if (tier1_kind(x) == 2) j->site = x;
     bb = *b;
     mk_letj(&bb, j, x);
     pm_put(&kctx, RT_CAR(CADR(f)), j);
@@ -867,6 +1015,7 @@ static ir_node *norm_rhs(obj x, bld *b) {
     if (h == S_define) cerror(x, "internal error: define in expression");
     if (is_kcall(x)) { kjump(x, b); return mk_const(RT_UNSPEC); }
     if (tier1_site(x)) return norm_callcc1(x, b, 0);
+    if (plain_callcc(x)) return norm_prim(setloc(rt_cons(S_pcallcc, RT_CDR(x)), x), b, 0);
     if (cwv_inline(x)) return norm_cwv(x, b, 0);
     if (prim_index(h) >= 0) return norm_prim(x, b, 0);
     if (rt_is_pair(h) && RT_CAR(h) == S_lambda) return norm_rhs(norm_let(x, b), b);
@@ -900,6 +1049,7 @@ static void norm_tail(obj x, bld *b) {
         if (rt_is_pair(h) && RT_CAR(h) == S_lambda) { norm_tail(norm_let(x, b), b); return; }
         if (is_kcall(x)) { kjump(x, b); return; }
         if (tier1_site(x)) { norm_callcc1(x, b, 1); return; }
+        if (plain_callcc(x)) { put_tail(b, norm_prim(setloc(rt_cons(S_pcallcc, RT_CDR(x)), x), b, 1)); return; }
         if (cwv_inline(x)) { norm_cwv(x, b, 1); return; }
         if (h != S_quote && h != S_lambda && h != S_case_lambda && h != S_set && h != S_define) {
             int p = prim_index(h);
@@ -934,59 +1084,6 @@ static void norm_lambda_body(ir_lambda *L, obj x) {
     cur_lam = saved;
 }
 
-/* ---- 5. closure layout ---- */
-static void add_free(ir_lambda *L, ir_var *v) {
-    int i;
-    ir_lambda *me = L->dispatch ? L->dispatch : L;
-    if ((v->flags & V_GLOBAL) || v->owner == L || (v == me->self && !(v->flags & V_ASSIGNED))) return;
-    for (i = 0; i < L->nfree; i++) if (L->free[i] == v) return;
-    if ((L->nfree & 7) == 0) {
-        ir_var **n = NEWN(ir_var *, L->nfree + 8);
-        if (L->nfree) memcpy(n, L->free, sizeof(ir_var *) * (size_t)L->nfree);
-        L->free = n;
-    }
-    L->free[L->nfree++] = v;
-}
-static void free_lambda(ir_lambda *L);
-static void free_sub(ir_lambda *L, ir_lambda *M) {
-    int i;
-    free_lambda(M);
-    for (i = 0; i < M->nfree; i++) add_free(L, M->free[i]);
-}
-static void free_node(ir_lambda *L, ir_node *n) {
-    int i;
-    if (!n) return;
-    switch (n->kind) {
-    case IR_CONST: return;
-    case IR_REF: add_free(L, n->u.ref.v); return;
-    case IR_PRIM: for (i = 0; i < n->u.prim.n; i++) free_node(L, n->u.prim.args[i]); return;
-    case IR_CALL:
-        free_node(L, n->u.call.fn);
-        for (i = 0; i < n->u.call.n; i++) free_node(L, n->u.call.args[i]);
-        return;
-    case IR_LAMBDA: free_sub(L, n->u.lam); return;
-    case IR_SET: add_free(L, n->u.set.v); free_node(L, n->u.set.val); return;
-    case IR_LET: free_node(L, n->u.let.rhs); free_node(L, n->u.let.body); return;
-    case IR_FIX:
-        for (i = 0; i < n->u.fix.n; i++) free_sub(L, n->u.fix.lams[i]);
-        free_node(L, n->u.fix.body);
-        return;
-    case IR_LETJ: free_node(L, n->u.letj.j->body); free_node(L, n->u.letj.body); return;
-    case IR_JUMP: for (i = 0; i < n->u.jump.n; i++) free_node(L, n->u.jump.args[i]); return;
-    case IR_IF: free_node(L, n->u.if_.test); free_node(L, n->u.if_.then); free_node(L, n->u.if_.els); return;
-    case IR_RET: free_node(L, n->u.ret); return;
-    }
-}
-static void free_lambda(ir_lambda *L) {
-    int i;
-    L->reached = 1;
-    if (L->nclauses) {
-        for (i = 0; i < L->nclauses; i++) free_sub(L, L->clauses[i]);
-        for (i = 0; i < L->nclauses; i++) { L->clauses[i]->nfree = L->nfree; L->clauses[i]->free = L->free; }
-    } else free_node(L, L->body);
-    L->is_static = L->nfree == 0;
-}
-
 /* C names: P_<library>__<procedure>[__<inner>...], unique. */
 void c_mangle(sbuf *b, const char *s) {
     static const char *const ops[][2] = {{"+", "plus"}, {"-", "minus"}, {"*", "times"}, {"/", "div"},
@@ -1008,32 +1105,40 @@ void c_mangle(sbuf *b, const char *s) {
         else sb_printf(b, "_%02x", c);
     }
 }
-static void name_lambdas(void) {
-    htab used = {0};
-    ir_lambda *L;
-    for (L = prog->lambdas; L; L = L->next) {
-        sbuf b = {0};
-        int k = 1;
-        size_t len;
-        if (L == prog->main) sb_puts(&b, "P_init");
-        else if (L->dispatch) {
-            int i;
-            for (i = 0; L->dispatch->clauses[i] != L; i++) {}
-            sb_printf(&b, "%s__%d", L->dispatch->cname, i + 1);
+static htab used_names;
+static void name_lambda(ir_lambda *L) {
+    sbuf b = {0};
+    int k = 1;
+    size_t len;
+    if (L->cname) return;
+    if (L == prog->main) sb_puts(&b, "P_init");
+    else if (L->dispatch) {
+        int i;
+        name_lambda(L->dispatch);
+        for (i = 0; L->dispatch->clauses[i] != L; i++) {}
+        sb_printf(&b, "%s__%d", L->dispatch->cname, i + 1);
+    } else {
+        if (!L->parent || L->parent == prog->main) {
+            sb_puts(&b, "P_");
+            c_mangle(&b, L->lib ? L->lib->id : "main");
         } else {
-            if (!L->parent || L->parent == prog->main) {
-                sb_puts(&b, "P_");
-                c_mangle(&b, L->lib ? L->lib->id : "main");
-            } else sb_puts(&b, L->parent->cname);
-            sb_puts(&b, "__");
-            c_mangle(&b, RT_STR(RT_PTR(L->name, rt_symbol)->name)->buf);
+            name_lambda(L->parent);
+            sb_puts(&b, L->parent->cname);
         }
-        len = b.len;
-        while (ht_get(&used, b.s)) { b.len = len; sb_printf(&b, "_%d", ++k); }
-        L->cname = arena_strdup(&compiler_arena, b.s);
-        ht_put(&used, L->cname, L);
-        sb_free(&b);
+        sb_puts(&b, "__");
+        c_mangle(&b, RT_STR(RT_PTR(L->name, rt_symbol)->name)->buf);
     }
+    len = b.len;
+    while (ht_get(&used_names, b.s)) { b.len = len; sb_printf(&b, "_%d", ++k); }
+    L->cname = arena_strdup(&compiler_arena, b.s);
+    ht_put(&used_names, L->cname, L);
+    sb_free(&b);
+}
+/* C names: P_<library>__<procedure>[__<inner>...], unique; in creation order, so the
+ * outermost procedure of a name gets it unsuffixed. */
+static void name_lambdas(void) {
+    ir_lambda *L;
+    for (L = prog->lambdas; L; L = L->next) name_lambda(L);
 }
 
 /* ---- def/use counts ----
@@ -1060,7 +1165,7 @@ static void count_node(ir_node *n) {
     case IR_REF: n->u.ref.v->nrefs++; return;
     case IR_PRIM: for (i = 0; i < n->u.prim.n; i++) count_node(n->u.prim.args[i]); return;
     case IR_CALL:
-        count_node(n->u.call.fn);
+        if (n->u.call.fn && ir_call_self(n) == 1) count_node(n->u.call.fn); /* else no self argument */
         for (i = 0; i < n->u.call.n; i++) count_node(n->u.call.args[i]);
         return;
     case IR_LAMBDA: {
@@ -1081,7 +1186,12 @@ static void count_node(ir_node *n) {
         count_node(n->u.fix.body);
         return;
     }
-    case IR_LETJ: count_node(n->u.letj.j->body); count_node(n->u.letj.body); return;
+    case IR_LETJ: {
+        ir_join *j;
+        for (j = n->u.letj.j; j; j = j->next) count_node(j->body);
+        count_node(n->u.letj.body);
+        return;
+    }
     case IR_JUMP: /* arguments are counted later, only for parameters that are used */
         n->u.jump.j->njumps++;
         for (i = 0; i < n->u.jump.n; i++) add_pending(n->u.jump.j->params[i], n->u.jump.args[i]);
@@ -1095,7 +1205,12 @@ static void reset_joins(ir_node *n) {
         switch (n->kind) {
         case IR_LET: n = n->u.let.body; continue;
         case IR_FIX: n = n->u.fix.body; continue;
-        case IR_LETJ: n->u.letj.j->njumps = 0; reset_joins(n->u.letj.j->body); n = n->u.letj.body; continue;
+        case IR_LETJ: {
+            ir_join *j;
+            for (j = n->u.letj.j; j; j = j->next) { j->njumps = 0; reset_joins(j->body); }
+            n = n->u.letj.body;
+            continue;
+        }
         case IR_IF: reset_joins(n->u.if_.then); n = n->u.if_.els; continue;
         default: return;
         }
@@ -1126,28 +1241,27 @@ void ir_count(ir_program *p) {
 }
 
 /* ---- driver ---- */
-ir_program *ir_build(library *order) {
+/* Forget the IR of a previous round (the core forms and the shaking results stay). */
+static void reset_round(void) {
+    int i;
+    for (i = 0; i < ngwork; i++) gwork[i]->mid = NULL;
+    for (i = 0; i < ntops; i++) if (tops[i].g) tops[i].g->mid = NULL;
+    memset(&varmap, 0, sizeof varmap);
+    memset(&kctx, 0, sizeof kctx);
+    memset(&t1memo, 0, sizeof t1memo);
+    nvars = nlams = njoins = lamtok = vscope_cap = 0;
+    vscope = NULL;
+    cur_lam = last_lam = NULL;
+    cur_lib = NULL;
+    cur_form = in_static = 0;
+    dead_sink = NULL;
+}
+static void normalize_program(library *order) {
     int i, k;
+    global *kg;
     ir_lambda *L;
     prog = NEW(ir_program);
-    UNSPEC_FORM = L2(S_quote, RT_UNSPEC);
-    for (i = 0; i < NPRIMS_ALL; i++) pm_put(&primmap, sym(prim_table[i].name), (void *)(intptr_t)(i + 1));
-    S_pvalues = sym("%values");
-    S_pcwv = sym("%call-with-values");
-    S_papply = sym("%apply");
-    g_values = base_global(order, "values");
-    g_cwv = base_global(order, "call-with-values");
-    g_apply = base_global(order, "apply");
-    g_callcc1 = base_global(order, "call-with-current-continuation");
-    g_callcc2 = base_global(order, "call/cc");
-    g_raise = base_global(order, "raise");
-    {
-        library *l;
-        obj f;
-        for (l = order; l; l = l->next)
-            for (f = l->core; f != RT_NIL; f = RT_CDR(f)) rewrite_aliases(RT_CAR(f));
-    }
-    shake(order);
+    prog->opt = opts->opt;
     for (i = 0; i < ntops; i++) {
         if (!tops[i].keep) continue;
         if (tops[i].g) gvar(tops[i].g)->def_index = i;
@@ -1163,7 +1277,7 @@ ir_program *ir_build(library *order) {
     for (i = 0; i < ntops; i++) {
         topform *t = &tops[i];
         global *g = t->g;
-        if (t->keep && g && g->defined == 1 && !g->assigned && is_lambda_form(CADDR(t->form))) {
+        if (known_def(t)) {
             ir_var *v = gvar(g);
             cur_lib = t->lib;
             L = shell(CADDR(t->form), g->name, NULL);
@@ -1202,8 +1316,11 @@ ir_program *ir_build(library *order) {
         for (i = 0; i < ntops; i++) {
             topform *t = &tops[i];
             obj saved = loc_ctx;
+            intptr_t ff;
             if (!t->keep || !t->g || !gvar(t->g)->known) continue;
             cur_lib = t->lib;
+            ff = (intptr_t)pm_get(&ffmap, t->g);
+            cur_ff = ff ? (int)ff - 1 : 0x7fffffff; /* never reached: dropped later */
             if (has_loc(t->form)) loc_ctx = t->form;
             norm_lambda_body(gvar(t->g)->known, CADDR(t->form));
             loc_ctx = saved;
@@ -1212,20 +1329,55 @@ ir_program *ir_build(library *order) {
     }
     /* globals: every reachable one */
     prog->globals = NEWN(ir_var *, ngwork);
-    for (k = 0; k < ngwork; k++) {
-        ir_var *v = gvar(gwork[k]);
-        prog->globals[prog->nglobals++] = v;
+    for (k = 0; k < ngwork; k++) prog->globals[prog->nglobals++] = gvar(gwork[k]);
+    if (g_raise && gvar(g_raise)->known) (prog->raise = gvar(g_raise)->known)->keep = 1;
+    if (g_travel && g_travel->mid && gvar(g_travel)->known) (prog->travel = gvar(g_travel)->known)->keep = 1;
+    for (i = 0; i < nkeep(); i++)
+        if ((kg = keep_global(order, i)) && gvar(kg)->known) gvar(kg)->known->keep = 1;
+}
+
+ir_program *ir_build(library *order, const ir_opts *o) {
+    int i;
+    opts = o;
+    UNSPEC_FORM = L2(S_quote, RT_UNSPEC);
+    for (i = 0; i < NPRIMS_ALL; i++) pm_put(&primmap, sym(prim_table[i].name), (void *)(intptr_t)(i + 1));
+    S_pvalues = sym("%values");
+    S_pcwv = sym("%call-with-values");
+    S_papply = sym("%apply");
+    g_values = base_global(order, "values");
+    g_cwv = base_global(order, "call-with-values");
+    g_apply = base_global(order, "apply");
+    g_callcc1 = base_global(order, "call-with-current-continuation");
+    g_callcc2 = base_global(order, "call/cc");
+    g_raise = base_global(order, "raise");
+    S_pcallcc = sym("%call/cc");
+    {
+        library *l;
+        binding *b;
+        for (l = order; l; l = l->next)
+            if (!strcmp(l->id, "shikra/dynamic") && (b = (binding *)pm_get(&l->env->map, sym("travel-to!"))) && b->kind == B_GLOBAL)
+                g_travel = b->g;
     }
-    /* 5. closure layout, names, counts */
-    for (L = prog->lambdas; L; L = L->next)
-        if (!L->parent || L == prog->main) free_lambda(L);
-    {   /* drop procedures created in dead code (after a tier-1 jump) */
-        ir_lambda **pp = &prog->lambdas;
-        for (L = prog->lambdas; L; L = L->next)
-            if (L->reached) { *pp = L; pp = &L->next; }
-        *pp = NULL;
+    {
+        library *l;
+        obj f;
+        for (l = order; l; l = l->next)
+            for (f = l->core; f != RT_NIL; f = RT_CDR(f)) rewrite_aliases(RT_CAR(f));
     }
-    if (g_raise && gvar(g_raise)->known) prog->raise = gvar(g_raise)->known;
+    shake(order);
+    first_forms(order);
+    if (o->warn) warn_unused(order);
+    /* Optimistic tier-1 sites whose continuation is still reached from another C function
+     * after optimization are rebuilt as tier 2 (at most a few rounds: each demotes a site). */
+    for (;;) {
+        obj fails, l;
+        normalize_program(order);
+        ir_optimize(prog);
+        if ((fails = ir_tier1_failures(prog)) == RT_NIL) break;
+        for (l = fails; l != RT_NIL; l = RT_CDR(l)) pm_put(&demoted, RT_CAR(l), (void *)1);
+        reset_round();
+    }
+    ir_finish(prog);
     name_lambdas();
     ir_count(prog);
     return prog;
@@ -1266,7 +1418,12 @@ static void pr_rhs(ir_node *n, obj port) {
         rt_port_puts(port, n->u.call.tail ? "(tailcall" : "(call");
         if (n->u.call.ctl == CTL_APPLY) rt_port_puts(port, "/apply");
         if (n->u.call.ctl == CTL_CWV) rt_port_puts(port, "/cwv");
-        if (n->u.call.known) { rt_port_puts(port, " ["); rt_port_puts(port, n->u.call.known->cname); rt_port_putc(port, ']'); }
+        if (n->u.call.known) {
+            rt_port_puts(port, " [");
+            rt_port_puts(port, n->u.call.known->cname ? n->u.call.known->cname : "?dead");
+            if (n->u.call.known->direct) rt_port_puts(port, " direct");
+            rt_port_putc(port, ']');
+        }
         if (n->u.call.fn) { rt_port_putc(port, ' '); pr_atom(n->u.call.fn, port); }
         pr_args(n->u.call.args, n->u.call.n, port);
         rt_port_putc(port, ')');
@@ -1309,15 +1466,18 @@ static void pr_term(ir_node *n, obj port, int d) {
             n = n->u.fix.body;
             continue;
         case IR_LETJ: {
-            ir_join *j = n->u.letj.j;
+            ir_join *j;
             char buf[32];
             pr_term(n->u.letj.body, port, d);
-            pr_indent(port, d);
-            snprintf(buf, sizeof buf, "j%d (", j->id);
-            rt_port_puts(port, buf);
-            for (i = 0; i < j->n; i++) { if (i) rt_port_putc(port, ' '); pr_var(j->params[i], port); }
-            rt_port_puts(port, "):\n");
-            n = j->body;
+            for (j = n->u.letj.j; j; j = j->next) {
+                pr_indent(port, d);
+                snprintf(buf, sizeof buf, "j%d (", j->id);
+                rt_port_puts(port, buf);
+                for (i = 0; i < j->n; i++) { if (i) rt_port_putc(port, ' '); pr_var(j->params[i], port); }
+                rt_port_puts(port, "):\n");
+                if (j->next) pr_term(j->body, port, d + 1);
+                else n = j->body;
+            }
             continue;
         }
         case IR_IF:
@@ -1364,6 +1524,7 @@ void ir_print(ir_program *p, obj port) {
             for (i = 0; i < L->nfree; i++) { rt_port_putc(port, ' '); pr_var(L->free[i], port); }
         }
         if (L->is_static) rt_port_puts(port, " static");
+        if (L->direct) rt_port_puts(port, " direct");
         rt_port_putc(port, '\n');
         if (L->entry && L->entry->njumps) {
             char buf[32];

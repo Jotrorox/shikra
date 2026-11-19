@@ -16,6 +16,8 @@
   (define (inexact? x) (%inexact? x))
   (define (exact-integer? x) (%exact-integer? x))
 
+  ;; Explicit clauses for up to four arguments, so a known call inlines to nested binary
+  ;; primitives (every argument is still checked, in order, as by the general clause).
   (define-syntax define-comparison
     (syntax-rules ()
       ((_ name prim)
@@ -23,6 +25,8 @@
          (case-lambda
            ((a b) (prim a b))
            ((a) (prim a a) #t)
+           ((a b c) (let ((ok (prim a b))) (if (prim b c) ok #f)))
+           ((a b c d) (let* ((ok (prim a b)) (ok (if (prim b c) ok #f))) (if (prim c d) ok #f)))
            ((a b . rest)
             (let loop ((x b) (rest rest) (ok (prim a b)))
               (if (%null? rest)
@@ -43,6 +47,8 @@
            (() identity)
            ((a) (prim a identity))
            ((a b) (prim a b))
+           ((a b c) (prim (prim a b) c))
+           ((a b c d) (prim (prim (prim a b) c) d))
            ((a b . rest)
             (let loop ((acc (prim a b)) (rest rest))
               (if (%null? rest) acc (loop (prim acc (%car rest)) (%cdr rest))))))))))
@@ -56,6 +62,7 @@
          (case-lambda
            ((a) (prim one a))
            ((a b) (prim a b))
+           ((a b c) (prim (prim a b) c))
            ((a b . rest)
             (let loop ((acc (prim a b)) (rest rest))
               (if (%null? rest) acc (loop (prim acc (%car rest)) (%cdr rest))))))))))
@@ -64,6 +71,7 @@
     (case-lambda
       ((a) (%negate a))
       ((a b) (%- a b))
+      ((a b c) (%- (%- a b) c))
       ((a b . rest)
        (let loop ((acc (%- a b)) (rest rest))
          (if (%null? rest) acc (loop (%- acc (%car rest)) (%cdr rest)))))))

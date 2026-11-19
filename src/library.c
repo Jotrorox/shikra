@@ -119,6 +119,19 @@ void cerror(obj where, const char *fmt, ...) {
     fputc('\n', stderr);
     exit(1);
 }
+void cwarning(obj where, const char *fmt, ...) {
+    obj f;
+    intptr_t l, c;
+    va_list ap;
+    rt_flush(rt_stdout);
+    fflush(stdout);
+    if (get_loc(where, &f, &l, &c)) fprintf(stderr, "%s:%ld:%ld: ", RT_STR(f)->buf, (long)l, (long)c);
+    fputs("warning: ", stderr);
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\n', stderr);
+}
 const char *idname(obj id) { return RT_STR(RT_PTR(strip_id(id), rt_symbol)->name)->buf; }
 
 /* A runtime error raised inside the compiler (reader errors, or a primitive applied to a
@@ -384,14 +397,45 @@ static imp *import_set(obj spec, library **from) {
     return out;
 }
 
+/* Unused-import warnings (spec §11.3): each import set of the program or of a user library
+ * gets a record; every identifier it binds remembers it, and lookup marks it used. */
+typedef struct imp_use { import_rec *rec; binding *b; struct imp_use *next; } imp_use;
+int front_builtin(library *lib) { return !strncmp(lib->path, "<builtin>", 9); }
+void front_note_use(library *lib, obj id, binding *b) {
+    imp_use *u;
+    for (u = (imp_use *)pm_get(&lib->imported, id); u; u = u->next)
+        if (u->b == b) u->rec->used = 1;
+}
 static void import_into(frame *env, obj spec) {
     library *from = NULL;
     imp *i = import_set(spec, &from);
+    import_rec *rec = NULL;
+    library *lib = env->lib;
+    if (lib && !env->open && !front_builtin(lib)) {
+        import_rec **pp = &lib->imports;
+        while (*pp) pp = &(*pp)->next;
+        *pp = rec = NEW(import_rec);
+        rec->spec = spec;
+    }
     for (; i; i = i->next) {
         binding *old = (binding *)pm_get(&env->map, i->name);
         if (old && old != i->b && !env->open) cerror(spec, "%s is imported twice with different bindings", idname(i->name));
         pm_put(&env->map, i->name, i->b);
+        if (rec) {
+            imp_use *u = NEW(imp_use);
+            u->rec = rec;
+            u->b = i->b;
+            u->next = (imp_use *)pm_get(&lib->imported, i->name);
+            pm_put(&lib->imported, i->name, u);
+        }
     }
+}
+void front_warn_imports(void) {
+    library *l;
+    import_rec *r;
+    for (l = front_order; l; l = l->next)
+        for (r = l->imports; r; r = r->next)
+            if (!r->used) cwarning(r->spec, "unused import %s", dstr(r->spec));
 }
 
 static void resolve_exports(library *lib) {

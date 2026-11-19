@@ -120,11 +120,22 @@
     (case-lambda
       ((f s) (for-each f (string->list* s)))
       ((f . ss) (%apply for-each (%cons f (map string->list* ss))))))
+  ;; One vector: an index loop (inlines to a C loop specialised to f). The results are
+  ;; collected in a list, so a continuation that returns twice does not mutate a vector
+  ;; already returned (R7RS 6.10).
   (define vector-map
     (case-lambda
-      ((f v) (%list->vector (map f (vector->list* v))))
+      ((f v)
+       (let ((n (%vector-length v)))
+         (let loop ((i 0) (acc '()))
+           (if (%< i n)
+               (loop (%+ i 1) (%cons (f (%vector-ref v i)) acc))
+               (%list->vector (%reverse acc))))))
       ((f . vs) (%list->vector (%apply map (%cons f (map vector->list* vs)))))))
   (define vector-for-each
     (case-lambda
-      ((f v) (for-each f (vector->list* v)))
+      ((f v)
+       (let ((n (%vector-length v)))
+         (let loop ((i 0))
+           (if (%< i n) (begin (f (%vector-ref v i)) (loop (%+ i 1)))))))
       ((f . vs) (%apply for-each (%cons f (map vector->list* vs)))))))

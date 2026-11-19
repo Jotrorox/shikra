@@ -196,10 +196,13 @@ static void show_c(obj name) {
     sb_puts(&text, RT_STR(rt_get_output_string(port))->buf);
     if (write(fd, text.s, text.len) != (ssize_t)text.len) { close(fd); unlink(path); say("cannot write ", path, NULL); return; }
     close(fd);
-    av = (char **)xmalloc(sizeof(char *) * (size_t)(2 * opts->fo.nincdirs + 8));
+    av = (char **)xmalloc(sizeof(char *) * (size_t)(2 * opts->fo.nincdirs + 12));
     i = 0;
     av[i++] = (char *)opts->argv0;
     av[i++] = "emit-c";
+    av[i++] = "-w";       /* no warnings: the session's imports are rarely all used */
+    av[i++] = "--keep";   /* the definition stays a function even if inlined or unused */
+    av[i++] = (char *)nm;
     av[i++] = "-I";
     av[i++] = (char *)(opts->fo.progdir ? opts->fo.progdir : ".");
     for (st = 0; st < opts->fo.nincdirs; st++) { av[i++] = "-I"; av[i++] = (char *)opts->fo.incdirs[st]; }

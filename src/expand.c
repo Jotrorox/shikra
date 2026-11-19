@@ -97,7 +97,11 @@ static binding *lookup_in(frame *env, obj id, frame **where) {
         alias_t *a;
         for (f = env; f; f = f->parent) {
             binding *b = (binding *)pm_get(&f->map, id);
-            if (b) { if (where) *where = f; return b; }
+            if (b) {
+                if (where) *where = f;
+                if (f->lib && f->lib->imports) front_note_use(f->lib, id, b);
+                return b;
+            }
         }
         if (!(a = alias_of(id))) return NULL;
         env = a->env;
@@ -835,7 +839,7 @@ static obj expand(obj x, frame *env) {
 
 /* ---- bodies and top level: scan definitions, then expand ---- */
 typedef struct item { int def; obj sym, form, src, ctx; struct item *next; } item;
-typedef struct { item *head, **tail; frame *f; library *top; } scanner;
+typedef struct { item *head, **tail; frame *f; library *top; int quiet; } scanner;
 
 static void add_item(scanner *s, int def, obj sym_, obj form, obj src) {
     item *it = NEW(item);
@@ -857,6 +861,7 @@ static obj define_name(scanner *s, obj id, obj src) {
     g = new_global(s->top, id);
     g->defined = 1;
     g->defloc = src;
+    g->nowarn = s->quiet || id != strip_id(id); /* record procedures and macro-introduced names */
     b = new_binding(B_GLOBAL);
     b->g = g;
     pm_put(&s->f->map, id, b);
@@ -902,7 +907,13 @@ static void scan_form(scanner *s, obj x) {
             pm_put(&s->f->map, CADR(x), nb);
             goto done;
         }
-        case K_DEFINE_RECORD_TYPE: scan_form(s, setloc(rw_record(x), x)); goto done;
+        case K_DEFINE_RECORD_TYPE: { /* its procedures are never reported as unused */
+            int q = s->quiet;
+            s->quiet = 1;
+            scan_form(s, setloc(rw_record(x), x));
+            s->quiet = q;
+            goto done;
+        }
         case K_DEFINE_VALUES: scan_form(s, setloc(rw_define_values(x), x)); goto done;
         case K_INCLUDE: case K_INCLUDE_CI: scan_list(s, include_forms(x, b->id == K_INCLUDE_CI)); goto done;
         case K_COND_EXPAND: scan_list(s, cond_expand_select(x)); goto done;
@@ -922,7 +933,7 @@ static obj expand_item(item *it, frame *env) {
 }
 
 static obj expand_body(obj body, frame *env, obj src) {
-    scanner s;
+    scanner s = {0};
     item *it, *lastdef = NULL;
     obj binds = RT_NIL, exprs = RT_NIL;
     s.head = NULL; s.tail = &s.head; s.f = new_frame(env); s.top = NULL;
@@ -945,7 +956,7 @@ static obj expand_body(obj body, frame *env, obj src) {
 }
 
 void expand_toplevel(library *lib, obj forms) {
-    scanner s;
+    scanner s = {0};
     item *it;
     obj out = RT_NIL;
     s.head = NULL; s.tail = &s.head; s.f = lib->env; s.top = lib;

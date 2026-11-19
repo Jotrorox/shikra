@@ -2,6 +2,7 @@
  * tests/run.sh builds: #define SHIKRA_PROGRAM + rt.h + this file + every rt_*.c, as one
  * translation unit, with -Wall -Wextra -Werror, then runs it. */
 static void rt_engine_raise(obj e) { rt_uncaught(e); }
+static void rt_engine_travel(obj w) { rt_winders = w; }
 
 static obj fib(obj n) {
     if (rt_lt(n, RT_FIX(2)) != RT_FALSE) return n;

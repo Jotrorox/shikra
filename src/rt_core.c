@@ -15,6 +15,11 @@ static RT_UNUSED obj core_argbuf[RT_ARGBUF];
 static RT_UNUSED intptr_t core_argcap = RT_ARGBUF;
 RT_VAR obj *rt_args = core_argbuf;
 RT_VAR obj rt_winders = RT_NIL, rt_handlers = RT_NIL;
+#ifndef RT_HAVE_MUSTTAIL
+RT_VAR rt_code rt_tr_fn; /* the trampoline's pending tail call (rt.h) */
+RT_VAR obj rt_tr_self, rt_tr_a[4];
+RT_VAR intptr_t rt_tr_argc;
+#endif
 static RT_UNUSED obj *core_symtab, *core_symend; /* open addressing; 0 = empty slot */
 static RT_UNUSED intptr_t core_symcount;
 
@@ -565,9 +570,11 @@ RT_FN obj rt_parameter_binding(obj cell) {
 
 /* ---- the compiled engine's escapes: %call/cc, tier 2 (spec §8.2) ----
  * A capture is a core_cont frame on the C stack (jump buffer, saved winders and handler
- * lists) plus a heap procedure k whose free[0] points at the frame (a raw word that looks
- * like a fixnum) or is #f once the frame is gone. core_conts lists the live frames,
- * innermost first, so a jump can mark every frame it discards as dead. Tier 3 (M5) adds a
+ * lists) plus a heap procedure k (3 words) whose free[0] points at the frame (a raw word
+ * that looks like a fixnum) or is #f once the frame is gone. core_conts lists the live
+ * frames, innermost first, so a jump can mark every frame it discards as dead. Invoking k
+ * first walks the winders back to the capture's (rt_engine_travel: after/before thunks),
+ * so base's call/cc needs no escape procedure in compiled code (M4-1). Tier 3 (M5) adds a
  * heap copy of the stack segment for k instead of #f. */
 #ifdef SHIKRA_PROGRAM
 typedef struct core_cont { rt_jmpbuf jb; struct core_cont *prev; obj winders, handlers, f, k, val; } core_cont;
@@ -575,8 +582,12 @@ static core_cont *core_conts;
 static obj core_cont_code(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3) {
     core_cont *c = (core_cont *)(void *)RT_PROC(self)->free[0], *t;
     obj v = argc == 1 ? a0 : rt_make_values(rt_rest_list(argc, 0, a0, a1, a2, a3));
-    if ((obj)(void *)c == RT_FALSE)
-        rt_error("continuation", "re-entrant continuation not supported yet (milestone M5)", RT_NIL);
+    if ((obj)(void *)c == RT_FALSE) rt_error(0, "re-entrant continuation not supported yet (milestone M5)", RT_NIL);
+    if (c->winders != rt_winders) { /* after thunks may escape, or end the capture's extent */
+        rt_engine_travel(c->winders);
+        if ((obj)(void *)(c = (core_cont *)(void *)RT_PROC(self)->free[0]) == RT_FALSE)
+            rt_error(0, "re-entrant continuation not supported yet (milestone M5)", RT_NIL);
+    }
     for (t = core_conts; t != c; t = t->prev) RT_PROC(t->k)->free[0] = RT_FALSE;
     core_conts = c;
     c->val = v;
@@ -586,7 +597,7 @@ static obj core_cont_code(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a
 }
 static void core_callcc_run(void *p) {
     core_cont *c = (core_cont *)p;
-    c->val = RT_PROC(c->f)->code(c->f, 1, c->k, 0, 0, 0);
+    c->val = RT_NT(RT_PROC(c->f)->code(c->f, 1, c->k, 0, 0, 0));
 }
 RT_FN obj rt_call_cc(obj f) {
     core_cont c;

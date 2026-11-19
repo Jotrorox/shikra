@@ -320,6 +320,9 @@ static void rt_program_main(void);
  * "loc: error: msg ..." when the error carries a location) to stderr, exits 70. */
 #ifdef SHIKRA_PROGRAM
 static RT_NORETURN void rt_engine_raise(obj e);
+/* Also generated: make w the winders list, running after/before thunks ((shikra dynamic)
+ * travel-to!); a tier-2 continuation calls it before it jumps (spec §8.4). */
+static void rt_engine_travel(obj w);
 #else
 RT_EXTVAR void (*rt_raise_hook)(obj e);
 #endif
@@ -381,15 +384,45 @@ RT_FN intptr_t *rt_addrtab_get(rt_addrtab *t, obj a, obj b, int insert);
  * Arguments beyond a3 are stored by the caller in rt_args[0..argc-5] right before the call
  * and copied out by the callee at entry, before anything else can call. Tail calls are
  * `RT_MUSTTAIL return f(...);`. */
-#ifdef __has_attribute
+#if !defined(SHIKRA_NO_MUSTTAIL) && defined(__has_attribute)
 #if __has_attribute(musttail)
 #define RT_MUSTTAIL __attribute__((musttail))
+#define RT_HAVE_MUSTTAIL 1
 #endif
 #endif
-#ifndef RT_MUSTTAIL
-/* TODO(M4): trampoline fallback (spec §8.1). Until then compilers without musttail rely on
- * sibling-call optimisation, which -O2 performs for these calls but -O0 does not. */
+/* Generated code: RT_TAIL is a tail call between uniform-signature procedures, RT_DTAIL one
+ * from a direct-signature procedure (never on a tail-call cycle, so a plain call is enough),
+ * RT_NT wraps every other call. Without musttail (or with SHIKRA_NO_MUSTTAIL, the hidden
+ * --no-musttail flag) tail calls go through a trampoline (spec §8.1): the caller stores the
+ * callee and its arguments and returns RT_TRAMP; RT_NT calls pending callees until a real
+ * value comes back. Arguments beyond a3 stay in rt_args meanwhile (nothing runs between). */
+#ifdef RT_HAVE_MUSTTAIL
+#define RT_TAIL(f, s, n, a0, a1, a2, a3) RT_MUSTTAIL return f(s, n, a0, a1, a2, a3)
+#define RT_DTAIL(f, s, n, a0, a1, a2, a3) return f(s, n, a0, a1, a2, a3)
+#define RT_NT(e) (e)
+#else
 #define RT_MUSTTAIL
+#define RT_TRAMP ((obj)(uintptr_t)0x707)
+RT_EXTVAR rt_code rt_tr_fn;
+RT_EXTVAR obj rt_tr_self, rt_tr_a[4];
+RT_EXTVAR intptr_t rt_tr_argc;
+RT_INLINE obj rt_tramp(rt_code f, obj s, intptr_t n, obj a0, obj a1, obj a2, obj a3) {
+    rt_tr_fn = f;
+    rt_tr_self = s;
+    rt_tr_argc = n;
+    rt_tr_a[0] = a0;
+    rt_tr_a[1] = a1;
+    rt_tr_a[2] = a2;
+    rt_tr_a[3] = a3;
+    return RT_TRAMP;
+}
+RT_INLINE obj rt_tramp_run(obj r) {
+    while (RT_UNLIKELY(r == RT_TRAMP)) r = rt_tr_fn(rt_tr_self, rt_tr_argc, rt_tr_a[0], rt_tr_a[1], rt_tr_a[2], rt_tr_a[3]);
+    return r;
+}
+#define RT_TAIL(f, s, n, a0, a1, a2, a3) return rt_tramp(f, s, n, a0, a1, a2, a3)
+#define RT_DTAIL RT_TAIL
+#define RT_NT(e) rt_tramp_run(e)
 #endif
 #define RT_ARGBUF 64
 RT_EXTVAR obj *rt_args;

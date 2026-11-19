@@ -65,6 +65,7 @@ typedef struct global {
     obj defloc;   /* the define form (diagnostics) */
     void *mid;    /* middle end: its ir_var */
     obj cell;     /* interpreter: its value cell (0 until first compiled) */
+    int nowarn;   /* never reported as an unused definition (record procedures, hygienic names) */
 } global;
 
 enum { B_CORE, B_MACRO, B_GLOBAL, B_LOCAL, B_PRIM };
@@ -84,6 +85,8 @@ struct frame {
 };
 
 typedef struct imp { obj name; binding *b; obj loc; struct imp *next; } imp;
+/* An import set of a user library or the program, for the unused-import warning. */
+typedef struct import_rec { obj spec; int used; struct import_rec *next; } import_rec;
 
 struct library {
     obj name;       /* (scheme base); #f for the program */
@@ -96,6 +99,8 @@ struct library {
     obj body;       /* top-level forms to expand (list) */
     obj core;       /* expanded top-level core forms, in order (list) */
     library *next;  /* initialisation order (front_order) */
+    import_rec *imports; /* user libraries and the program: their import sets */
+    pmap imported;  /* identifier -> chain of (import set, binding) it was imported by (library.c) */
 };
 
 /* ---- options and entry points ---- */
@@ -132,6 +137,10 @@ void unparse(obj x, obj port, int raw);
 
 /* ---- diagnostics: "file:line:col: error: msg" on stderr, exit 1 ---- */
 UTIL_NORETURN void cerror(obj where, const char *fmt, ...) UTIL_PRINTF(2, 3);
+void cwarning(obj where, const char *fmt, ...) UTIL_PRINTF(2, 3); /* "file:line:col: warning: msg" */
+void front_note_use(library *lib, obj id, binding *b); /* an identifier resolved in lib's top frame */
+void front_warn_imports(void);        /* unused import sets of the program and user libraries */
+int front_builtin(library *lib);      /* a built-in (embedded) library */
 extern obj loc_ctx;                   /* fallback location: innermost located form */
 int has_loc(obj x);
 obj setloc(obj dst, obj src);         /* give pair dst src's location (or loc_ctx's) unless it has one */

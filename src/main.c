@@ -5,7 +5,10 @@
  *   debug-expand FILE   every top-level core form of the program and its libraries, with
  *                       renaming stripped (as the REPL's ,expand prints them)
  *   debug-core FILE     the same with unique names (locals "x.12", globals "lib/id:name")
- *   debug-ir FILE       the IR after tree shaking and normalization */
+ *   debug-ir FILE       the IR after tree shaking, normalization and optimization
+ * Hidden flags: --gc-stress (collect at every allocation), --no-musttail (tail calls through
+ * the trampoline), --keep NAME (keep a program definition as a function: REPL ,c), -w (no
+ * warnings). */
 #include "rt.h" /* first: it sets the POSIX feature-test macros */
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +38,10 @@ typedef struct {
     int unicode_full;       /* --unicode=full (default ascii) */
     int debug;              /* -g */
     int gc_stress;          /* --gc-stress (hidden, testing) */
+    int no_musttail;        /* --no-musttail (hidden, testing): tail calls through the trampoline */
+    int nowarn;             /* -w: no warnings */
+    const char **keep;      /* --keep NAME (hidden, REPL ,c; repeatable): keep those definitions as functions */
+    int nkeep;
     const char *cc;         /* --cc */
     const char *target;     /* --target, NULL = host */
     const char **incdirs;   /* -I, in order */
@@ -90,6 +97,7 @@ static void parse_args(int argc, char **argv, options *o) {
     o->opt = '2';
     o->cc = "cc";
     o->incdirs = (const char **)xmalloc(sizeof(char *) * (size_t)argc);
+    o->keep = (const char **)xmalloc(sizeof(char *) * (size_t)(argc + 1));
     if (argc < 2) { usage(stderr); exit(2); }
     if (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "help")) { usage(stdout); exit(0); }
     for (k = 0; commands[k].name && strcmp(commands[k].name, argv[1]); k++) {}
@@ -106,6 +114,9 @@ static void parse_args(int argc, char **argv, options *o) {
         } else if (!strcmp(a, "--unsafe")) o->unsafe = 1;
         else if (!strcmp(a, "-g")) o->debug = 1;
         else if (!strcmp(a, "--gc-stress")) o->gc_stress = 1;
+        else if (!strcmp(a, "--no-musttail")) o->no_musttail = 1;
+        else if (!strcmp(a, "-w")) o->nowarn = 1;
+        else if ((v = flag_value(argc, argv, &i, "--keep"))) o->keep[o->nkeep++] = v;
         else if ((v = flag_value(argc, argv, &i, "--gc"))) {
             if (!strcmp(v, "bump")) o->gc_bump = 1;
             else if (!strcmp(v, "immix")) o->gc_bump = 0;
@@ -160,16 +171,30 @@ static library *run_front(const options *o) {
     return front_load_program(o->input);
 }
 
-static void gen_c(const options *o, sbuf *out) {
+/* The middle end with the driver's options; warnings come after a successful build of the
+ * IR, so diagnostics come first. */
+static ir_program *middle(options *o) {
+    ir_opts io;
+    ir_program *p;
+    io.opt = o->opt == '0' ? OPT_0 : o->opt == 's' ? OPT_S : OPT_2;
+    io.warn = !o->nowarn;
+    o->keep[o->nkeep] = NULL;
+    io.keep = o->keep;
+    p = ir_build(front_order, &io);
+    if (io.warn) front_warn_imports();
+    return p;
+}
+static void gen_c(options *o, sbuf *out) {
     emit_opts eo;
     ir_program *p;
     run_front(o);
-    p = ir_build(front_order);
+    p = middle(o);
     eo.unsafe = o->unsafe;
     eo.debug = o->debug;
     eo.gc_bump = o->gc_bump;
     eo.unicode_full = o->unicode_full;
     eo.gc_stress = o->gc_stress;
+    eo.no_musttail = o->no_musttail;
     emit_c(p, &eo, out);
 }
 
@@ -250,7 +275,7 @@ static const char *default_output(const char *input) {
     return dot && dot != b ? arena_strndup(&compiler_arena, b, (size_t)(dot - b)) : arena_strdup(&compiler_arena, "a.out");
 }
 
-static int cmd_build(const options *o) {
+static int cmd_build(options *o) {
     sbuf c = {0}, cf = {0};
     const char *out = o->output ? o->output : default_output(o->input);
     gen_c(o, &c);
@@ -264,7 +289,7 @@ static int cmd_build(const options *o) {
     return 0;
 }
 
-static int cmd_run(const options *o) {
+static int cmd_run(options *o) {
     sbuf c = {0}, bin = {0}, tmp = {0};
     unsigned long long h = 14695981039346656037ull;
     size_t i;
@@ -324,11 +349,11 @@ int main(int argc, char **argv) {
         rt_exit(0);
     case CMD_DEBUG_IR:
         run_front(&o);
-        ir_print(ir_build(front_order), rt_stdout);
+        ir_print(middle(&o), rt_stdout);
         rt_exit(0);
     case CMD_CHECK:
         run_front(&o);
-        ir_build(front_order);
+        middle(&o);
         return 0;
     case CMD_EMIT_C:
         gen_c(&o, &c);
