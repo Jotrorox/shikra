@@ -85,7 +85,10 @@ run_reader() {
     # smoke: every adapted R7RS test file must read without error
     for f in tests/r7rs/*.scm tests/r7rs/chibi/*.sld; do
         [ -f "$f" ] || continue
-        if $SHIKRA debug-read "$f" > /dev/null 2> "$TMP/r.err"; then ok; else bad "$f (read)"; cat "$TMP/r.err"; fi
+        rf=
+        case $f in */bignum.scm) rf=--bignum ;; esac # its literals are bignums
+        # shellcheck disable=SC2086
+        if $SHIKRA debug-read $rf "$f" > /dev/null 2> "$TMP/r.err"; then ok; else bad "$f (read)"; cat "$TMP/r.err"; fi
     done
 }
 
