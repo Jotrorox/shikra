@@ -28,12 +28,12 @@ sh bench/fetch.sh                                   # suite at the pinned commit
 /opt/homebrew/bin/brew install chezscheme gambit-scheme   # chez, gsc (once)
 
 bench/run.sh chez                                   # ~2 min
-bench/run.sh gambit                                 # ~4 min (gsc compile ~2 s per benchmark)
+bench/run.sh gambit                                 # ~5 min (gsc: ~2 s per benchmark, 70 s for compiler)
 bench/run.sh chez-unsafe                            # optional unsafe references
 bench/run.sh gambit-unsafe
 
 # a Shikra binary built outside the repo root (the root ./shikra is the default):
-SHIKRA=/path/to/shikra bench/run.sh shikra
+SHIKRA=/path/to/shikra bench/run.sh shikra          # ~3 min
 SHIKRA=/path/to/shikra bench/run.sh shikra-unsafe
 SHIKRA=/path/to/shikra bench/run.sh shikra-interp   # optional, bytecode interpreter
 
@@ -176,9 +176,8 @@ words per capture").
 
 ### Other notes on the benchmark sources (findings, not patched)
 
-- `matrix` calls `div` (in `det-upper-bound`), an R6RS procedure that is not in
-  R7RS-small; strictly R7RS implementations report an unbound identifier.
-  `floor-quotient` would be the portable spelling. Chez and Gambit provide `div`.
+- No benchmark needed a change to be valid portable R7RS for the three
+  implementations here (`matrix` uses R6RS `div`, but defines it itself).
 - The file benchmarks (`cat`, `tail`, `wc`, `sum1`, `read1`, `parsing`,
   `dynamic`, `slatex`, `ray`) open files by relative path; `run.sh` runs them in a
   directory that mirrors the upstream layout.
