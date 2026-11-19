@@ -55,6 +55,9 @@ static ir_node *mk_letj(ir_join *j, ir_node *body, obj loc) {
     return n;
 }
 static ir_lambda *real(ir_lambda *L) { return L->dispatch ? L->dispatch : L; }
+/* standard library procedures and the procedures define-record-type makes count as primitives:
+ * inlined, their code takes the call's location (diagnostics, spec §11.3) */
+static int builtin(ir_lambda *L) { L = real(L); return (L->lib && front_builtin(L->lib)) || (L->g && L->g->nowarn); }
 static ir_lambda *resolve(ir_lambda *L, int n) {
     int i;
     if (L->nclauses) {
@@ -311,7 +314,14 @@ static void scc_all(int tail) {
 }
 
 /* ---- copying a procedure body with fresh variables (inlining) ---- */
-typedef struct { pmap vars, joins, lams; ir_join *ret; } copyctx;
+/* loc: the location every copied node gets (inlining a standard library procedure: its code is
+ * the call's, for diagnostics), spec: provenance bits added to every copied node (N_LIB). */
+typedef struct { pmap vars, joins, lams; ir_join *ret; obj loc; int spec; } copyctx;
+static ir_node *cp_node(copyctx *c, int kind, ir_node *from) {
+    ir_node *m = ir_new_node(kind, c->loc ? c->loc : from->loc);
+    m->spec = (from->spec & (N_FAR | N_LIB | N_DISC)) | c->spec;
+    return m;
+}
 static ir_var *cp_bind(copyctx *c, ir_var *v, ir_lambda *in) {
     ir_var *n = ir_new_var(v->name, in);
     n->flags = v->flags;
@@ -322,9 +332,12 @@ static ir_var *cp_bind(copyctx *c, ir_var *v, ir_lambda *in) {
 static ir_var *cp_var(copyctx *c, ir_var *v) { ir_var *n = (ir_var *)pm_get(&c->vars, v); return n ? n : v; }
 static ir_node *cp_atom(copyctx *c, ir_node *a) {
     ir_node *r;
-    if (a->kind == IR_CONST) return mk_const(a->u.value);
-    r = mk_ref(cp_var(c, a->u.ref.v));
-    r->u.ref.check = a->u.ref.check;
+    if (a->kind == IR_CONST) r = mk_const(a->u.value);
+    else {
+        r = mk_ref(cp_var(c, a->u.ref.v));
+        r->u.ref.check = a->u.ref.check;
+    }
+    r->spec = (a->spec & (N_FAR | N_LIB)) | c->spec;
     return r;
 }
 static ir_node **cp_atoms(copyctx *c, ir_node **a, int n) {
@@ -344,23 +357,23 @@ static ir_node *cp_rhs(copyctx *c, ir_node *r, ir_lambda *in) {
     switch (r->kind) {
     case IR_CONST: case IR_REF: return cp_atom(c, r);
     case IR_PRIM:
-        m = ir_new_node(IR_PRIM, r->loc);
+        m = cp_node(c, IR_PRIM, r);
         m->u.prim = r->u.prim;
         m->u.prim.args = cp_atoms(c, r->u.prim.args, r->u.prim.n);
         return m;
     case IR_CALL:
-        m = ir_new_node(IR_CALL, r->loc);
+        m = cp_node(c, IR_CALL, r);
         m->u.call = r->u.call;
         m->u.call.fn = r->u.call.fn ? cp_atom(c, r->u.call.fn) : NULL;
         m->u.call.args = cp_atoms(c, r->u.call.args, r->u.call.n);
         if (r->u.call.known && (k = (ir_lambda *)pm_get(&c->lams, r->u.call.known))) m->u.call.known = k;
         return m;
     case IR_LAMBDA:
-        m = ir_new_node(IR_LAMBDA, r->loc);
+        m = cp_node(c, IR_LAMBDA, r);
         m->u.lam = cp_lambda(c, r->u.lam, in);
         return m;
     case IR_SET:
-        m = ir_new_node(IR_SET, r->loc);
+        m = cp_node(c, IR_SET, r);
         m->u.set.v = cp_var(c, r->u.set.v);
         m->u.set.val = cp_atom(c, r->u.set.val);
         return m;
@@ -425,10 +438,10 @@ static ir_node *cp_term(copyctx *c, ir_node *n, int toret, ir_lambda *in) {
         ir_var *v = n->u.let.v ? cp_bind(c, n->u.let.v, in) : NULL;
         ir_node *r = cp_rhs(c, n->u.let.rhs, in);
         if (v && r->kind == IR_LAMBDA && n->u.let.v->known == n->u.let.rhs->u.lam) v->known = r->u.lam;
-        return mk_let(v, r, cp_term(c, n->u.let.body, toret, in), n->loc);
+        return mk_let(v, r, cp_term(c, n->u.let.body, toret, in), c->loc ? c->loc : n->loc);
     }
     case IR_FIX:
-        m = ir_new_node(IR_FIX, n->loc);
+        m = cp_node(c, IR_FIX, n);
         m->u.fix.n = n->u.fix.n;
         m->u.fix.vars = NEWN(ir_var *, n->u.fix.n);
         m->u.fix.lams = NEWN(ir_lambda *, n->u.fix.n);
@@ -449,7 +462,7 @@ static ir_node *cp_term(copyctx *c, ir_node *n, int toret, ir_lambda *in) {
     }
     case IR_JUMP: return mk_jump(cp_join(c, n->u.jump.j), n->u.jump.n, cp_atoms(c, n->u.jump.args, n->u.jump.n), n->loc);
     case IR_IF:
-        m = ir_new_node(IR_IF, n->loc);
+        m = cp_node(c, IR_IF, n);
         m->u.if_.test = cp_atom(c, n->u.if_.test);
         m->u.if_.then = cp_term(c, n->u.if_.then, toret, in);
         m->u.if_.els = cp_term(c, n->u.if_.els, toret, in);
@@ -471,11 +484,18 @@ static ir_node *cp_term(copyctx *c, ir_node *n, int toret, ir_lambda *in) {
 static ir_lambda *cur;
 /* The atom a reference reads: copy propagation through ->subst (never for a checked read). */
 static ir_node *sub(ir_node *a) {
-    ir_node *r = a;
-    while (r->kind == IR_REF && !r->u.ref.check && r->u.ref.v->subst) r = r->u.ref.v->subst;
+    ir_node *r = a, *n;
+    int far = a->spec & (N_FAR | N_LIB);
+    while (r->kind == IR_REF && !r->u.ref.check && r->u.ref.v->subst) {
+        if (r->u.ref.v->flags & V_FAR) far |= N_FAR;
+        r = r->u.ref.v->subst;
+        far |= r->spec & N_FAR;
+    }
     if (r == a) return a;
     changed = 1;
-    return r->kind == IR_CONST ? mk_const(r->u.value) : mk_ref(r->u.ref.v);
+    n = r->kind == IR_CONST ? mk_const(r->u.value) : mk_ref(r->u.ref.v);
+    n->spec = far;
+    return n;
 }
 static void sub_rhs(ir_node *r) {
     int i;
@@ -544,8 +564,8 @@ static int removable(ir_node *r) {
     case IR_CONST: case IR_LAMBDA: return 1;
     case IR_REF: return !r->u.ref.check;
     case IR_PRIM: return !(prim_table[r->u.prim.op].flags & (PF_FAIL | PF_EFFECT));
-    case IR_SET: /* a store to a global that nobody reads */
-        return (r->u.set.v->flags & V_GLOBAL) && r->u.set.v->nrefs == 0 && is_atom(r->u.set.val) && removable(r->u.set.val);
+    case IR_SET: /* a store to a variable that nobody reads (a local's binding is then dead too) */
+        return !(r->u.set.v->flags & V_BOXED) && r->u.set.v->nrefs == 0 && is_atom(r->u.set.val) && removable(r->u.set.val);
     default: return 0;
     }
 }
@@ -595,6 +615,49 @@ static void global_consts(ir_node *n) {
  * (its loop, if it has one); in value position its returns jump to a join point holding the
  * rest of the caller. Never a procedure that can reach itself; small ones, or the only call. */
 static void simp_term(ir_node **slot);
+/* No variable of the procedure tree L is free in term n other than globals (a call the analysis
+ * made known may sit where L's free variables are out of scope: it is inlined only then). */
+static int closed_var(ir_lambda *L, ir_var *v) {
+    ir_lambda *o;
+    if (v->flags & V_GLOBAL) return 1;
+    for (o = v->owner; o; o = o->parent) if (o == L) return 1;
+    return 0;
+}
+static int closed_atom(ir_lambda *L, ir_node *a) { return a->kind != IR_REF || closed_var(L, a->u.ref.v); }
+static int closed(ir_lambda *L, ir_node *n) {
+    int i;
+    for (; n; ) {
+        switch (n->kind) {
+        case IR_CONST: case IR_REF: return closed_atom(L, n);
+        case IR_PRIM: for (i = 0; i < n->u.prim.n; i++) if (!closed_atom(L, n->u.prim.args[i])) return 0; return 1;
+        case IR_CALL:
+            if (n->u.call.fn && !closed_atom(L, n->u.call.fn)) return 0;
+            for (i = 0; i < n->u.call.n; i++) if (!closed_atom(L, n->u.call.args[i])) return 0;
+            return 1;
+        case IR_LAMBDA: {
+            ir_lambda *M = n->u.lam;
+            if (M->nclauses) { for (i = 0; i < M->nclauses; i++) if (!closed(L, M->clauses[i]->body)) return 0; return 1; }
+            return closed(L, M->body);
+        }
+        case IR_SET: return closed_atom(L, n->u.set.val) && closed_var(L, n->u.set.v);
+        case IR_LET: if (!closed(L, n->u.let.rhs)) return 0; n = n->u.let.body; continue;
+        case IR_FIX:
+            for (i = 0; i < n->u.fix.n; i++) if (!closed(L, n->u.fix.lams[i]->body)) return 0;
+            n = n->u.fix.body;
+            continue;
+        case IR_LETJ: {
+            ir_join *j;
+            for (j = n->u.letj.j; j; j = j->next) if (!closed(L, j->body)) return 0;
+            n = n->u.letj.body;
+            continue;
+        }
+        case IR_JUMP: for (i = 0; i < n->u.jump.n; i++) if (!closed_atom(L, n->u.jump.args[i])) return 0; return 1;
+        case IR_IF: if (!closed_atom(L, n->u.if_.test) || !closed(L, n->u.if_.then)) return 0; n = n->u.if_.els; continue;
+        case IR_RET: return closed_atom(L, n->u.ret);
+        }
+    }
+    return 1;
+}
 static int try_inline(ir_node **slot, ir_node *let, ir_node *c) {
     ir_lambda *L = c->u.call.known;
     ir_var *self;
@@ -603,6 +666,7 @@ static int try_inline(ir_node **slot, ir_node *let, ir_node *c) {
     ir_node **jargs, *pre = NULL, **pp = &pre, *t;
     int i, sz, once, n = c->u.call.n;
     if (!L || c->u.call.ctl != CTL_NONE || L->dead || L->nclauses || L->rec || L == cur || !L->body) return 0;
+    if ((c->spec & N_DISC) && !closed(real(L), L->body)) return 0;
     if (L->dispatch && L->dispatch->rec) return 0;
     sz = lam_size(L);
     self = real(L)->self;
@@ -611,12 +675,17 @@ static int try_inline(ir_node **slot, ir_node *let, ir_node *c) {
     if (!once) growth -= sz;
     if (getenv("SHIKRA_TRACE")) fprintf(stderr, "inline %s (size %d%s) into %s\n", idname(L->name), sz, once ? ", once" : "", idname(cur->name));
     memset(&cx, 0, sizeof cx);
+    if (builtin(L) && c->loc) { cx.loc = c->loc; cx.spec = N_LIB; } /* primitives, as the user sees it */
     e = ir_new_join(L->nparams, cur);
-    for (i = 0; i < L->nparams; i++) e->params[i] = cp_bind(&cx, L->params[i], cur);
+    for (i = 0; i < L->nparams; i++) {
+        e->params[i] = cp_bind(&cx, L->params[i], cur);
+        if (!builtin(L)) e->params[i]->flags |= V_FAR; /* a user procedure's boundary */
+    }
     if (L->entry) pm_put(&cx.joins, L->entry, e);
     if (let) {
         k = ir_new_join(1, cur);
         k->params[0] = let->u.let.v ? let->u.let.v : ir_new_var(sym("_"), cur);
+        if (!builtin(L)) k->params[0]->flags |= V_FAR;
         k->body = let->u.let.body;
         let->u.let.body = NULL;
         cx.ret = k;
@@ -647,6 +716,95 @@ static int try_inline(ir_node **slot, ir_node *let, ir_node *c) {
     return 1;
 }
 
+/* Jump threading: a join point whose body only tests its parameter, (if p A B), and that is
+ * entered with a constant: that jump goes straight to A or to B, which become join points of the
+ * same group (so (if (not (pair? x)) ...) and (if (and a b) ...) leave the type test visible). */
+static ir_join *th_j, *th_a, *th_b;
+static void thread_jumps(ir_node **slot) {
+    for (;;) {
+        ir_node *n = *slot;
+        switch (n->kind) {
+        case IR_LET: slot = &n->u.let.body; continue;
+        case IR_FIX: slot = &n->u.fix.body; continue;
+        case IR_LETJ: {
+            ir_join *j;
+            for (j = n->u.letj.j; j; j = j->next) thread_jumps(&j->body);
+            slot = &n->u.letj.body;
+            continue;
+        }
+        case IR_IF: thread_jumps(&n->u.if_.then); slot = &n->u.if_.els; continue;
+        case IR_JUMP:
+            if (n->u.jump.j == th_j && n->u.jump.args[0]->kind == IR_CONST) {
+                *slot = mk_jump(n->u.jump.args[0]->u.value != RT_FALSE ? th_a : th_b, 0, NULL, n->loc);
+                changed = 1;
+            }
+            return;
+        default: return;
+        }
+    }
+}
+static int const_jump(ir_node *n, ir_join *j) {
+    for (; n; ) {
+        switch (n->kind) {
+        case IR_LET: n = n->u.let.body; continue;
+        case IR_FIX: n = n->u.fix.body; continue;
+        case IR_LETJ: {
+            ir_join *k;
+            for (k = n->u.letj.j; k; k = k->next) if (const_jump(k->body, j)) return 1;
+            n = n->u.letj.body;
+            continue;
+        }
+        case IR_IF: if (const_jump(n->u.if_.then, j)) return 1; n = n->u.if_.els; continue;
+        case IR_JUMP: return n->u.jump.j == j && n->u.jump.args[0]->kind == IR_CONST;
+        default: return 0;
+        }
+    }
+    return 0;
+}
+static void thread(ir_node *letj) {
+    ir_join *j, *k;
+    for (j = letj->u.letj.j; j; j = j->next) {
+        ir_node *b = j->body;
+        if (j->n != 1 || j->site || j->owner != cur || !b || b->kind != IR_IF || b->u.if_.test->kind != IR_REF ||
+            b->u.if_.test->u.ref.v != j->params[0] || j->params[0]->nrefs != 1 || (j->params[0]->flags & (V_ASSIGNED | V_BOXED)))
+            continue;
+        if (!const_jump(letj->u.letj.body, j)) continue;
+        th_a = ir_new_join(0, cur);
+        th_a->body = b->u.if_.then;
+        th_b = ir_new_join(0, cur);
+        th_b->body = b->u.if_.els;
+        b->u.if_.then = mk_jump(th_a, 0, NULL, b->loc);
+        b->u.if_.els = mk_jump(th_b, 0, NULL, b->loc);
+        th_b->next = j->next;
+        th_a->next = th_b;
+        j->next = th_a;
+        th_j = j;
+        thread_jumps(&letj->u.letj.body);
+        for (k = letj->u.letj.j; k; k = k->next) if (k != j) thread_jumps(&k->body);
+        j = th_b;
+    }
+}
+/* (%values-check v n rest) and (%values-ref v i) of a v bound to (%values a ...) in this
+ * procedure (a known procedure inlined into a let-values receiver): the count, the atom. */
+static ir_node *values_fold(ir_node *r) {
+    ir_var *w;
+    ir_node *d, *a;
+    int op = r->u.prim.op, k;
+    if ((op != PI_rt_values_check && op != PI_rt_values_ref) || r->u.prim.args[0]->kind != IR_REF) return NULL;
+    w = r->u.prim.args[0]->u.ref.v;
+    if (!(d = w->def) || w->owner != cur || (w->flags & (V_ASSIGNED | V_BOXED))) return NULL;
+    k = d->u.prim.n;
+    if (op == PI_rt_values_check) {
+        intptr_t n = RT_FIXVAL(r->u.prim.args[1]->u.value);
+        return (r->u.prim.args[2]->u.value != RT_FALSE ? k >= n : k == n) ? mk_const(RT_UNSPEC) : NULL;
+    }
+    a = d->u.prim.args[RT_FIXVAL(r->u.prim.args[1]->u.value)];
+    if (RT_FIXVAL(r->u.prim.args[1]->u.value) >= k) return NULL;
+    if (a->kind == IR_CONST) return mk_const(a->u.value);
+    if ((a->u.ref.v->flags & (V_ASSIGNED | V_BOXED)) || a->u.ref.check || (a->u.ref.v->owner != cur && !(a->u.ref.v->flags & V_GLOBAL))) return NULL;
+    return mk_ref(a->u.ref.v);
+}
+
 static void simp_lambda(ir_lambda *L) {
     ir_lambda *saved = cur;
     int i;
@@ -667,7 +825,9 @@ static void simp_term(ir_node **slot) {
             else sub_rhs(r);
             if (r->kind == IR_PRIM) {
                 ir_node *f = fold(r);
+                if (!f) f = values_fold(r);
                 if (f) { n->u.let.rhs = r = f; changed = 1; }
+                else if (v && r->u.prim.op == PI_VALUES && r->u.prim.n != 1) v->def = r;
             }
             if (v && is_atom(r) && propagatable(v, r)) {
                 v->subst = r;
@@ -700,6 +860,7 @@ static void simp_term(ir_node **slot) {
         }
         case IR_LETJ: {
             ir_join *j, **pj;
+            thread(n);
             for (j = n->u.letj.j; j; j = j->next) j->state = j->njumps == 1 && j->owner == cur && !j->site; /* sites: verified later */
             simp_term(&n->u.letj.body);
             for (pj = &n->u.letj.j; (j = *pj); ) {
@@ -1186,7 +1347,8 @@ void ir_optimize(ir_program *p) {
     if (getenv("SHIKRA_NOINLINE")) lim_small = lim_once = -1;
     census();
     for (L = P->lambdas; L; L = L->next) if (LIVE(L)) total += term_size(L->body);
-    growth = p->opt == OPT_2 ? total + 20000 : p->opt == OPT_S ? total / 4 + 2000 : total / 8 + 500;
+    /* one budget for all runs of the optimizer (it runs again after the analysis rewrote) */
+    growth = p->nopt++ ? p->growth : p->opt == OPT_2 ? total + 20000 : p->opt == OPT_S ? total / 4 + 2000 : total / 8 + 500;
     for (round_no = 1; round_no <= max_rounds; round_no++) {
         changed = 0;
         census();
@@ -1206,6 +1368,7 @@ void ir_optimize(ir_program *p) {
     }
     merge_mutual();
     census();
+    p->growth = growth;
 }
 
 /* ---- tier 1 (spec §8.2): optimistic sites must end up with every jump to their
@@ -1456,6 +1619,7 @@ static void make_direct(void) {
                 for (k = c->u.call.n - 1; k >= D->nreq; k--) {
                     ir_var *r = ir_new_var(sym("rest"), s->in);
                     ir_node *p = ir_new_node(IR_PRIM, c->loc);
+                    r->type = T_PAIR;
                     p->u.prim.op = PI_rt_cons;
                     p->u.prim.n = 2;
                     p->u.prim.args = NEWN(ir_node *, 2);
@@ -1473,7 +1637,10 @@ static void make_direct(void) {
         }
         params = NEWN(ir_var *, D->nparams + D->nfree);
         for (k = 0; k < D->nparams; k++) if (!drop[k]) params[np++] = D->params[k];
-        for (k = 0; k < D->nfree; k++) params[np++] = ir_new_var(D->free[k]->name, D);
+        for (k = 0; k < D->nfree; k++) {
+            params[np] = ir_new_var(D->free[k]->name, D);
+            params[np++]->type = D->free[k]->type;
+        }
         if (D->entry) D->entry->params = D->params; /* self jumps keep passing the old parameters */
         D->params = params;
         D->nparams = np;

@@ -16,6 +16,7 @@
  *   5. the optimizer (opt.c), then closure layout, static closures, C names. */
 #include "ir.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static ir_program *prog;
@@ -1369,15 +1370,28 @@ ir_program *ir_build(library *order, const ir_opts *o) {
     if (o->warn) warn_unused(order);
     /* Optimistic tier-1 sites whose continuation is still reached from another C function
      * after optimization are rebuilt as tier 2 (at most a few rounds: each demotes a site). */
+    /* Then the flow analysis (analyze.c): while it rewrites the IR structurally (decided branches,
+     * dead code, new known calls) the optimizer runs again (at most three times), then a last
+     * analysis gives the final types and the diagnostics. */
     for (;;) {
         obj fails, l;
+        int k;
         normalize_program(order);
+        prog->unsafe = o->unsafe;
+        prog->warn = o->warn;
         ir_optimize(prog);
-        if ((fails = ir_tier1_failures(prog)) == RT_NIL) break;
+        fails = ir_tier1_failures(prog);
+        for (k = 0; fails == RT_NIL && k < 3 && !getenv("SHIKRA_NOANALYZE") && ir_analyze(prog, 0); k++) {
+            ir_optimize(prog);
+            fails = ir_tier1_failures(prog);
+        }
+        if (fails == RT_NIL) break;
         for (l = fails; l != RT_NIL; l = RT_CDR(l)) pm_put(&demoted, RT_CAR(l), (void *)1);
         reset_round();
     }
+    if (!getenv("SHIKRA_NOANALYZE")) ir_analyze(prog, 1);
     ir_finish(prog);
+    ir_represent(prog);
     name_lambdas();
     ir_count(prog);
     return prog;

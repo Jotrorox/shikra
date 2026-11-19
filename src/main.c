@@ -180,6 +180,7 @@ static ir_program *middle(options *o) {
     io.warn = !o->nowarn;
     o->keep[o->nkeep] = NULL;
     io.keep = o->keep;
+    io.unsafe = o->unsafe;
     p = ir_build(front_order, &io);
     if (io.warn) front_warn_imports();
     return p;

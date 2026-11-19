@@ -23,20 +23,37 @@ typedef struct ir_node ir_node;
 typedef struct ir_lambda ir_lambda;
 typedef struct ir_join ir_join;
 
-/* Type lattice (spec §5.2) as a bit set, for the M4 flow analysis. 0 = not analysed. */
+/* Type lattice (spec §5.2) as a bit set: the flow analysis (analyze.c, DESIGN.md M4-2).
+ * 0 = no value (not analysed, or unreachable). The three standard ports and the three
+ * static port-parameter cells (pairs) have bits of their own; T_UNDEF is the letrec marker. */
 enum {
-    T_FIX = 1 << 0, T_FLO = 1 << 1, T_CHAR = 1 << 2, T_BOOL = 1 << 3, T_PAIR = 1 << 4,
-    T_NULL = 1 << 5, T_STRING = 1 << 6, T_SYMBOL = 1 << 7, T_VECTOR = 1 << 8,
-    T_BYTEVECTOR = 1 << 9, T_PROC = 1 << 10, T_RECORD = 1 << 11, T_OTHER = 1 << 12,
-    T_ANY = (1 << 13) - 1
+    T_FIX = 1 << 0, T_FLO = 1 << 1, T_CHAR = 1 << 2, T_TRUE = 1 << 3, T_FALSE = 1 << 4,
+    T_PAIR = 1 << 5, T_NULL = 1 << 6, T_STRING = 1 << 7, T_SYMBOL = 1 << 8, T_VECTOR = 1 << 9,
+    T_BYTEVECTOR = 1 << 10, T_PROC = 1 << 11, T_RECORD = 1 << 12, T_EOF = 1 << 13,
+    T_UNSPEC = 1 << 14, T_PORT = 1 << 15, T_STDIN = 1 << 16, T_STDOUT = 1 << 17, T_STDERR = 1 << 18,
+    T_PCELL0 = 1 << 19, T_PCELL1 = 1 << 20, T_PCELL2 = 1 << 21, T_RTD = 1 << 22, T_UNDEF = 1 << 23,
+    T_OTHER = 1 << 24, /* boxes, promises, error objects, values objects, markers */
+    T_ANY = (1 << 25) - 1, T_TOP = T_ANY & ~T_UNDEF,
+    T_BOOL = T_TRUE | T_FALSE, T_NUM = T_FIX | T_FLO, T_PCELL = T_PCELL0 | T_PCELL1 | T_PCELL2,
+    T_STDPORT = T_STDIN | T_STDOUT | T_STDERR, T_PORTS = T_PORT | T_STDPORT
 };
+/* C representation of a variable or of a direct procedure's result (analyze.c, emit.c) */
+enum { R_OBJ, R_FIX, R_DBL, R_MV };
+/* ir_node.spec: PRIM: S_OK(i) argument i is proven to have the checked type, S_NOOVF the
+ * fixnum result cannot overflow; atoms: N_FAR the value came through a user procedure's
+ * parameter or result (diagnostics: interprocedural); any node: N_LIB copied from a standard
+ * library procedure (its location is the call's); CALL: N_DISC known only through the analysis
+ * (the callee's free variables need not be in scope here: never inlined unless it has none). */
+#define S_OK(i) (1 << (i))
+enum { S_NOOVF = 1 << 6, N_FAR = 1 << 8, N_LIB = 1 << 9, N_DISC = 1 << 10 };
 
 enum {
     V_GLOBAL = 1,   /* top-level variable (C global or static closure) */
     V_ASSIGNED = 2, /* target of SET (or letrec initialisation after use) */
     V_CAPTURED = 4, /* referenced from a procedure other than its owner */
     V_BOXED = 8,    /* holds a box: assigned and captured */
-    V_CHECK = 16    /* may be read before initialisation: reads test for RT_UNDEF */
+    V_CHECK = 16,   /* may be read before initialisation: reads test for RT_UNDEF */
+    V_FAR = 32      /* parameter or result of an inlined user procedure (diagnostics) */
 };
 
 struct ir_var {
@@ -48,7 +65,9 @@ struct ir_var {
     ir_lambda *owner;  /* binding procedure; NULL for globals */
     ir_lambda *known;  /* bound once to this procedure and never assigned: known callee */
     global *g;         /* globals: the front-end global */
-    int type;          /* M4: T_* bits */
+    int type;          /* T_* bits (flow analysis) */
+    int rep;           /* R_* C representation (analyze.c ir_represent) */
+    ir_node *def;      /* optimizer scratch: the %values primitive that binds it */
     int def_index;     /* globals: index of the defining top-level form, -1 if none */
     int slot;          /* globals: slot in the C globals array (emitter) */
     ir_node *subst;    /* optimizer: every reference reads this atom instead (copy propagation) */
@@ -75,6 +94,7 @@ enum { CTL_NONE, CTL_APPLY, CTL_CWV, CTL_CALLCC };
 
 struct ir_node {
     int kind;
+    int ty, spec; /* analysis: refined T_* type of an atom at this use; S_* / N_* flags */
     obj loc; /* source pair for diagnostics, or 0 */
     union {
         obj value;
@@ -139,6 +159,8 @@ struct ir_lambda {
     int size, sround;      /* optimizer: node count with nested procedures, and its round */
     int sidx, slow, onstack, rec; /* optimizer: SCC numbering; rec = can reach itself */
     int onstack2;          /* optimizer scratch (merging of mutual tail recursion) */
+    int rtype;             /* analysis: T_* type of its results */
+    int rrep, nvals;       /* direct: C representation of the result (R_MV: nvals values) */
 };
 
 /* Optimisation levels (-O): budgets in opt.c. */
@@ -154,6 +176,13 @@ typedef struct {
     ir_lambda *raise;      /* (scheme base) raise: the engine's raise entry, or NULL */
     ir_lambda *travel;     /* (shikra dynamic) travel-to!: tier-2 continuations' winders walk, or NULL */
     int opt;               /* OPT_* */
+    int unsafe;            /* --unsafe (spec §3.3) */
+    long growth;           /* inlining budget left (nodes), across the optimizer's runs */
+    int nopt;              /* runs of the optimizer so far */
+    int no_handlers;       /* no exception handler can be installed: errors print and exit */
+    int no_flonums;        /* no flonum can exist at run time (no float printer, §9.1) */
+    int std_open;          /* the standard ports are never closed (unchecked writes to them) */
+    int warn;              /* report warnings */
 } ir_program;
 
 /* Options of the middle end. */
@@ -161,6 +190,7 @@ typedef struct {
     int opt;               /* OPT_* */
     int warn;              /* report unused definitions and imports (warnings) */
     const char **keep;     /* program definitions to keep as functions (REPL ,c), NULL-terminated */
+    int unsafe;            /* --unsafe */
 } ir_opts;
 
 /* Middle end (normalize.c): tree shaking, normalization to IR, optimisation (opt.c),
@@ -185,6 +215,17 @@ int ir_call_self(ir_node *call); /* known call: 0 no self argument (direct), 1 t
 void ir_optimize(ir_program *p);
 obj ir_tier1_failures(ir_program *p);
 void ir_finish(ir_program *p);
+
+/* Flow analysis and the passes it enables (analyze.c, DESIGN.md §11 M4-2). ir_analyze computes
+ * types and reaching procedures, then rewrites: decided predicates and branches fold, code after
+ * a call or primitive that cannot return is cut, calls whose operator is one procedure become
+ * known, primitives get S_* flags; reports provably wrong types. Returns 1 if the IR changed
+ * structurally (the optimizer then runs again). ir_represent (after ir_finish) chooses C
+ * representations: unboxed fixnums and flonums, private signatures, values structs. */
+int ir_analyze(ir_program *p, int last);
+void ir_represent(ir_program *p);
+int ir_atom_type(ir_node *a); /* T_* type of an atom at its use (T_TOP if unknown) */
+int ir_const_type(obj x);
 
 /* Back end (emit.c): the complete C translation unit (DESIGN.md §3). */
 typedef struct { int unsafe, debug, gc_bump, unicode_full, gc_stress, no_musttail; } emit_opts;
