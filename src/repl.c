@@ -202,6 +202,7 @@ static void show_c(obj name) {
     av[i++] = (char *)opts->argv0;
     av[i++] = "emit-c";
     av[i++] = "-w";       /* no warnings: the session's imports are rarely all used */
+    if (opts->fo.bignum) av[i++] = "--bignum";
     av[i++] = "--keep";   /* the definition stays a function even if inlined or unused */
     av[i++] = (char *)nm;
     av[i++] = "-I";

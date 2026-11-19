@@ -125,7 +125,19 @@
   (define (truncate x) (%truncate x))
   (define (exact x) (%exact x))
   (define (inexact x) (%inexact x))
-  (define (square x) (%* x x))
+  (define (square x) (%* x x)))
+;; --bignum (feature bignum): Newton's iteration from 2^ceil(bits/2) in C, few divisions even for
+;; large k; the default definition is unchanged (no bignum code in default programs).
+(cond-expand
+  (bignum
+   (begin
+     (define (exact-integer-sqrt k)
+       (if (if (%exact-integer? k) (%< k 0) #t)
+           (type-error "exact-integer-sqrt" "exact nonnegative integer" k))
+       (let ((s (%exact-integer-sqrt k)))
+         (%values s (%- k (%* s s)))))))
+  (else
+   (begin
   (define (exact-integer-sqrt k)
     (if (if (%exact-integer? k) (%< k 0) #t)
         (type-error "exact-integer-sqrt" "exact nonnegative integer" k))
@@ -135,8 +147,8 @@
           (let ((y (%quotient (%+ x (%quotient k x)) 2)))
             (if (%>= y x)
                 (%values x (%- k (%* x x)))
-                (loop y))))))
-
+                (loop y)))))))))
+(begin
   (define (expt z1 z2) (%expt z1 z2))
   ;; No exact rationals (spec 3.2): an exact integer is its own numerator; a finite flonum
   ;; q is n/d with d the smallest power of two that makes d*q integral (R7RS 6.2.6).

@@ -171,7 +171,44 @@ RT_INLINE int rt_is_heap(obj x) { return RT_TAG(x) == 5; }
 RT_INLINE int rt_is_type(obj x, int t) { return RT_TAG(x) == 5 && RT_HTYPE(x) == t; }
 RT_INLINE int rt_is_char(obj x) { return (RT_W(x) & 0xFF) == 0x0F; }
 RT_INLINE int rt_is_flo(obj x) { return rt_is_type(x, RT_T_FLONUM); }
+/* Optional bignums (rt_big.c; --bignum, DESIGN.md "Bignums as built"): the tool always has them and
+ * rt_bignum_on switches promotion on (repl, interp, and the compiler's reader with --bignum); a program
+ * has them only when built with --bignum (RT_BIGNUM: rt_big.c is pasted, promotion always on).
+ * Header type RT_T_BIGNUM (raw), length = 4 * limbs (little-endian 32-bit magnitude, top limb
+ * nonzero), flag RT_F_NEG; a value that fits in a fixnum is always a fixnum. */
+#if !defined(SHIKRA_PROGRAM) || defined(RT_BIGNUM)
+#define RT_HAVE_BIG 1
+#define RT_F_NEG 0x10
+typedef struct { uintptr_t hdr; uint32_t d[]; } rt_bignum;
+#ifdef SHIKRA_PROGRAM
+#define RT_BIG_ON 1
+#else
+RT_EXTVAR int rt_bignum_on;
+#define RT_BIG_ON rt_bignum_on
+#endif
+RT_INLINE int rt_is_big(obj x) { return rt_is_type(x, RT_T_BIGNUM); }
+RT_INLINE int rt_is_exact(obj x) { return rt_is_fix(x) || rt_is_big(x); }
+RT_INLINE int rt_is_num(obj x) { return rt_is_fix(x) || rt_is_flo(x) || rt_is_big(x); }
+RT_FN obj rt_big_add(obj a, obj b);   /* exact operands */
+RT_FN obj rt_big_sub(obj a, obj b);
+RT_FN obj rt_big_mul(obj a, obj b);
+RT_FN obj rt_big_neg(obj x);
+RT_FN obj rt_big_fromi(intptr_t v);   /* any int64 */
+RT_FN obj rt_big_from_double(double d); /* d finite and integral */
+RT_FN double rt_big_to_double(obj x); /* correctly rounded */
+RT_FN int rt_big_cmp(obj a, obj b);   /* exact operands: -1 0 1 */
+RT_FN int rt_big_cmpd(obj x, double d); /* exact x: -1 0 1, 2 if d is NaN */
+RT_FN obj rt_big_div(obj a, obj b);   /* exact /: exact if it divides, else the nearest double */
+RT_FN obj rt_big_idiv(obj a, obj b, int op, const char *who); /* 0 quotient 1 remainder 2 modulo 3 floor-quotient */
+RT_FN obj rt_big_expt(obj a, obj b);  /* exact operands */
+RT_FN obj rt_big_to_string(obj x, int radix);
+RT_FN obj rt_big_parse(const char *s, const char *e, int radix, int neg); /* digits only */
+RT_FN double rt_big_log(obj x);
+RT_FN double rt_big_sqrt(obj x);
+RT_FN obj rt_exact_isqrt(obj k);      /* %exact-integer-sqrt: the floor of the root of an exact k >= 0 */
+#else
 RT_INLINE int rt_is_num(obj x) { return rt_is_fix(x) || rt_is_flo(x); }
+#endif
 RT_INLINE int rt_is_string(obj x) { return rt_is_type(x, RT_T_STRING); }
 RT_INLINE int rt_is_symbol(obj x) { return rt_is_type(x, RT_T_SYMBOL); }
 RT_INLINE int rt_is_vector(obj x) { return rt_is_type(x, RT_T_VECTOR); }
@@ -606,6 +643,8 @@ RT_FN size_t rt_format_double(double d, char *out); /* >= 32 bytes; no NUL */
  * heuristics would otherwise leave some of it out of line. */
 #ifdef RT_UNSAFE /* fixnum overflow wraps (two's complement, through unsigned arithmetic) */
 #define RT_WRAP(a, op, b) ((intptr_t)((uintptr_t)(a) op (uintptr_t)(b)))
+#endif
+#if defined(RT_UNSAFE) && !defined(RT_HAVE_BIG) /* with bignums overflow promotes: semantics, not a check */
 RT_INLINE RT_ALWAYS obj rt_add(obj a, obj b) { return RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) ? RT_O(RT_WRAP(a, +, b)) : rt_add2(a, b); }
 RT_INLINE RT_ALWAYS obj rt_sub(obj a, obj b) { return RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) ? RT_O(RT_WRAP(a, -, b)) : rt_sub2(a, b); }
 RT_INLINE RT_ALWAYS obj rt_mul(obj a, obj b) { return RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) ? RT_O(RT_WRAP(RT_FIXVAL(a), *, b)) : rt_mul2(a, b); }
@@ -676,8 +715,18 @@ RT_INLINE intptr_t rt_fxmod(intptr_t a, intptr_t b) {
     if (r != 0 && (r < 0) != (b < 0)) r += RT_FIXVAL(b);
     return (intptr_t)RT_FIX(r);
 }
+#ifdef RT_HAVE_BIG
+/* --bignum: proven fixnums whose sum may not be one (the analysis says "fixnum or bignum"); the
+ * overflow branch goes to the out-of-line slow path, which promotes. */
+RT_INLINE RT_ALWAYS obj rt_fxaddb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_add_ovf(a, b, &r)) ? RT_O(r) : rt_add2(RT_O(a), RT_O(b)); }
+RT_INLINE RT_ALWAYS obj rt_fxsubb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_sub_ovf(a, b, &r)) ? RT_O(r) : rt_sub2(RT_O(a), RT_O(b)); }
+RT_INLINE RT_ALWAYS obj rt_fxmulb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_mul_ovf(RT_FIXVAL(a), b, &r)) ? RT_O(r) : rt_mul2(RT_O(a), RT_O(b)); }
+/* A proven number as a double; flonum abs (sign bit, as rt_abs). */
+RT_INLINE double rt_num_dbl(obj x) { return rt_is_fix(x) ? (double)RT_FIXVAL(x) : rt_is_big(x) ? rt_big_to_double(x) : RT_FLO(x); }
+#else
 /* A proven number as a double; flonum abs (sign bit, as rt_abs). */
 RT_INLINE double rt_num_dbl(obj x) { return rt_is_fix(x) ? (double)RT_FIXVAL(x) : RT_FLO(x); }
+#endif
 RT_INLINE double rt_flabs(double d) { union { double d; uint64_t u; } x; x.d = d; x.u &= ~((uint64_t)1 << 63); return x.d; }
 
 /* ---- ports and printing (rt_io.c) ---- */
@@ -850,9 +899,17 @@ RT_INLINE obj rt_record_set(obj r, obj rtd, obj k, obj v) {
 }
 RT_INLINE obj rt_values_p(obj x) { return RT_BOOL(rt_is_type(x, RT_T_VALUES)); }
 RT_INLINE obj rt_number_p(obj x) { return RT_BOOL(rt_is_num(x)); }
+#ifdef RT_HAVE_BIG
+RT_INLINE obj rt_exact_p(obj x) { RT_CHECK(rt_is_num(x), "exact?", "number", x); return RT_BOOL(rt_is_exact(x)); }
+#else
 RT_INLINE obj rt_exact_p(obj x) { RT_CHECK(rt_is_num(x), "exact?", "number", x); return RT_BOOL(rt_is_fix(x)); }
+#endif
 RT_INLINE obj rt_inexact_p(obj x) { RT_CHECK(rt_is_num(x), "inexact?", "number", x); return RT_BOOL(rt_is_flo(x)); }
+#ifdef RT_HAVE_BIG
+RT_INLINE obj rt_exact_integer_p(obj x) { return RT_BOOL(rt_is_exact(x)); }
+#else
 RT_INLINE obj rt_exact_integer_p(obj x) { return RT_BOOL(rt_is_fix(x)); }
+#endif
 RT_INLINE obj rt_port_p(obj x) { return RT_BOOL(rt_is_port(x)); }
 RT_INLINE obj rt_eof_object(void) { return RT_EOF; }
 RT_INLINE obj rt_eof_object_p(obj x) { return RT_BOOL(x == RT_EOF); }

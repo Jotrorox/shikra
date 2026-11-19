@@ -237,6 +237,9 @@ RT_FN int rt_eqv(obj a, obj b) {
         double x = RT_FLO(a), y = RT_FLO(b);
         return rt_memcmp(&x, &y, sizeof x) == 0;
     }
+#ifdef RT_HAVE_BIG /* equal bignums are distinct objects */
+    if (rt_is_big(a) && rt_is_big(b)) return rt_big_cmp(a, b) == 0;
+#endif
     return 0;
 }
 /* ---- address tables: entries [a, b, value] keyed by one or two object addresses, open

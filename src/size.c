@@ -136,6 +136,7 @@ static const char *rt_component(const char *file, const char *section) {
     if (!strcmp(file, "src/rt_sys.c")) return "system layer";
     if (!strcmp(file, "src/rt_unicode.c")) return "unicode tables";
     if (!strcmp(file, "src/rt_ext.c")) return "extensions (shikra ...)";
+    if (!strcmp(file, "src/rt_big.c")) return "bignums (--bignum)";
     if (!strcmp(file, "src/rt.h")) return "inline helpers (rt.h)";
     if (!section) return "startup and exit";
     if (strstr(section, "system interface")) return "system layer";
@@ -147,7 +148,7 @@ static const char *rt_component(const char *file, const char *section) {
 static int is_idc(int c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'; }
 static void scan_runtime(void) {
     static const char *const files[] = {"src/rt.h", "src/rt_sys.c", "src/rt_gc.c", "src/rt_core.c", "src/rt_str.c",
-                                        "src/rt_num.c", "src/rt_io.c", "src/rt_read.c", "src/rt_unicode.c", "src/rt_ext.c", 0};
+                                        "src/rt_num.c", "src/rt_io.c", "src/rt_read.c", "src/rt_unicode.c", "src/rt_ext.c", "src/rt_big.c", 0};
     int f;
     for (f = 0; files[f]; f++) {
         char *t = embed_text(files[f], NULL), *line, *next, *section = NULL;

@@ -37,6 +37,7 @@ typedef struct {
     int unsafe;             /* --unsafe */
     int gc_bump;            /* --gc=bump (default immix) */
     int unicode_full;       /* --unicode=full (default ascii) */
+    int bignum;             /* --bignum: exact integers of any size (DESIGN.md "Bignums as built") */
     int debug;              /* -g */
     int gc_stress;          /* --gc-stress (hidden, testing) */
     int no_musttail;        /* --no-musttail (hidden, testing): tail calls through the trampoline */
@@ -79,6 +80,8 @@ static void usage(FILE *f) {
           "  --unsafe                 remove the remaining run-time checks\n"
           "  --gc=immix|bump          collector (default immix; bump never frees)\n"
           "  --unicode=ascii|full     character tables (default ascii)\n"
+          "  --bignum                 exact integers of any size (default: 63-bit fixnums,\n"
+          "                           overflow raises an error); feature identifier bignum\n"
           "  -I dir                   add a library search directory (repeatable)\n"
           "  --cc=CC                  C compiler command, may include arguments\n"
           "                           (default $SHIKRA_CC, else cc)\n"
@@ -133,6 +136,7 @@ static void parse_args(int argc, char **argv, options *o) {
             if (i + 1 >= argc || strlen(argv[i + 1]) != 1 || !strchr("02s", argv[i + 1][0])) die("-O takes 0, 2 or s");
             o->opt = argv[++i][0];
         } else if (!strcmp(a, "--unsafe")) o->unsafe = 1;
+        else if (!strcmp(a, "--bignum")) o->bignum = 1;
         else if (!strcmp(a, "-g")) o->debug = 1;
         else if (!strcmp(a, "--gc-stress")) o->gc_stress = 1;
         else if (!strcmp(a, "--no-musttail")) o->no_musttail = 1;
@@ -194,6 +198,7 @@ static void front_options(const options *o, front_opts *fo) {
     fo->incdirs = o->incdirs;
     fo->nincdirs = o->nincdirs;
     fo->unicode_full = o->unicode_full;
+    fo->bignum = o->bignum;
     fo->target = o->target;
 }
 /* SHIKRA_TIME=1: the time of each phase on stderr (cache measurements, DESIGN.md "M4-3 as built"). */
@@ -229,6 +234,7 @@ static ir_program *middle(options *o) {
     o->keep[o->nkeep] = NULL;
     io.keep = o->keep;
     io.unsafe = o->unsafe;
+    io.bignum = o->bignum;
     p = ir_build(front_order, &io);
     if (io.warn) front_warn_imports();
     phase("middle");
@@ -241,6 +247,7 @@ static void emit_program(options *o, sbuf *out) { /* after the front end */
     eo.debug = o->debug;
     eo.gc_bump = o->gc_bump;
     eo.unicode_full = o->unicode_full;
+    eo.bignum = o->bignum;
     eo.gc_stress = o->gc_stress;
     eo.no_musttail = o->no_musttail;
     emit_c(p, &eo, out);
@@ -427,6 +434,7 @@ static int cmd_run(options *o) {
     int k;
     snprintf(flags, sizeof flags, "-O%c u%d b%d f%d g%d s%d t%d w%d", o->opt, o->unsafe, o->gc_bump, o->unicode_full, o->debug,
              o->gc_stress, o->no_musttail, o->nowarn);
+    if (o->bignum) strcat(flags, " n1");
     dir = cache_dir();
     run_front(o);
     if ((key = cache_program_key())) {
@@ -499,6 +507,7 @@ int main(int argc, char **argv) {
     sbuf c = {0};
     parse_args(argc, argv, &o);
     rt_init(argc, argv, (void *)&argc);
+    rt_bignum_on = o.bignum; /* the reader (literals), the REPL and interp promote on overflow */
     switch (o.cmd) {
     case CMD_DEBUG_READ: return debug_read(o.input);
     case CMD_DEBUG_EXPAND: case CMD_DEBUG_CORE:
