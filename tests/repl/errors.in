@@ -1,0 +1,19 @@
+(define x 10)
+(car 5)
+x
+(vector-ref (vector 1 2) 7)
+(error "my error" 'a "b" 3)
+(raise 'oops)
+undefined-variable
+(if)
+(let ((y)) y)
+(1 2 3)
+(display "partial") (car '()) (display "not reached")
+#q
+(define (f) (g))
+(f)
+(define (g) 'now-defined)
+(f)
+(guard (e (#t (list 'caught (error-object-message e)))) (car 1))
+(with-exception-handler (lambda (e) 0) (lambda () (raise 'x)))
+x

@@ -1,0 +1,16 @@
+shikra> (define (loop i acc) (if (= i 0) acc (loop (- i 1) (+ acc 1))))
+shikra> (loop 1000000 0)
+1000000
+shikra> (define (deep n) (if (= n 0) 0 (+ 1 (deep (- n 1)))))
+shikra> (deep 100000)
+100000
+shikra> (define (count-down n) (do ((i n (- i 1))) ((= i 0) 'done)))
+shikra> (count-down 1000000)
+done
+shikra> (length (apply list (make-list 100000 'x)))
+100000
+shikra> (define (mutual-even? n) (if (= n 0) #t (mutual-odd? (- n 1))))
+shikra> (define (mutual-odd? n) (if (= n 0) #f (mutual-even? (- n 1))))
+shikra> (mutual-even? 1000001)
+#f
+shikra> 

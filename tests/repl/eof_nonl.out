@@ -1,0 +1,4 @@
+shikra> (display "no final newline") 7
+no final newline
+7
+shikra> 

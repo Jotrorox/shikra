@@ -1,0 +1,5 @@
+(import (scheme base) (scheme write) (greet))
+(define counter 0)
+(define (bump!) (set! counter (+ counter 1)) counter)
+(bump!)
+(display "loaded prog.scm") (newline)

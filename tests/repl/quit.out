@@ -1,0 +1,4 @@
+shikra> (define x 1)
+shikra> x
+1
+shikra> ,quit

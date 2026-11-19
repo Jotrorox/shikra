@@ -1,0 +1,29 @@
+loaded prog.scm
+shikra> counter
+1
+shikra> (bump!)
+2
+shikra> (bump!)
+3
+shikra> (greeting "repl")
+"hello, repl"
+shikra> (define (bump!) (set! counter (+ counter 10)) counter)
+shikra> (bump!)
+13
+shikra> (case-lambda ((x) x))
+Error: case-lambda: unbound variable
+shikra> (import (scheme case-lambda))
+shikra> ((case-lambda ((x) (list 'one x)) ((x y) (list 'two x y))) 1 2)
+(two 1 2)
+shikra> ,c bump!
+/* main: bump! */
+static obj P_main__bump_x(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3) {
+    obj v_t_N = 0;
+    (void)self; (void)argc; (void)a0; (void)a1; (void)a2; (void)a3;
+    if (RT_UNLIKELY(argc != 0)) rt_arity_error("bump!", argc);
+    v_t_N = P_scheme_base__plus__3(RT_SPROC(C_scheme_base__plus), 2, rt_chkdef(rt_g[3], "counter"), RT_FIX(10), 0, 0);
+    rt_g[3] = v_t_N;
+    return rt_chkdef(rt_g[3], "counter");
+}
+
+shikra> 

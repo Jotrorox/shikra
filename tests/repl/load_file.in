@@ -1,0 +1,10 @@
+counter
+(bump!)
+(bump!)
+(greeting "repl")
+(define (bump!) (set! counter (+ counter 10)) counter)
+(bump!)
+(case-lambda ((x) x))
+(import (scheme case-lambda))
+((case-lambda ((x) (list 'one x)) ((x y) (list 'two x y))) 1 2)
+,c bump!

@@ -1,0 +1,13 @@
+(define (fact n)
+  (if (= n 0)
+      1
+      (* n (fact (- n 1)))))
+(fact
+ 10)
+"a string with ( and
+a newline" (+ 1
+2)
+'(#\( #\) "(" ; comment with (
+  |sym (bol|) #| block ( comment |# 42
+
+(list 1 2) (list 3 4)

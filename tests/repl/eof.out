@@ -1,0 +1,6 @@
+shikra> (+ 1 2)
+3
+shikra> (list 1
+     2
+Error: unterminated list
+shikra> 

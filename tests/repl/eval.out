@@ -1,0 +1,39 @@
+shikra> (eval '(* 7 3) (environment '(scheme base)))
+21
+shikra> (eval '(define from-eval 42) (interaction-environment))
+shikra> from-eval
+42
+shikra> (eval 'from-eval (interaction-environment))
+42
+shikra> (define env (environment '(scheme base)))
+shikra> (eval '(define z 5) env)
+shikra> (eval '(+ z 1) env)
+6
+shikra> (eval 'z (interaction-environment))
+Error: z: unbound variable
+shikra> (eval '(if) env)
+Error: malformed if
+shikra> (guard (e (#t (error-object-message e))) (eval '(car 1) env))
+"car: expected pair"
+shikra> (eval '(import (scheme write)) env)
+shikra> (eval '(begin (write "via eval") (newline)) env)
+"via eval"
+shikra> (environment '(scheme no-such-library))
+Error: library (scheme no-such-library) not found
+shikra> (load "loadme.scm")
+shikra> loaded-value
+from-loadme
+shikra> (twice (lambda (x) (* x 3)) 2)
+18
+shikra> (define a 1) (define b 2)
+shikra> (swap! a b)
+shikra> (list a b)
+(2 1)
+shikra> (load "loadme.scm" env)
+shikra> (eval 'loaded-value env)
+from-loadme
+shikra> (eval (list 'quote (vector 1 2)) env)
+#(1 2)
+shikra> (interaction-environment)
+#<environment>
+shikra> 

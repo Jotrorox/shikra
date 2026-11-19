@@ -1,0 +1,37 @@
+shikra> (define x 10)
+shikra> (car 5)
+Error: car: expected pair 5
+shikra> x
+10
+shikra> (vector-ref (vector 1 2) 7)
+Error: vector-ref: index out of range 7
+shikra> (error "my error" 'a "b" 3)
+Error: my error a "b" 3
+shikra> (raise 'oops)
+Error: uncaught exception: oops
+shikra> undefined-variable
+Error: undefined-variable: unbound variable
+shikra> (if)
+error: malformed if
+shikra> (let ((y)) y)
+error: malformed let binding (y)
+shikra> (1 2 3)
+Error: not a procedure 1
+shikra> (display "partial") (car '()) (display "not reached")
+partial
+Error: car: expected pair ()
+shikra> #q
+Error: bad # syntax
+shikra> (define (f) (g))
+shikra> (f)
+Error: g: unbound variable
+shikra> (define (g) 'now-defined)
+shikra> (f)
+now-defined
+shikra> (guard (e (#t (list 'caught (error-object-message e)))) (car 1))
+(caught "car: expected pair")
+shikra> (with-exception-handler (lambda (e) 0) (lambda () (raise 'x)))
+Error: exception handler returned from non-continuable raise: x
+shikra> x
+10
+shikra> 

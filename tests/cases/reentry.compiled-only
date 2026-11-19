@@ -1,0 +1,1 @@
+the compiled engine has no re-entrant continuations until M5 (tier 3): this case pins its error; the interpreter re-enters and prints the R7RS result (tests/repl/callcc.in covers that)

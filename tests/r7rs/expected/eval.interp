@@ -1,0 +1,7 @@
+3 tests, 1 passed, 2 failed
+ERROR: (inexact (eval (quote (sin 0)) (environment (quote (scheme inexact)))))
+expected 0.0
+but got error: "library (scheme inexact) not found"
+ERROR: (eval (quote (+ (expt 2 10) (inexact (sin 0)))) (environment (quote (scheme base)) (quote (scheme inexact))))
+expected 1024.0
+but got error: "library (scheme inexact) not found"

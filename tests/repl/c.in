@@ -1,0 +1,9 @@
+(define (square x) (* x x))
+,c square
+(define (count-to n) (let loop ((i 0)) (if (< i n) (loop (+ i 1)) i)))
+,c count-to
+(define limit 10)
+,c limit
+,c nothing
+(define (square x) (+ x x))
+,c square

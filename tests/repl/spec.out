@@ -1,0 +1,6 @@
+shikra> (define (square x) (* x x))
+shikra> (map square '(1 2 3))
+(1 4 9)
+shikra> ,expand (when (> 1 0) 'yes)
+(if (> 1 0) (begin 'yes))
+shikra> 

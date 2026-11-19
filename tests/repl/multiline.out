@@ -1,0 +1,21 @@
+shikra> (define (fact n)
+  (if (= n 0)
+      1
+      (* n (fact (- n 1)))))
+shikra> (fact
+ 10)
+3628800
+shikra> "a string with ( and
+a newline" (+ 1
+2)
+"a string with ( and\na newline"
+3
+shikra> '(#\( #\) "(" ; comment with (
+  |sym (bol|) #| block ( comment |# 42
+(#\( #\) "(" |sym (bol|)
+42
+shikra> 
+shikra> (list 1 2) (list 3 4)
+(1 2)
+(3 4)
+shikra> 

@@ -1,0 +1,36 @@
+shikra> (define (make-gen lst)
+  (define return #f)
+  (define resume #f)
+  (lambda ()
+    (call/cc (lambda (r)
+      (set! return r)
+      (if resume
+          (resume #f)
+          (begin
+            (for-each (lambda (x) (call/cc (lambda (k) (set! resume k) (return x)))) lst)
+            (return 'done)))))))
+shikra> (define g (make-gen '(a b c)))
+shikra> (g)
+a
+shikra> (g)
+b
+shikra> (list (g) (g))
+(c done)
+shikra> (let ((path '()) (c #f))
+  (let ((add (lambda (s) (set! path (cons s path)))))
+    (dynamic-wind
+      (lambda () (add 'connect))
+      (lambda () (add (call-with-current-continuation (lambda (c0) (set! c c0) 'talk1))))
+      (lambda () (add 'disconnect)))
+    (if (< (length path) 4) (c 'talk2) (reverse path))))
+(connect talk1 disconnect connect talk2 disconnect)
+shikra> (define k #f)
+shikra> (+ 1 (call/cc (lambda (c) (set! k c) 1)))
+2
+shikra> (k 10)
+11
+shikra> (k 20)
+21
+shikra> (call-with-values (lambda () (call/cc (lambda (c) (c 1 2 3)))) list)
+(1 2 3)
+shikra> 

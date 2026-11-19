@@ -1,0 +1,24 @@
+shikra> (define (greet) "hello")
+shikra> (define (welcome) (greet))
+shikra> (welcome)
+"hello"
+shikra> (define (greet) "hi again")
+shikra> (welcome)
+"hi again"
+shikra> (define v 1)
+shikra> (define (get-v) v)
+shikra> (define v 2)
+shikra> (get-v)
+2
+shikra> (set! v 3)
+shikra> (get-v)
+3
+shikra> (define (car x) 'my-car)
+shikra> (car '(1 2))
+my-car
+shikra> (map car '((1) (2)))
+(my-car my-car)
+shikra> (define list-tail 5)
+shikra> list-tail
+5
+shikra> 
