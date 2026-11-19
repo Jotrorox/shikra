@@ -136,8 +136,8 @@ Raw non-`obj` words stored in precisely-scanned objects must look like fixnums
   program's global variables, runtime globals). Heap objects are scanned
   precisely. Static data (literals, static symbols, closure-free procedures) is
   never scanned or freed; any pointer outside the heap is ignored by the marker.
-- Stress mode: collect at every allocation (env `SHIKRA_GC_STRESS=1` in a
-  build made with `--gc-stress`, a hidden testing flag).
+- Stress mode: collect at every allocation (a build made with `--gc-stress`, a hidden
+  testing flag; env `SHIKRA_GC_STRESS=N` collects at every N-th allocation instead, 0 off).
 - In the tool: compile commands run with collection disabled (batch program,
   frees nothing). In the REPL, front-end allocations (datums, expander state,
   constants) are made in *immortal* mode: never reclaimed, and scanned as roots.
@@ -205,7 +205,8 @@ programs. Never linked into compiled programs.
 tests/run.sh [compiled|r7rs|interp|stress|expand|all]   driver used by `make test`
 tests/cases/NAME.scm + NAME.out             program + expected stdout (+ NAME.exit,
                                             + NAME.err: expected stderr substring,
-                                            + NAME.in: stdin, else /dev/null)
+                                            + NAME.in: stdin, else /dev/null,
+                                            + NAME.stress-interval: see M2 "Stress mode")
 tests/errors/NAME.scm + NAME.err            expected compile diagnostics (substring)
 tests/expand/NAME.scm + NAME.out            core forms as `,expand` prints them
 tests/r7rs/                                 adapted Chibi r7rs-tests, split by library
@@ -226,10 +227,9 @@ engines and the outputs must be identical.
   raising "used before its definition" (spec §3.3 asks safe mode to detect "it is an
   error" situations). Other globals and early `letrec*` references are checked. M4 can
   detect the remaining case statically (a call reachable from an earlier top-level form).
-- *Quoted pairs are writable* (§3.2 "literal constants are read-only"): pairs have no
-  header for `RT_F_RO`, so `set-car!` on a quoted list is not detected. Literal strings,
-  vectors and bytevectors are read-only. M2 may place literal pairs in a const section
-  (mutation then faults instead of raising) or check an address range.
+- (Resolved in M2: quoted pairs are read-only too. All literals are `static const`; literal
+  pairs sit in one array and `set-car!`/`set-cdr!` raise "expected mutable pair" for them.
+  In the REPL (M3) quoted data are immortal heap pairs, so mutating them is not detected.)
 - *Tree shaking spares user code* (§9 "anything unreachable ... is never emitted"):
   every form of the program and of user libraries is compiled so that the middle end's
   diagnostics (arity of known calls) cover all user code; only built-in library code is
@@ -254,10 +254,16 @@ engines and the outputs must be identical.
 - *No exact rationals beyond `/`* (M1 part B): `expt` with a negative exact exponent follows
   `/` (flonum unless it divides); `string->number`/the reader give `#f`/a read error for ratio
   parts outside the fixnum range. See "M1 part B, Decisions" for the remaining small choices.
-- *Hello world on macOS arm64 is 69 KB*, not ~50 KB (§9.4, M1 part A): `raise` is always
-  linked (runtime errors are raised through it) and `display` reads the
-  `current-output-port` parameter; the text grew by ~2.5 KB but crossed a 16 KB page. M4's
-  type-level shaking and inlining are expected to win this back.
+- *Hello world on macOS arm64 is 70 KB*, not ~50 KB (§9.4, M1 part A; 70,128 bytes since M2):
+  `raise` is always linked (runtime errors are raised through it) and `display` reads the
+  `current-output-port` parameter. Since M2 hello world also links the collector (+5.3 KB
+  text): the library's top-level `make-parameter` calls allocate, and tree shaking keeps
+  every impure top-level form of a built-in library. M4's type-level shaking and inlining
+  are expected to win this back; with `--gc=bump` hello world is 69,312 bytes.
+- *Stress mode collects at every allocation for all but six cases* (§13 M2 "done when"):
+  the r7rs gate and 35 of the 41 programs in tests/cases collect at every allocation, at
+  -O2 and -O0; six whose live set or allocation count makes a full collection per
+  allocation quadratic use a per-case interval (M2 "Stress mode" lists them and why).
 
 ## 11. As built
 
@@ -304,10 +310,11 @@ must come first in the amalgamation (and first in tool .c files that include lib
 **Program-mode contract** (what the emitter must provide/assume): the generated code
 defines `static void rt_program_main(void)` (rt_sys.c's `main` calls `rt_init`, then
 it, then `rt_exit(0)`) and `static void rt_engine_raise(obj e)` (noreturn; the Scheme
-`raise`; may fall back to `rt_uncaught(e)`). Static symbols must be entered with
-`rt_intern_static(sym)` at startup so `string->symbol` finds them. Static literals use
+`raise`; may fall back to `rt_uncaught(e)`). (M2: static symbols are listed in
+`rt_static_syms[]`; `rt_intern_static` is gone.) Static literals use
 the RT_HDR macro and the structs in rt.h; set `RT_F_RO` on literal strings, vectors
-and bytevectors (mutators check it).
+and bytevectors (mutators check it). (M2: everything static is `const`, pairs go into
+`rt_lit_pairs[]` -- see "M2 as built", "Static data".)
 
 **Values.** `obj` is `struct rt_obj_ *` (not an integer) so that static initializers
 like `(obj)((char *)&lit + 5)` are C99 address constants. Immediates: `#f`=0x007,
@@ -329,10 +336,8 @@ rt.h (1..15 all-obj, 16..31 raw, 32+ special). Decisions not in §4:
 tag with `RT_TAGPTR`), `rt_cons(a, d)` (pair stream), `rt_alloc_raw(n)` (unscanned
 buffer). Pairs and headered objects use separate bump streams (`rt_pp/rt_plim`,
 `rt_hp/rt_hlim`) so Immix can keep pairs in pair-only blocks where every 16-byte
-cell is an object start; `RT_GC_NOTE_START(p)` is the hook for an object-start
-bitmap. Slow path `rt_alloc_slow` takes 1 MB chunks from `rt_sys_mem` (large objects
-get their own mapping). `rt_gc_add_roots(start, end)`, `rt_gc_set_immortal`,
-`rt_gc_collect` exist; under bump they only record. Rule: initialise every field of a
+cell is an object start; (Since M2 the fast path records
+nothing; see "M2 as built" for the slow path, roots, immortal mode and collection.) Rule: initialise every field of a
 new object before the next allocation. The stack base is passed to `rt_init`.
 
 **Error path.** `rt_error(who, msg, irritants)` builds message "who: msg";
@@ -374,8 +379,7 @@ FILE errors). Binary and bytevector ports: M1 part B.
   write-shared/datum labels in rt_print).
 - (Fixed in M1 part B: every open output port is flushed at exit.)
 - `exact`/integer division on flonums outside ±2^62 raise an error.
-- The collector is bump-only; `--gc` is parsed but ignored until M2. The tool has
-  no Immix either, so `rt_gc_set_immortal` is a no-op.
+- (Done in M2: the Immix collector, `--gc`, immortal mode.)
 - M6 (no-libc Linux) must also provide memcpy/memset symbols: the C compiler may emit
   calls to them for struct copies even though the runtime calls only rt_memcpy.
 
@@ -536,8 +540,8 @@ become a join point of its caller), `type` for the flow analysis, `prim_table` f
 
 **Calling convention** (rt.h "compiled calling convention"). Uniform signature
 `obj f(obj self, intptr_t argc, obj a0..a3)`; arguments beyond a3 go in `rt_args[]`
-(`RT_ARGBUF` = 64 static slots registered as GC roots; `rt_args_reserve` grows it,
-TODO(M2): root the grown buffer), stored right before the call, copied out in the
+(`RT_ARGBUF` = 64 static slots registered as GC roots; `rt_args_reserve` grows it and
+registers the new buffer as a root range), stored right before the call, copied out in the
 callee's prologue. Rest lists: `rt_rest_list(argc, nreq, a0..a3)`. Every non-clause
 procedure checks `argc` (`rt_arity_error(name, argc)` → "fib: wrong number of
 arguments 3"). Unknown calls check `RT_CALLABLE(f)` ("not a procedure 5") and call
@@ -555,12 +559,13 @@ assignment of the parameters. Every other tail call is `RT_MUSTTAIL return f(...
 iterations at `-O0` and `-O2` (tests/cases/tail_calls.scm). Fallback: see Deviations.
 
 **Emitted C** (emit.c): `#define SHIKRA_PROGRAM 1` + config (`RT_UNSAFE RT_DEBUG
-RT_GC_BUMP RT_UNICODE_FULL RT_GC_STRESS`, from the flags; the runtime does not read them
-yet) + rt.h + program + `rt_sys.c rt_gc.c rt_core.c rt_str.c rt_num.c rt_io.c rt_read.c`.
-Program: literals as static data (`L<n>`: `rt_string`/`rt_pair`/`rt_flonum` (hex float)/
+RT_GC_BUMP RT_UNICODE_FULL RT_GC_STRESS`, from the flags; since M2 the runtime reads
+`RT_GC_BUMP`, `RT_GC_STRESS` and `RT_UNSAFE` (literal-pair check), plus `RT_NLITPAIRS` and
+`RT_NSTATIC_SYMS`) + rt.h + program + `rt_sys.c rt_gc.c rt_core.c rt_str.c rt_num.c rt_io.c rt_read.c`.
+Program: literals as static data (`L<n>`: `rt_string`/`rt_flonum` (hex float)/
 vector/bytevector structs, `RT_F_RO` on strings, vectors, bytevectors; symbols are
-static `rt_symbol`s listed in `rt_static_syms` and entered with `rt_intern_static` at
-startup), `rt_g[]` (non-procedure globals, initialised to `RT_UNDEF`, one root range),
+static `rt_symbol`s listed in `rt_static_syms`; since M2 everything is `static const` and
+pairs are elements of `rt_lit_pairs[]`), `rt_g[]` (non-procedure globals, initialised to `RT_UNDEF`, one root range),
 prototypes, static closures `C_...` (`RT_SPROC(c)` is the address-constant obj), one
 function per procedure, `rt_program_main` (calls `P_init`, the program body) and
 `rt_engine_raise` (`rt_uncaught` until M1). Names: procedures
@@ -768,7 +773,8 @@ procedure, `(string->number "#x4000000000000001/3e1")`, or the R7RS 6.10 re-entr
 (tier 3, M5).
 
 **Known gaps**
-- Bump allocation only: the 10^6 raise/catch loop allocates ~170 MB (guard closures). M2.
+- (Done in M2: the 10^6 raise/catch loop of exceptions.scm peaks at 2.6 MB RSS instead of
+  130 MB under bump.)
 - Tier 2 capture costs an `rt_call_cc` frame, two closures, and a rest list per invocation.
 - An after thunk that escapes during `travel-to!` abandons the rest of the original jump
   (the winders list is consistent at every step; R7RS leaves this unspecified).
@@ -900,3 +906,191 @@ flush at exit (run.sh checks the file afterwards). `make test`: 138 checks.
 - `utf8->string` of invalid UTF-8 substitutes U+FFFD instead of raising.
 - `(scheme file)` (and so `open-binary-input-file` etc.), `read`, `write-shared` are M5;
   file ports already exist in the runtime and are flushed at exit.
+
+### M2 (the collector, static literals and symbols)
+
+**File map** (runtime +490 lines → 3,185 in `rt.h` + `rt_*.c`; `rt_gc.c` 496 lines, of which
+the Immix collector is ~430; compiler +10)
+
+```
+src/rt_gc.c      shared: roots registry, enable flag, rt_alloc_raw; RT_GC_BUMP: the never-freeing
+                 allocator; default: Immix (heap, spaces, marking, collection, allocation)
+src/rt.h         memory API (+ rt_gc_enable), rt_lit_pairs[] / RT_LITPAIR, rt_static_syms[]
+src/rt_core.c    rt_init allocates nothing; symbol table made on first use; rooted rt_args growth
+src/rt_io.c      static standard ports
+src/rt_sys.c     rt_sys_free (munmap), rt_sys_getenv
+src/emit.c       static const literals and closures, rt_lit_pairs[], RT_NLITPAIRS/RT_NSTATIC_SYMS
+tests/cases/gc_*.scm, literals.scm, *.stress-interval; tests/run.sh stress; rt_unit.c GC tests
+```
+
+**Heap layout.** Memory comes from `rt_sys_mem` in *chunks* of 32 KB-aligned *blocks* (first
+chunk 32 blocks = 1 MB; each growth adds a chunk as large as the whole block heap, so there are
+few chunks: at most 48). Each chunk has a side array of block descriptors
+`{kind, line[128], start[64], mark[64]}` (1.2 KB per 32 KB block): kind is free, headered or
+pairs, optionally immortal; one state byte per 256-byte line (`L_FREE`, `L_LIVE` = held a
+marked object at the last collection, `L_NEW` = claimed since, `L_RUN` = first line of a
+claimed headered run, plus the `L_MARK` bit during marking); start and mark bitmaps with one
+bit per 8-byte granule. A pair block holds only pairs, so every 16-byte cell is an object start
+and needs no start bit. Requests above 8 KB that miss the fast path go to the *large object
+space*: one mapping each (`{size, bytes, mark, imm}` header, object at +32), kept in a sorted
+table for interior lookups, unmapped when dead. (Objects up to 32 KB can still land in a block
+when they fit the current run.)
+
+**Allocation.** Five spaces bump through runs of free lines: headered and pair streams (their
+cursor/limit are the fast-path globals `rt_hp/rt_hlim`, `rt_pp/rt_plim`), an *overflow* space
+for medium objects (> 256 bytes) that miss the current headered run, and immortal headered and
+pair spaces. The slow path (`rt_alloc_slow`, `gc_refill`) searches, in address order from where
+the space stopped, the next block that is free or (for the two streams) of its kind, claims the
+next maximal run of free lines, and continues; overflow and immortal spaces take whole free
+blocks only (immortal ones zeroed). When no block is left: collect if collection is enabled and
+lines were claimed since the last collection, else add a chunk. The fast path stays add,
+compare, store and records nothing.
+
+**Object starts.** Claiming a headered run marks its first line `L_RUN`. Whenever a space leaves
+a run, and at the start of each collection for the current runs, a zero word is written at the
+cursor (headers are never zero). A collection first walks every `L_RUN` run by header sizes up
+to the zero word or the run end and sets the start bits; sweeping keeps the start bits of marked
+objects only, so survivors keep theirs and dead objects lose theirs.
+
+**Marking.** Roots, in order: registered ranges (precise), immortal objects (every object in an
+immortal block or large immortal object is scanned as a root, and marking never enters them), then
+the C stack from a local of the collector up to the base given to `rt_init`, word by word. The
+collector runs inside `rt_sys_catch`, whose jump buffer (sigsetjmp) or frame (`__builtin_setjmp`
+makes the compiler spill callee-saved registers) holds the register contents, so registers are
+covered. Two marking entries:
+- `gc_mark(x)`, *precise* (root ranges, heap fields): only a tagged word is followed; the target
+  must be a valid object: in a pair block a 16-byte-aligned cell in a non-free line (tag 001), in
+  a headered block a set start bit (tag 101, or 011 with the header one word before the code
+  word), or exactly a large object. Anything else (static data, stale words) is ignored.
+- `gc_mark_any(a)`, *conservative* (stack words, the raw `buf` of strings and ports): a keeps the
+  object it points at or into alive, tagged or not: in a pair block the cell containing a (non-free
+  line), in a headered block the object whose start is the nearest set start bit at or below a if
+  a lies inside it, or a large object containing a.
+
+Marking an object sets its mark bit and the `L_MARK` bit of every line it covers, then pushes its
+obj fields as one range on an explicit mark stack (`gc_scan`): header types 1..15 all words after
+the header, procedures the captured values (not the code word), ports the name; string and port
+buffers are marked on the spot (raw, no fields); raw types 16..31 nothing. `gc_drain` pops a
+range, re-pushes everything beyond 64 fields (long vectors in slices) and marks the slice's
+fields last-to-first, so the first field is popped first (lists of lists stay shallow). The mark
+stack grows by doubling up to 2^20 entries (2^12 in stress builds); when it cannot grow, the
+object stays marked but unscanned and `gc_rescan` later rescans every marked object, in
+descending address order (objects usually point to older, lower ones), until a pass overflows no
+more. Deep structures never recurse on the C stack.
+
+**Sweep and growth.** A line is free iff it holds no marked object; a block with no live line
+becomes free (for either kind); large objects not marked are unmapped. Every space restarts its
+search at the first block. If more than half of the block heap is still in use, a chunk the size
+of the heap is added (the heap doubles). Large-object allocation collects first once more bytes
+than max(live large bytes, block heap size, 4 MB) were allocated since the last collection. The
+heap never shrinks (free blocks are reused, not returned to the OS); there is no defragmentation
+(non-moving; spec §15 risk).
+
+**Enable flag, tool mode.** Collection is on in programs and off in the tool
+(`rt_gc_enable(1)` turns it on: M3's REPL); compile commands therefore allocate through the same
+blocks without ever collecting (their datums live in compiler arenas the collector cannot see).
+`rt_gc_collect()` collects at once (no-op before the first allocation or under bump).
+
+**Immortal mode.** `rt_gc_set_immortal(1)` switches the fast-path globals to the immortal spaces;
+allocations then go to zeroed immortal blocks (or immortal large objects) that are never swept or
+reused and whose objects are scanned as roots at every collection, so mortal objects they point to
+survive. `rt_gc_set_immortal(0)` switches back. Tested in rt_unit.c.
+
+**Static data** (spec §6.1, §7). The emitter writes every literal and every closure-free
+procedure as `static const` (read-only data; `__DATA_CONST` on macOS) with no startup code:
+strings, vectors, bytevectors carry `RT_F_RO`; flonums, symbols (a static name string) and
+closures are plain const structs; *all pairs* are elements of one array
+`static const rt_pair rt_lit_pairs[RT_NLITPAIRS]` (declared tentatively by rt.h, so other
+literals may point into it), and `set-car!`/`set-cdr!` check `RT_LITPAIR(x)` (one subtraction,
+one comparison against a link-time constant) and raise "set-car!: expected mutable pair"; with
+`--unsafe` the check is compiled out and a write faults (SIGBUS) because the data are read-only.
+The collector never sees static data (outside the heap). Symbols in source are static and
+compared by address; they are listed in `static const obj rt_static_syms[RT_NSTATIC_SYMS]`, which
+only the symbol table's creation reads: the table is made by the first `string->symbol` (or
+`read`), seeded with them, so `string->symbol` returns the static symbol and a program that never
+interns links neither the table nor the list. `symbol->string` needs no table.
+
+**Pay for use** (spec §9.1). `rt_init` allocates nothing (the standard ports are static structs
+with static 4 KB buffers; no symbol table) and only records the stack base and root ranges.
+Everything of the collector hangs off `rt_alloc_slow`, so a program that never allocates drops it
+at link time: a program-mode stand-in that only writes a string has the same 1,016 bytes of text
+with immix and with `RT_GC_BUMP`. In practice every Scheme program allocates (the library's
+parameters), so it links the collector: hello world is 70,128 bytes (text 21,040) with immix,
+69,312 (text 14,328) with `--gc=bump`; before M2 it was 69,192 (text 15,736).
+
+**Root audit.** Registered ranges: `rt_g[]` (program globals), `core_symtab`, `core_argbuf`
+and every grown `rt_args` buffer (an abandoned buffer is cleared), `rt_winders`, `rt_handlers`,
+`rt_stdin/out/err`, `rt_ports`. On the C stack (conservative): `core_cont` frames of tier-2
+`call/cc` (jump buffer, saved lists, `k`), the reader's `rd_t`, `rt_values_n` argument arrays,
+everything of generated code. `core_conts` points to stack frames only; a continuation's
+`free[0]` is a raw frame address that looks like a fixnum. Tool-only: the reader's source
+location table (OS memory, unscanned: datums must be immortal or collection off).
+
+**For the VM engineer (M3).** The VM must make its roots visible: register the value stack once
+as a fixed array with `rt_gc_add_roots` (keep the slots above the stack pointer holding valid objs
+or fixnum-looking words, e.g. clear them on pop or when a frame is abandoned; at most 64 ranges in
+all), likewise the globals table if it lives in C memory (or allocate it on the heap and root one
+word), and any C-side caches of objs. Values in C locals of the VM loop are covered by the stack
+scan. Call `rt_gc_enable(1)` once the REPL starts; allocate front-end datums, macro environments
+and bytecode constants with `rt_gc_set_immortal(1)` around the front end (the source-location
+table holds pair addresses the collector does not see), then switch back before running user
+code. Error recovery that longjmps to the prompt is fine: nothing is held across.
+
+**For tier 3 (M5).** A heap copy of a C stack segment must be an object the collector scans
+*conservatively*: give it its own header type (e.g. `RT_T_CONT`, today in the raw class) and add a
+case to `gc_scan` that marks every word of the copy with `gc_mark_any` -- through the mark stack,
+with a "conservative" flag on the range (e.g. the low bit of `lo`) so that chains of
+continuations do not recurse. The copied jump buffer then also covers the saved registers. While
+a segment is copied back onto the C stack it is ordinary stack and needs nothing. Keep the
+original pointers valid: the collector is non-moving, so addresses in the copy stay correct.
+
+**Stress mode.** `--gc-stress` defines `RT_GC_STRESS`: the fast-path limits are kept equal to the
+cursors, so every allocation enters the slow path, which collects at every allocation, or every
+N-th with env `SHIKRA_GC_STRESS=N` (0: off), and the mark stack is capped at 4,096 entries so
+that the overflow rescan runs too. `tests/run.sh stress` (part of `make test`) builds every case
+and the r7rs gate at -O2 and at -O0 and compares with the normal expected results (r7rs: the same
+`tests/r7rs/expected/base.compiled`). The -O0 pass raises the C stack to 64 MB (`ulimit -s`):
+callcc.scm recurses 10^5 frames deep and -O0 frames exceed 83 bytes; that program overflowed the
+default 8 MB stack at -O0 before M2 as well. Per-case intervals (`NAME.stress-interval`), each
+because a full collection per allocation would be quadratic:
+
+| case | N | reason |
+|---|---|---|
+| tail_calls | 1,000 | 2·10^7 allocations, up to 10^6 closures live (the `cps` chain) |
+| gc_cons | 100 | 1.2·10^7 allocations |
+| gc_mixed | 100 | ~5·10^6 allocations |
+| gc_reach | 10 | ~2·10^6 allocations (34 s at N = 1) |
+| gc_deep | 100,000 | ~5·10^6 allocations with 3·10^6 objects live |
+
+gc_large runs at N = 1. All other cases and the r7rs gate run at N = 1: the gate makes 10,912
+collections. Timing (Apple M-series, this machine): `tests/run.sh stress` 2:52 for 84 checks,
+`make test` 3:14 for 234. The register-capture path through `__builtin_setjmp` was also checked
+under stress with `--cc "cc -arch x86_64"` (Rosetta).
+
+**Memory** (peak RSS, `/usr/bin/time -l`, immix vs `--gc=bump`): gc_cons 2.6 MB vs 194 MB,
+gc_mixed 2.6 MB vs 387 MB, gc_large 7.8 MB vs 502 MB, gc_reach 2.6 MB vs 117 MB, the 10^6
+raise/catch loop (exceptions.scm) 2.6 MB vs 130 MB, tail_calls 26 MB vs 42 MB (it keeps 10^6
+closures live), gc_deep 157 MB vs 145 MB (80 MB live plus a 16 MB mark stack). Run times equal
+within noise.
+
+**Bugs stress mode exposed in existing code**: none. Every case and the gate passed under
+stress on the first run at -O2; the only -O0 failure (callcc.scm) is the stack depth above, not
+a collector issue. The audit before that found two latent problems, fixed: the grown argument
+buffer was not a root, and `rt_init` allocated (ports, symbol table) for every program.
+
+**Decisions**
+- Object starts by walking new runs at collection time instead of a store in the fast path.
+- Headered heap fields are trusted only at a start bit; untagged string/port buffers and stack
+  words are looked up conservatively. A stale or dead object kept by a conservative pointer can
+  keep what it points to alive (validated, never misread).
+- `rt_ports` stays a strong list: an unclosed file port must be flushed at exit.
+- Interned symbols are never collected (the symbol table is a strong root).
+- The standard ports cost 12 KB of zero-fill (`__bss`), not file size.
+
+**Known gaps**
+- No compaction or block release to the OS; fragmentation under long runs is untested (spec §15).
+- The mark-stack rescan is quadratic for deep structures built top-down beyond 2^20 pending
+  entries (never seen in the suite).
+- Quoted data in the REPL (immortal heap pairs) are mutable (no `RT_LITPAIR` there).
+- Fixed limits: 64 root ranges, 48 chunks (with doubling growth: far beyond any real heap).
+- Weak references, finalizers, guardians: none (R7RS-small needs none).
