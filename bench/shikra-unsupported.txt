@@ -1,0 +1,6 @@
+# Benchmarks Shikra cannot run by design (spec section 3.2 / section 3).
+# Format: NAME|REASON  (REASON goes into the CSV note; details in README.md)
+pi|bignums: exact integers are 63-bit fixnums and overflow raises an error (spec 3.2); computes pi to 50-1000 digits with exact integer arithmetic and reads 50-500 digit integers from its input
+chudnovsky|bignums: exact integers are 63-bit fixnums and overflow raises an error (spec 3.2); Chudnovsky pi to 50-1000 digits, (expt 640320 3) products and multi-hundred-digit input literals
+mbrotZ|complex numbers: (scheme complex) is omitted, no complex numbers (spec 3, 3.1); iterates make-rectangular/real-part/imag-part
+compiler|complex numbers and bignums: imports (scheme complex), which is omitted (spec 3.1), calls real-part/imag-part, and contains the literal 9223372036854775808 = 2^63, beyond the 63-bit fixnum range (spec 3.2)
