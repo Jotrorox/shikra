@@ -2168,8 +2168,11 @@ crash at -O0 for the libc and nolibc builds alike; with it, every run has 64 MB)
 stress in full, both compilers: reader 35, unit 3, amalg 1, expand 1, levels 439, shape 34,
 interp 65 (+1 skip), tramp 64: 642 passed, 0 failed. Stress with `STRESS_SCALE=20` (a collection
 every 20 allocations, every per-case interval times 20): 192 passed, 0 failed, 1 skipped with
-each compiler (about 40 minutes per compiler; collecting at every allocation under qemu was
-started as well, see the M6 report).
+each compiler (about 40 minutes per compiler). At the real intervals (a collection at every
+allocation) the compiled -O2 stress pass also finished under qemu: 64 passed, 0 failed with each
+compiler, in about 70 minutes; the -O0 and interpreter stress passes at full intervals were still
+running after 2.5 hours and were stopped, so on amd64 those two are covered only at
+`STRESS_SCALE=20`.
 
 Cross-compilation from macOS, executed in the containers: tests/cases hello fib closures callcc
 exceptions float_text gc_cons gc_mixed dynamic_wind values stdlib error_names char_ascii
