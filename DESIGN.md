@@ -2184,8 +2184,7 @@ file that `cc out.c` and `gcc-16 out.c` build with no flags (tested). `--target`
 port's and was not touched.
 
 **Tests** (`make test` adds the modes size, cache, debug, driver to `all`): see the headers of each
-mode in tests/run.sh. `make test`: 1,020 checks before the last fixes of this milestone (2 skips as
-before); the final count is in the commit that records it.
+mode in tests/run.sh. `make test`: 1,020 checks pass (831 at the start of M4-3), 2 skips as before.
 
 **Benchmarks** (M4's done-when; bench/RESULTS.md). Series `m4-3` / `m4-3-unsafe` (CSV
 `m4-3-20261119-1616`, `m4-3-unsafe-20261119-1619`; an earlier pair at 15:39/15:42 is kept too): 53/53
