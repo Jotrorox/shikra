@@ -106,7 +106,7 @@ enum {
     RT_T_PROC                     /* header sits one word BEFORE the code pointer */
 };
 /* Header flags */
-#define RT_F_RO 0x01          /* read-only literal (strings, vectors, bytevectors, pairs n/a) */
+#define RT_F_RO 0x01          /* read-only literal (strings, vectors, bytevectors; pairs: RT_LITPAIR) */
 #define RT_F_ASCII 0x02       /* string: chars == bytes */
 #define RT_F_PLACEHOLDER 0x04 /* box used by the reader for datum labels */
 enum { RT_ERR_GENERAL = 0, RT_ERR_FILE = 1, RT_ERR_READ = 2 }; /* error-object kind (flags) */

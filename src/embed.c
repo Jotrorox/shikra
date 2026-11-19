@@ -1290,7 +1290,7 @@ static const char *const e19[] = {
 "    RT_T_PROC                     /* header sits one word BEFORE the code pointer */\n"
 "};\n"
 "/* Header flags */\n"
-"#define RT_F_RO 0x01          /* read-only literal (strings, vectors, bytevectors, pairs n/a) */\n"
+"#define RT_F_RO 0x01          /* read-only literal (strings, vectors, bytevectors; pairs: RT_LITPAIR) */\n"
 "#define RT_F_ASCII 0x02       /* string: chars == bytes */\n"
 "#define RT_F_PLACEHOLDER 0x04 /* box used by the reader for datum labels */\n"
 "enum { RT_ERR_GENERAL = 0, RT_ERR_FILE = 1, RT_ERR_READ = 2 }; /* error-object kind (flags) */\n"

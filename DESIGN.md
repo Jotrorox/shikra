@@ -260,9 +260,9 @@ engines and the outputs must be identical.
   text): the library's top-level `make-parameter` calls allocate, and tree shaking keeps
   every impure top-level form of a built-in library. M4's type-level shaking and inlining
   are expected to win this back; with `--gc=bump` hello world is 69,312 bytes.
-- *Stress mode collects at every allocation for all but six cases* (§13 M2 "done when"):
-  the r7rs gate and 35 of the 41 programs in tests/cases collect at every allocation, at
-  -O2 and -O0; six whose live set or allocation count makes a full collection per
+- *Stress mode collects at every allocation for all but five cases* (§13 M2 "done when"):
+  the r7rs gate and 36 of the 41 programs in tests/cases collect at every allocation, at
+  -O2 and -O0; five whose live set or allocation count makes a full collection per
   allocation quadratic use a per-case interval (M2 "Stress mode" lists them and why).
 
 ## 11. As built
@@ -1062,7 +1062,8 @@ because a full collection per allocation would be quadratic:
 | gc_reach | 10 | ~2·10^6 allocations (34 s at N = 1) |
 | gc_deep | 100,000 | ~5·10^6 allocations with 3·10^6 objects live |
 
-gc_large runs at N = 1. All other cases and the r7rs gate run at N = 1: the gate makes 10,912
+(In the gc_deep stress run the 4,096-entry mark stack overflows and the rescan runs at most
+collections.) gc_large runs at N = 1. All other cases and the r7rs gate run at N = 1: the gate makes 10,912
 collections. Timing (Apple M-series, this machine): `tests/run.sh stress` 2:52 for 84 checks,
 `make test` 3:14 for 234. The register-capture path through `__builtin_setjmp` was also checked
 under stress with `--cc "cc -arch x86_64"` (Rosetta).
