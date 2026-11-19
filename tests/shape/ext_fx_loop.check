@@ -1,0 +1,21 @@
+flags --keep sum-fx --keep sum-generic
+# sum-fx is kept as a first-class procedure, so n arrives with an unknown type. The fx loop: tagged
+# intptr_t loop variables, one type check (rt_fxchk of n, where it enters), i + 1 a plain add
+# (i < n), acc + i the checked add naming fx+; no generic arithmetic, no call.
+fn P_main__sum_fx[(]
+has intptr_t[[:space:]]v_i_
+has intptr_t[[:space:]]v_acc_
+loops 1
+count 1 rt_fxchk[(]
+count 1 rt_fxaddw[(]
+no rt_(add|lt|fx_add|fx_lt)[(]
+no RT_NT[(]
+# the generic operations on the same unknown n: a generic comparison and two checked adds
+fn P_main__sum_generic[(]
+loops 1
+no rt_fxchk[(]
+has rt_lt[(]
+# inlined into the program body, where n is a proven fixnum: the generic loop has the fx loop's
+# operations without the check (at -O2 and -Os; -O0 does not inline them)
+fn P_init[(]
+no rt_(lt|add)[(]

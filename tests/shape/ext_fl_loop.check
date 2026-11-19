@@ -1,0 +1,13 @@
+flags --keep integrate
+# integrate is kept as a first-class procedure: n and h arrive with unknown types. acc is a C
+# double; no flonum box is made or opened in the loop; h is checked (rt_flchk) where it is used,
+# every operation is double arithmetic, flexp the platform's exp, fl+* a fused multiply-add.
+fn P_main__integrate[(]
+has double[[:space:]]v_acc_
+loops 1
+no rt_make_flonum
+no rt_alloc
+no rt_fl_(add|mul|sub|fma|exp)[(]
+has rt_flfma[(]
+has rt_sys_exp[(]
+count 1 rt_flchk[(]
