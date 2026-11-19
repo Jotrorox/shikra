@@ -1,0 +1,14 @@
+result
+(before during after)
+escaped
+(connect talk1 disconnect)
+out
+(outer-in inner-in inner-out outer-out)
+b-escaped
+(a-in b-in b-out a-out)
+caught
+(in out (clause err))
+((before outside) (body inside) (after outside))
+(1 2)
+up
+(w1-in w2-in w2-out w1-out outer-clause)

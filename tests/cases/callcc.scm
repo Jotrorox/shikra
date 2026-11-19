@@ -1,0 +1,45 @@
+;; call-with-current-continuation, tiers 1 and 2 (R7RS 6.10; spec §8.2).
+(import (scheme base) (scheme write))
+(define (show x) (write x) (newline))
+;; R7RS 6.10
+(show (call-with-current-continuation
+       (lambda (exit)
+         (for-each (lambda (x) (if (negative? x) (exit x))) '(54 0 37 -3 245 19))
+         #t)))
+(define list-length
+  (lambda (obj)
+    (call-with-current-continuation
+     (lambda (return)
+       (letrec ((r (lambda (obj)
+                     (cond ((null? obj) 0)
+                           ((pair? obj) (+ (r (cdr obj)) 1))
+                           (else (return #f))))))
+         (r obj))))))
+(show (list-length '(1 2 3 4)))
+(show (list-length '(a b . c)))
+;; tier 1: k only called in the body, no lambda crossed
+(show (call/cc (lambda (k) (+ 1 (k 42)))))
+(show (call/cc (lambda (k) 'normal-return)))
+(define (classify x) (call/cc (lambda (k) (if (< x 0) (k 'negative)) (if (= x 0) (k 'zero)) 'positive)))
+(show (map classify '(-1 0 1)))
+(define (half x) (+ 1 (call/cc (lambda (k) (let ((y (* x 2))) (if (> y 10) (k 100) y))))))
+(show (list (half 2) (half 20)))
+(show (call-with-values (lambda () (call/cc (lambda (k) (k 1 2)))) list))
+(show (call-with-values (lambda () (call/cc (lambda (k) (k)))) list))
+;; tier 2: k passed down to callees, escaping from deep recursion (10^5 frames)
+(define (deep n k) (if (= n 0) (k 'bottom) (+ 1 (deep (- n 1) k))))
+(show (call/cc (lambda (k) (deep 100000 k))))
+(define (find-first pred l)
+  (call/cc (lambda (return) (for-each (lambda (x) (if (pred x) (return x))) l) #f)))
+(show (list (find-first even? '(1 3 4 5 6)) (find-first even? '(1 3))))
+(define (escape-with k . vals) (apply k vals))
+(show (call-with-values (lambda () (call/cc (lambda (k) (escape-with k 'a 'b 'c)))) list))
+(show (call-with-values (lambda () (call/cc (lambda (k) (escape-with k)))) list))
+(show (procedure? (call/cc (lambda (k) k))))
+(define (f k) (k 'via-variable))
+(show (call/cc f))
+;; nested: the inner body escapes through the outer continuation
+(show (call/cc (lambda (outer) (list 'inner (call/cc (lambda (inner) (escape-with outer 'outer-value)))))))
+;; the handler stack is restored by an escape
+(show (call/cc (lambda (k) (with-exception-handler (lambda (e) (k (list 'handled e))) (lambda () (raise 'boom))))))
+(show (guard (e (#t (list 'outer-guard e))) (raise 'after-escape)))

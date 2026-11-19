@@ -1,0 +1,1 @@
+malformed_guard.scm:2:1: error: no matching syntax-rules clause for (guard (e (#t 1)))

@@ -1,0 +1,18 @@
+-3
+4
+#f
+42
+normal-return
+(negative zero positive)
+(5 101)
+(1 2)
+()
+bottom
+(4 #f)
+(a b c)
+()
+#t
+via-variable
+outer-value
+(handled boom)
+(outer-guard after-escape)

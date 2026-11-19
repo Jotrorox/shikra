@@ -1,2 +1,2 @@
-(import (scheme base))
-(guard (e (#t 'caught)) (raise 'oops))
+(import (scheme base) (only (shikra primitives) delay))
+(delay (+ 1 2))
