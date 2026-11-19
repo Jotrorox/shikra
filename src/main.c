@@ -1,5 +1,6 @@
-/* main.c -- the shikra driver (spec §11). Commands: build, run, check, emit-c (repl and size
- * are M3/M4 stubs). Hidden debugging commands:
+/* main.c -- the shikra driver (spec §11). Commands: build, run, repl, check, emit-c (size is
+ * an M4 stub). Hidden commands:
+ *   interp FILE [args]  run a program on the interpreter, like the compiled program (tests)
  *   debug-read FILE     the reader's datums
  *   debug-expand FILE   every top-level core form of the program and its libraries, with
  *                       renaming stripped (as the REPL's ,expand prints them)
@@ -17,9 +18,10 @@
 #include "util.h"
 #include "front.h"
 #include "ir.h"
+#include "interp.h"
 
 typedef enum {
-    CMD_BUILD, CMD_RUN, CMD_REPL, CMD_CHECK, CMD_EMIT_C, CMD_SIZE,
+    CMD_BUILD, CMD_RUN, CMD_REPL, CMD_CHECK, CMD_EMIT_C, CMD_SIZE, CMD_INTERP,
     CMD_DEBUG_READ, CMD_DEBUG_EXPAND, CMD_DEBUG_CORE, CMD_DEBUG_IR
 } command;
 
@@ -43,7 +45,7 @@ typedef struct {
 
 static const struct { const char *name; command cmd; } commands[] = {
     {"build", CMD_BUILD}, {"run", CMD_RUN}, {"repl", CMD_REPL}, {"check", CMD_CHECK},
-    {"emit-c", CMD_EMIT_C}, {"size", CMD_SIZE}, {"debug-read", CMD_DEBUG_READ},
+    {"emit-c", CMD_EMIT_C}, {"size", CMD_SIZE}, {"interp", CMD_INTERP}, {"debug-read", CMD_DEBUG_READ},
     {"debug-expand", CMD_DEBUG_EXPAND}, {"debug-core", CMD_DEBUG_CORE}, {"debug-ir", CMD_DEBUG_IR},
     {0, CMD_BUILD}};
 
@@ -96,7 +98,7 @@ static void parse_args(int argc, char **argv, options *o) {
     if (o->cmd == CMD_RUN) o->opt = '0';
     for (i = 2; i < argc; i++) {
         const char *a = argv[i];
-        if (o->cmd == CMD_RUN && o->input) { o->args = argv + i; o->nargs = argc - i; break; }
+        if ((o->cmd == CMD_RUN || o->cmd == CMD_INTERP) && o->input) { o->args = argv + i; o->nargs = argc - i; break; }
         if (!strcmp(a, "-O0") || !strcmp(a, "-O2") || !strcmp(a, "-Os")) o->opt = a[2];
         else if (!strcmp(a, "-O")) {
             if (i + 1 >= argc || strlen(argv[i + 1]) != 1 || !strchr("02s", argv[i + 1][0])) die("-O takes 0, 2 or s");
@@ -142,13 +144,17 @@ static char *dir_of(const char *path) {
     return *d ? d : arena_strdup(&compiler_arena, "/");
 }
 
+static void front_options(const options *o, front_opts *fo) {
+    memset(fo, 0, sizeof *fo);
+    fo->progdir = o->input ? dir_of(o->input) : ".";
+    fo->incdirs = o->incdirs;
+    fo->nincdirs = o->nincdirs;
+    fo->unicode_full = o->unicode_full;
+    fo->target = o->target;
+}
 static library *run_front(const options *o) {
     front_opts fo;
-    fo.progdir = dir_of(o->input);
-    fo.incdirs = o->incdirs;
-    fo.nincdirs = o->nincdirs;
-    fo.unicode_full = o->unicode_full;
-    fo.target = o->target;
+    front_options(o, &fo);
     compile_errors_init();
     front_init(&fo);
     return front_load_program(o->input);
@@ -330,8 +336,15 @@ int main(int argc, char **argv) {
         return 0;
     case CMD_BUILD: return cmd_build(&o);
     case CMD_RUN: return cmd_run(&o);
-    case CMD_REPL: case CMD_SIZE: break;
+    case CMD_REPL: case CMD_INTERP: {
+        interp_opts io;
+        front_options(&o, &io.fo);
+        io.argv0 = argv[0];
+        if (o.cmd == CMD_REPL) return repl_main(o.input, &io);
+        return interp_main(o.input, &io, o.nargs, o.args);
     }
-    fprintf(stderr, "shikra: '%s' is not implemented yet (%s)\n", argv[1], o.cmd == CMD_REPL ? "milestone M3" : "milestone M4");
+    case CMD_SIZE: break;
+    }
+    fprintf(stderr, "shikra: '%s' is not implemented yet (milestone M4)\n", argv[1]);
     return 1;
 }
