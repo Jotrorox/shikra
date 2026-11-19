@@ -6,9 +6,10 @@
  * bignum is never equal to a fixnum and eqv?/= on fixnums stay pointer comparisons. Plain C99 with
  * 64-bit intermediates only (no 128-bit type, no libc). Algorithms (n = limbs): schoolbook add and
  * subtract O(n), multiply O(n*m) below 40 limbs and Karatsuba O(n^1.585) above, Knuth's algorithm
- * D for division O(n*m) with a one-limb fast path, decimal printing by repeated division by 10^9 and parsing by multiply-add in chunks (both
- * O(n^2)), integer square root by Dickinson's recursive-precision Newton (about two full divisions), conversion
- * to double rounded to nearest even from the leading 64 bits plus a sticky bit. */
+ * D for division O(n*m) with a one-limb fast path, decimal printing by repeated division by 10^9
+ * and parsing by multiply-add in chunks (both O(n^2)), integer square root by Dickinson's
+ * recursive-precision Newton (about two full divisions), conversion to double rounded to nearest
+ * even from the leading 64 bits plus a sticky bit. */
 #ifndef SHIKRA_RT_H
 #include "rt.h"
 #endif

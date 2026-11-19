@@ -282,6 +282,7 @@ static const char *atom_as(ir_node *n, int rep) {
 }
 /* A proven number as a double (spec §6.2: unboxed). */
 static int only(int t, int m) { return t && !(t & ~m); }
+#define NUMT (T_NUM | (big_ ? T_BIG : 0)) /* a number whose double rt_num_dbl gives (--bignum: bignums too) */
 static const char *as_dbl(ir_node *n) {
     int t = ir_atom_type(n);
     if ((n->kind == IR_CONST && !rt_is_big(n->u.value)) || only(t, T_FLO)) return atom_as(n, R_DBL);
@@ -542,7 +543,7 @@ static const char *ext_special(ir_node *r, int *erep) {
     case PI_rt_f64vector_set: {
         ir_node *x = r->u.prim.args[2];
         A = f64a(r, 0, w), B = fxa(r, 1, w);
-        C = only(ir_atom_type(x), T_NUM) ? as_dbl(x) : fmt("rt_f64num(%s, %s)", atom_as(x, R_OBJ), w);
+        C = only(ir_atom_type(x), NUMT) ? as_dbl(x) : fmt("rt_f64num(%s, %s)", atom_as(x, R_OBJ), w);
         e = fmt("rt_f64set(%s, %s, %s)", A, B, C);
         break;
     }
@@ -595,7 +596,7 @@ static const char *ccall(ir_node *r, int *erep) {
             case FT_INT: sb_printf(&c, "rt_ffi_int(%s, %s)", x, who); break;
             case FT_LONG: sb_printf(&c, ok ? "(long)RT_FIXVAL(%s)" : "rt_ffi_long(%s, %s)", ok ? atom_as(a, R_FIX) : x, who); break;
             case FT_DOUBLE: case FT_FLOAT:
-                if (ok || only(ir_atom_type(a), T_NUM)) sb_printf(&c, "%s%s", t == FT_FLOAT ? "(float)" : "", as_dbl(a));
+                if (ok || only(ir_atom_type(a), NUMT)) sb_printf(&c, "%s%s", t == FT_FLOAT ? "(float)" : "", as_dbl(a));
                 else sb_printf(&c, "%srt_ffi_dbl(%s, %s)", t == FT_FLOAT ? "(float)" : "", x, who);
                 break;
             case FT_BOOL: sb_printf(&c, ok ? "(%s == RT_TRUE)" : "rt_ffi_bool(%s, %s)", x, who); break;
@@ -626,7 +627,7 @@ static const char *special(ir_node *r, int *erep) {
     ir_node **a = r->u.prim.args;
     int op = r->u.prim.op, sp = r->spec, n = r->u.prim.n;
     int t0 = n > 0 ? ir_atom_type(a[0]) : 0, t1 = n > 1 ? ir_atom_type(a[1]) : 0;
-    int ff = only(t0, T_FIX) && only(t1, T_FIX), fl = only(t0, T_NUM) && only(t1, T_NUM) && ((t0 | t1) & T_FLO) && (only(t0, T_FLO) || only(t1, T_FLO));
+    int ff = only(t0, T_FIX) && only(t1, T_FIX), fl = only(t0, NUMT) && only(t1, NUMT) && ((t0 | t1) & T_FLO) && (only(t0, T_FLO) || only(t1, T_FLO));
     int fcmp = (only(t0, T_FLO) && only(t1, T_FLO)) || (only(t0, T_FLO) && small_fix(a[1 < n ? 1 : 0])) || (only(t1, T_FLO) && small_fix(a[0]));
     static const char *const ops[] = {"+", "-", "*", "/", "<", ">", "<=", ">=", "=="};
     int k = op == PI_rt_add ? 0 : op == PI_rt_sub ? 1 : op == PI_rt_mul ? 2 : op == PI_rt_div ? 3 : op == PI_rt_lt ? 4 : op == PI_rt_gt ? 5
@@ -645,8 +646,22 @@ static const char *special(ir_node *r, int *erep) {
     if (k >= 0 && k <= 3 && fl) { *erep = R_DBL; return fmt("%s %s %s", as_dbl(a[0]), ops[k], as_dbl(a[1])); }
     if (k >= 4 && ff) return fmt("RT_BOOL(%s %s %s)", atom_as(a[0], R_FIX), ops[k], atom_as(a[1], R_FIX));
     if (k >= 4 && fcmp) return fmt("RT_BOOL(%s %s %s)", as_dbl(a[0]), ops[k], as_dbl(a[1]));
+    if (k >= 4 && big_ && ((only(t0, T_FIX) && only(t1, T_FIX | T_BIG)) || (only(t1, T_FIX) && only(t0, T_FIX | T_BIG)))) {
+        /* --bignum, a fixnum against a fixnum-or-bignum: a bignum never equals a fixnum (normalised);
+         * the order of two fixnums is that of their tagged words, else the generic comparison */
+        const char *x = atom_as(a[0], R_OBJ), *y = atom_as(a[1], R_OBJ), *g = only(t0, T_FIX) ? y : x;
+        static const char *const fn[] = {"rt_lt", "rt_gt", "rt_num_le", "rt_num_ge"};
+        if (k == 8) return fmt("RT_BOOL(%s == %s)", x, y);
+        return fmt("(rt_is_fix(%s) ? RT_BOOL((intptr_t)%s %s (intptr_t)%s) : %s(%s, %s))", g, x, ops[k], y, fn[k - 4], x, y);
+    }
     switch (op) {
     case PI_rt_quotient: case PI_rt_remainder: case PI_rt_modulo:
+        if (big_ && !ff && only(t0, T_FIX | T_BIG) && a[1]->kind == IR_CONST && rt_is_fix(a[1]->u.value) && a[1]->u.value != RT_FIX(0) &&
+            (op != PI_rt_quotient || a[1]->u.value != RT_FIX(-1))) { /* --bignum: a fixnum-or-bignum by a constant */
+            const char *x = atom_as(a[0], R_OBJ), *y = atom_as(a[1], R_OBJ);
+            return fmt("(rt_is_fix(%s) ? RT_O(rt_fx%s((intptr_t)%s, (intptr_t)%s)) : rt_%s(%s, %s))", x, op == PI_rt_quotient ? "quo" : op == PI_rt_remainder ? "rem" : "mod",
+                       x, y, op == PI_rt_quotient ? "quotient" : op == PI_rt_remainder ? "remainder" : "modulo", x, y);
+        }
         if (!ff) return NULL;
         *erep = R_FIX;
         if (big_ && op == PI_rt_quotient && !(a[1]->kind == IR_CONST && a[1]->u.value != RT_FIX(-1))) {
@@ -657,12 +672,12 @@ static const char *special(ir_node *r, int *erep) {
     case PI_rt_neg: if (only(t0, T_FLO)) { *erep = R_DBL; return fmt("-%s", as_dbl(a[0])); } return NULL;
     case PI_rt_abs: if (only(t0, T_FLO)) { *erep = R_DBL; return fmt("rt_flabs(%s)", as_dbl(a[0])); } return NULL;
     case PI_rt_sqrt: case PI_rt_exp: case PI_rt_log: case PI_rt_sin: case PI_rt_cos: case PI_rt_tan: case PI_rt_asin: case PI_rt_acos:
-        if (!only(t0, T_NUM)) return NULL;
+        if (!only(t0, T_NUM)) return NULL; /* --bignum: a bignum goes the generic way (rt_big_log, rt_big_sqrt) */
         *erep = R_DBL;
         return fmt("rt_sys_%s(%s)", prim_table[op].who, as_dbl(a[0]));
-    case PI_rt_atan: if (!only(t0, T_NUM)) return NULL; *erep = R_DBL; return fmt("rt_sys_atan2(%s, 1.0)", as_dbl(a[0]));
-    case PI_rt_atan2: if (!only(t0, T_NUM) || !only(t1, T_NUM)) return NULL; *erep = R_DBL; return fmt("rt_sys_atan2(%s, %s)", as_dbl(a[0]), as_dbl(a[1]));
-    case PI_rt_inexact: if (!only(t0, T_NUM)) return NULL; *erep = R_DBL; return as_dbl(a[0]);
+    case PI_rt_atan: if (!only(t0, NUMT)) return NULL; *erep = R_DBL; return fmt("rt_sys_atan2(%s, 1.0)", as_dbl(a[0]));
+    case PI_rt_atan2: if (!only(t0, NUMT) || !only(t1, NUMT)) return NULL; *erep = R_DBL; return fmt("rt_sys_atan2(%s, %s)", as_dbl(a[0]), as_dbl(a[1]));
+    case PI_rt_inexact: if (!only(t0, NUMT)) return NULL; *erep = R_DBL; return as_dbl(a[0]);
     case PI_rt_exact: case PI_rt_floor: case PI_rt_ceiling: case PI_rt_round: case PI_rt_truncate:
         if (!only(t0, T_FIX)) return NULL;
         *erep = R_FIX;

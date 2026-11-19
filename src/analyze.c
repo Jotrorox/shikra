@@ -1489,14 +1489,15 @@ static int float_slot(ir_node *r, int i) {
         return (prim_table[op].args[i] == 'd' || prim_table[op].args[i] == 'n') && op != PI_rt_make_f64vector && op != PI_rt_list_to_f64vector;
     switch (op) {
     case PI_rt_add: case PI_rt_sub: case PI_rt_mul: case PI_rt_div:
-        return only_t(t0, T_NUM) && only_t(t1, T_NUM) && ((t0 | t1) & T_FLO) && (only_t(t0, T_FLO) || only_t(t1, T_FLO));
+        return only_t(t0, TN) && only_t(t1, TN) && ((t0 | t1) & T_FLO) && (only_t(t0, T_FLO) || only_t(t1, T_FLO));
     case PI_rt_lt: case PI_rt_gt: case PI_rt_num_le: case PI_rt_num_ge: case PI_rt_num_eq:
         return (only_t(t0, T_FLO) && only_t(t1, T_FLO)) || (only_t(t0, T_FLO) && small_fixc(a[1])) || (only_t(t1, T_FLO) && small_fixc(a[0]));
     case PI_rt_neg: case PI_rt_abs: return only_t(t0, T_FLO);
     case PI_rt_sqrt: case PI_rt_exp: case PI_rt_log: case PI_rt_sin: case PI_rt_cos:
-    case PI_rt_tan: case PI_rt_asin: case PI_rt_acos: case PI_rt_atan: case PI_rt_inexact:
-        return only_t(t0, T_NUM);
-    case PI_rt_atan2: return only_t(t0, T_NUM) && only_t(t1, T_NUM);
+    case PI_rt_tan: case PI_rt_asin: case PI_rt_acos:
+        return only_t(t0, T_NUM); /* --bignum: a bignum goes the generic way (rt_big_log, rt_big_sqrt) */
+    case PI_rt_atan: case PI_rt_inexact: return only_t(t0, TN);
+    case PI_rt_atan2: return only_t(t0, TN) && only_t(t1, TN);
     default: return 0;
     }
 }
