@@ -998,25 +998,34 @@ int ir_analyze(ir_program *p, int last) {
  * (values a b ...) of the same count, received only by known receivers that spread them,
  * returns a struct of n values (R_MV). */
 static int *BOX, *SRC, *LBOX, *LSRC;
-static int float_slot(ir_node *r, int i) { /* argument i is consumed as a double by the specialised form */
-    int op = r->u.prim.op, n = r->u.prim.n, t[2], k;
-    for (k = 0; k < 2; k++) t[k] = k < n ? ir_atom_type(r->u.prim.args[k]) : 0;
+static int only_t(int t, int m) { return t && !(t & ~m); }
+static int small_fixc(ir_node *n) {
+    return n->kind == IR_CONST && rt_is_fix(n->u.value) && RT_FIXVAL(n->u.value) <= ((intptr_t)1 << 53) && RT_FIXVAL(n->u.value) >= -((intptr_t)1 << 53);
+}
+/* argument i is consumed as a double by the specialised form (the same conditions as emit.c's
+ * special(): a double used anywhere else is boxed) */
+static int float_slot(ir_node *r, int i) {
+    int op = r->u.prim.op, n = r->u.prim.n, t0, t1;
+    ir_node **a = r->u.prim.args;
+    t0 = n > 0 ? ir_atom_type(a[0]) : 0;
+    t1 = n > 1 ? ir_atom_type(a[1]) : 0;
     (void)i;
     switch (op) {
     case PI_rt_add: case PI_rt_sub: case PI_rt_mul: case PI_rt_div:
-        return (t[0] | t[1]) & T_FLO && !(t[0] & ~T_NUM) && !(t[1] & ~T_NUM) && (!(t[0] & ~T_FLO) || !(t[1] & ~T_FLO));
+        return only_t(t0, T_NUM) && only_t(t1, T_NUM) && ((t0 | t1) & T_FLO) && (only_t(t0, T_FLO) || only_t(t1, T_FLO));
     case PI_rt_lt: case PI_rt_gt: case PI_rt_num_le: case PI_rt_num_ge: case PI_rt_num_eq:
-        return !(t[0] & ~T_FLO) || !(t[1] & ~T_FLO);
-    case PI_rt_neg: case PI_rt_abs: case PI_rt_sqrt: case PI_rt_exp: case PI_rt_log: case PI_rt_sin: case PI_rt_cos:
-    case PI_rt_tan: case PI_rt_asin: case PI_rt_acos: case PI_rt_atan: case PI_rt_atan2: case PI_rt_inexact:
-        return !(t[0] & ~T_NUM);
+        return (only_t(t0, T_FLO) && only_t(t1, T_FLO)) || (only_t(t0, T_FLO) && small_fixc(a[1])) || (only_t(t1, T_FLO) && small_fixc(a[0]));
+    case PI_rt_neg: case PI_rt_abs: return only_t(t0, T_FLO);
+    case PI_rt_sqrt: case PI_rt_exp: case PI_rt_log: case PI_rt_sin: case PI_rt_cos:
+    case PI_rt_tan: case PI_rt_asin: case PI_rt_acos: case PI_rt_atan: case PI_rt_inexact:
+        return only_t(t0, T_NUM);
+    case PI_rt_atan2: return only_t(t0, T_NUM) && only_t(t1, T_NUM);
     default: return 0;
     }
 }
 static int raw_dbl(ir_node *r) { /* the specialised form yields a raw double */
     int op = r->u.prim.op;
     if (op == PI_rt_lt || op == PI_rt_gt || op == PI_rt_num_le || op == PI_rt_num_ge || op == PI_rt_num_eq) return 0;
-    if (op == PI_rt_neg || op == PI_rt_abs) return !(ir_atom_type(r->u.prim.args[0]) & ~T_FLO);
     return float_slot(r, 0);
 }
 static int here_obj(ir_var *v) { /* read as an obj in cur: a global, or from the closure */
