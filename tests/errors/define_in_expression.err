@@ -1,0 +1,1 @@
+define_in_expression.scm:2:8: error: define is only allowed at the top level or at the beginning of a body

@@ -1,0 +1,1 @@
+arity_case_lambda.scm:2:1: error: display called with 0 arguments, but it takes 1 or 2

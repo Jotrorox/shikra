@@ -1,0 +1,1 @@
+ellipsis_depth.scm:3:1: error: in macro bad: pattern variable x used without ellipsis

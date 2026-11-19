@@ -1,0 +1,1 @@
+unexported.scm:2:33: error: (scheme base) does not export no-such-procedure

@@ -1,5 +1,5 @@
 #!/bin/sh
-# tests/run.sh [all|reader|unit|amalg|compiled|interp|stress]   (DESIGN.md §9)
+# tests/run.sh [all|reader|unit|amalg|expand|compiled|interp|stress]   (DESIGN.md §9)
 #   reader    tests/reader/NAME.scm: `shikra debug-read` output must equal NAME.out and
 #             read back to itself; or, with NAME.err, fail with stderr containing it;
 #             plus: every tests/r7rs/*.scm and chibi/*.sld must read without error
@@ -7,11 +7,15 @@
 #   amalg     program-mode self-check: rt.h + stand-in program + rt_*.c as ONE TU with
 #             SHIKRA_PROGRAM, -Wall -Wextra -Werror; output must match
 #   compiled  tests/cases/NAME.scm built with `shikra build`, stdout == NAME.out,
-#             exit status == NAME.exit (default 0); tests/errors/NAME.scm: `shikra check`
-#             must fail with stderr containing NAME.err
+#             exit status == NAME.exit (default 0), stderr contains NAME.err if present;
+#             the generated C must compile with -Wall -Wextra -Werror;
+#             tests/errors/NAME.scm: `shikra check` must fail with stderr containing NAME.err
+#   expand    tests/expand/NAME.scm: the program's core forms as `shikra debug-expand`
+#             prints them (renaming stripped, as the REPL's ,expand) must equal NAME.out
 #   interp    tests/cases under the REPL interpreter (M3; skeleton)
 #   stress    tests/cases built with --gc-stress, run with SHIKRA_GC_STRESS=1 (M2; skeleton)
-# `all` runs every mode. Exit status is non-zero if anything failed.
+# `all` runs reader, unit, amalg and compiled; interp (M3) and stress (M2) are reported as
+# skipped until their milestones. Exit status is non-zero if anything failed.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 SHIKRA=./shikra
@@ -64,6 +68,15 @@ run_amalg() {
     else bad "program-mode amalgamation does not compile warning-free"; fi
 }
 
+run_expand() {
+    for f in tests/expand/*.scm; do
+        [ -f "$f" ] || continue
+        if $SHIKRA debug-expand "$f" 2> "$TMP/x.err" | sed -n '/^;; program$/,$p' | tail -n +2 > "$TMP/x.out" &&
+            cmp -s "$TMP/x.out" "${f%.scm}.out"; then ok
+        else bad "$f"; diff "${f%.scm}.out" "$TMP/x.out" | head -10; head -3 "$TMP/x.err"; fi
+    done
+}
+
 # run_cases MODE: every tests/cases/*.scm under one engine/mode.
 run_cases() {
     mode=$1
@@ -79,8 +92,14 @@ run_cases() {
         interp) $SHIKRA repl "$f" < /dev/null > "$TMP/c.out" 2> "$TMP/c.err" ;;
         esac
         st=$?
-        if [ "$st" = "$want_exit" ] && cmp -s "$TMP/c.out" "$base.out"; then ok
-        else bad "$f [$mode] (exit $st)"; head -5 "$TMP/c.err"; fi
+        if [ "$st" = "$want_exit" ] && cmp -s "$TMP/c.out" "$base.out" &&
+            { [ ! -f "$base.err" ] || grep -qF -- "$(cat "$base.err")" "$TMP/c.err"; }; then ok
+        else bad "$f [$mode] (exit $st)"; head -5 "$TMP/c.err"; diff "$base.out" "$TMP/c.out" | head -10; fi
+        if [ "$mode" = compiled ]; then
+            if $SHIKRA emit-c "$f" > "$TMP/c.c" 2> /dev/null &&
+                $CC -std=c99 -Wall -Wextra -Werror -fsyntax-only "$TMP/c.c" 2> "$TMP/cc.err"; then ok
+            else bad "$f (generated C is not warning-free)"; head -5 "$TMP/cc.err"; fi
+        fi
     done
     if [ "$mode" = compiled ]; then
         for f in tests/errors/*.scm; do
@@ -97,9 +116,12 @@ case $mode in
 reader) run_reader ;;
 unit) run_unit ;;
 amalg) run_amalg ;;
+expand) run_expand ;;
 compiled | interp | stress) run_cases "$mode" ;;
-all) run_reader; run_unit; run_amalg; run_cases compiled; run_cases interp; run_cases stress ;;
-*) echo "usage: tests/run.sh [all|reader|unit|amalg|compiled|interp|stress]"; exit 2 ;;
+all) run_reader; run_unit; run_amalg; run_expand; run_cases compiled
+    echo "interp: skipped (REPL interpreter arrives in M3)"
+    echo "stress: skipped (collector arrives in M2)" ;;
+*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|interp|stress]"; exit 2 ;;
 esac
 echo "tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

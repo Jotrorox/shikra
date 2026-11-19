@@ -1,0 +1,31 @@
+(2 1)
+(1 2 4)
+empty-let*
+3628800
+3
+(0 1 4 9 16)
+10
+(negative zero one other #t)
+#<unspecified>
+(small letter char (ten 10) (other "s"))
+#<unspecified>
+(#t 2 #f #f 2 #f)
+5
+(b #<unspecified>)
+when-body
+unless-body
+#(0 1 2 3 4)
+25
+(a 42 1 2 3 b)
+(1 . 42)
+#(v 42 1 2 3)
+(a (quasiquote (b (unquote (c 42)))) d)
+(1 2 3 . tail)
+42
+(1 2 3 (4 5) (6 7))
+(1 2 3)
+no-bindings
+(3 2 1 (2 3) (x y))
+30
+3
+12

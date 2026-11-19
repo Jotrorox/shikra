@@ -1,0 +1,1 @@
+no_matching_rule.scm:3:1: error: no matching syntax-rules clause for (pair-up 1 2 3)

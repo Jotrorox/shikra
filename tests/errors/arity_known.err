@@ -1,0 +1,1 @@
+arity_known.scm:3:13: error: square called with 2 arguments, but it takes 1
