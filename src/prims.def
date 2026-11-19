@@ -206,6 +206,8 @@ PRIM("%write-string", "write-string", rt_write_string, 2, "sa", 'a', PF_FAIL | P
 PRIM("%write-u8", "write-u8", rt_write_u8, 2, "fa", 'a', PF_FAIL | PF_EFFECT)
 PRIM("%write-bytevector", "write-bytevector", rt_write_bytevector, 4, "uaff", 'a', PF_FAIL | PF_EFFECT)
 PRIM("%write", "write", rt_write, 2, "aa", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%write-shared", "write-shared", rt_write_shared, 2, "aa", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%write-simple", "write-simple", rt_write_simple, 2, "aa", 'a', PF_FAIL | PF_EFFECT)
 PRIM("%display", "display", rt_display, 2, "aa", 'a', PF_FAIL | PF_EFFECT)
 PRIM("%newline", "newline", rt_newline, 1, "a", 'a', PF_FAIL | PF_EFFECT)
 PRIM("%flush-output-port", "flush-output-port", rt_flush_output_port, 1, "a", 'a', PF_FAIL | PF_EFFECT)

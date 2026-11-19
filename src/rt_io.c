@@ -3,7 +3,8 @@
  * byte buffer) or an in-memory buffer (RT_PF_STRING: string and bytevector ports).
  * Textual ports decode/encode UTF-8 here; binary ports (RT_PF_BINARY) move raw bytes over
  * the same buffer. A port is textual or binary, never both; the standard ports are
- * textual. write-shared / cycle labels (M5) hook into rt_print. */
+ * textual. The printer writes datum labels for cycles (write, display) or for all shared
+ * structure (write-shared); see "Datum labels" below. */
 #ifndef SHIKRA_RT_H
 #include "rt.h"
 #endif
@@ -320,20 +321,77 @@ static void io_char(obj port, int c, int write) {
     else rt_port_putc(port, c);
 }
 
-RT_FN void rt_print(obj x, obj port, int write) {
+/* Datum labels (R7RS 6.13.3). A depth-first pre-pass over the pairs and vectors reachable
+ * from the datum marks, in an address table, every object that needs a label: one reached
+ * again while it is still open on the path (a cycle: write, display) or reached again at all
+ * (write-shared). The printer then writes #n= before the first occurrence of a marked object
+ * and #n# for every later one. write-simple and the scalar fast paths skip the pre-pass. */
+#define IO_SEEN 1
+#define IO_OPEN 2  /* on the current depth-first path */
+#define IO_LABEL 4 /* needs a label; label number + 1 from bit 3 on once written */
+typedef struct { rt_addrtab t; intptr_t next; } io_labels;
+static int io_compound(obj x) { return rt_is_pair(x) || (rt_is_vector(x) && RT_HLEN(x) > 0); }
+static void io_scan(io_labels *L, obj x, int shared) {
+    uintptr_t *st = 0, *ns; /* explicit stack of (object, next child index) */
+    intptr_t sp = 0, cap = 0, i, n, *v;
+    for (;;) {
+        if (io_compound(x)) {
+            v = rt_addrtab_get(&L->t, x, 0, 1);
+            if (*v) { if (shared || (*v & IO_OPEN)) *v |= IO_LABEL; }
+            else {
+                *v = IO_SEEN | IO_OPEN;
+                if (sp == cap) {
+                    cap = cap ? 2 * cap : 256;
+                    ns = (uintptr_t *)rt_alloc_raw(sizeof(uintptr_t) * (size_t)cap);
+                    if (sp) rt_memcpy(ns, st, sizeof(uintptr_t) * (size_t)sp);
+                    st = ns;
+                }
+                st[sp++] = RT_W(x);
+                st[sp++] = 0;
+            }
+        }
+        for (;;) { /* the next child of the innermost open object */
+            if (!sp) return;
+            x = RT_O(st[sp - 2]);
+            i = (intptr_t)st[sp - 1]++;
+            n = rt_is_pair(x) ? 2 : RT_HLEN(x);
+            if (i < n) { x = rt_is_pair(x) ? (i ? RT_CDR(x) : RT_CAR(x)) : RT_VEC(x)[i]; break; }
+            *rt_addrtab_get(&L->t, x, 0, 0) &= ~IO_OPEN;
+            sp -= 2;
+        }
+    }
+}
+static intptr_t *io_marked(io_labels *L, obj x) {
+    intptr_t *v = L ? rt_addrtab_get(&L->t, x, 0, 0) : 0;
+    return v && (*v & IO_LABEL) ? v : 0;
+}
+/* Writes #n# and returns 1 if x already has a label; writes #n= first if it gets one now. */
+static int io_label(io_labels *L, obj x, obj port) {
+    intptr_t *v = io_marked(L, x);
+    if (!v) return 0;
+    rt_port_putc(port, '#');
+    if (*v >> 3) { io_fix(port, (*v >> 3) - 1); rt_port_putc(port, '#'); return 1; }
+    *v |= (L->next + 1) << 3;
+    io_fix(port, L->next++);
+    rt_port_putc(port, '=');
+    return 0;
+}
+
+static void io_print(obj x, obj port, int write, io_labels *L) {
     char buf[40];
     intptr_t i;
     if (rt_is_fix(x)) { io_fix(port, RT_FIXVAL(x)); return; }
     if (rt_is_char(x)) { io_char(port, RT_CHARVAL(x), write); return; }
     if (rt_is_pair(x)) {
+        if (io_label(L, x, port)) return;
         rt_port_putc(port, '(');
         for (;;) {
-            rt_print(RT_CAR(x), port, write);
+            io_print(RT_CAR(x), port, write, L);
             x = RT_CDR(x);
-            if (!rt_is_pair(x)) break;
+            if (!rt_is_pair(x) || io_marked(L, x)) break;
             rt_port_putc(port, ' ');
         }
-        if (x != RT_NIL) { rt_port_puts(port, " . "); rt_print(x, port, write); }
+        if (x != RT_NIL) { rt_port_puts(port, " . "); io_print(x, port, write, L); }
         rt_port_putc(port, ')');
         return;
     }
@@ -357,10 +415,11 @@ RT_FN void rt_print(obj x, obj port, int write) {
         return;
     }
     case RT_T_VECTOR:
+        if (io_label(L, x, port)) return;
         rt_port_puts(port, "#(");
         for (i = 0; i < RT_HLEN(x); i++) {
             if (i) rt_port_putc(port, ' ');
-            rt_print(RT_VEC(x)[i], port, write);
+            io_print(RT_VEC(x)[i], port, write, L);
         }
         rt_port_putc(port, ')');
         return;
@@ -372,14 +431,26 @@ RT_FN void rt_print(obj x, obj port, int write) {
         }
         rt_port_putc(port, ')');
         return;
-    case RT_T_RECORD: rt_port_puts(port, "#<"); rt_print(RT_VEC(RT_VEC(x)[0])[0], port, 0); rt_port_putc(port, '>'); return;
-    case RT_T_RTD: rt_port_puts(port, "#<record-type "); rt_print(RT_VEC(x)[0], port, 0); rt_port_putc(port, '>'); return;
+    case RT_T_RECORD: rt_port_puts(port, "#<"); io_print(RT_VEC(RT_VEC(x)[0])[0], port, 0, 0); rt_port_putc(port, '>'); return;
+    case RT_T_RTD: rt_port_puts(port, "#<record-type "); io_print(RT_VEC(x)[0], port, 0, 0); rt_port_putc(port, '>'); return;
     case RT_T_ERROR: rt_port_puts(port, "#<error "); rt_print(RT_VEC(x)[0], port, 1); rt_port_putc(port, '>'); return;
     case RT_T_PORT: rt_port_puts(port, "#<port>"); return;
+    case RT_T_PROMISE: rt_port_puts(port, "#<promise>"); return;
     case RT_T_BOX: rt_port_puts(port, "#<box>"); return;
     case RT_T_VALUES: rt_port_puts(port, "#<values>"); return;
     default: rt_port_puts(port, "#<object>"); return;
     }
+}
+/* mode: RT_PRINT_WRITE (else display), RT_PRINT_SHARED (label all shared structure),
+ * RT_PRINT_SIMPLE (no labels: may not terminate on cycles). Without SHARED or SIMPLE only
+ * cycles get labels, so display and write always terminate. */
+RT_FN void rt_print(obj x, obj port, int mode) {
+    io_labels L;
+    if (!io_compound(x) || (mode & RT_PRINT_SIMPLE)) { io_print(x, port, mode & RT_PRINT_WRITE, 0); return; }
+    L.t.e = 0;
+    L.t.cap = L.t.n = L.next = 0;
+    io_scan(&L, x, mode & RT_PRINT_SHARED);
+    io_print(x, port, mode & RT_PRINT_WRITE, &L);
 }
 
 RT_FN obj rt_write_char(obj c, obj port) {
@@ -410,7 +481,25 @@ RT_FN obj rt_write_bytevector(obj bv, obj port, obj start, obj end) {
     rt_port_write(port, (const char *)RT_PTR(bv, rt_bytevector)->b + s, (size_t)(e - s));
     return RT_UNSPEC;
 }
-RT_FN obj rt_write(obj x, obj port) { io_check(port, RT_PF_OUT, "write"); rt_print(x, port, 1); return RT_UNSPEC; }
-RT_FN obj rt_display(obj x, obj port) { io_check(port, RT_PF_OUT, "display"); rt_print(x, port, 0); return RT_UNSPEC; }
+RT_FN obj rt_write(obj x, obj port) { io_check(port, RT_PF_OUT, "write"); rt_print(x, port, RT_PRINT_WRITE); return RT_UNSPEC; }
+RT_FN obj rt_write_shared(obj x, obj port) {
+    io_check(port, RT_PF_OUT, "write-shared");
+    rt_print(x, port, RT_PRINT_WRITE | RT_PRINT_SHARED);
+    return RT_UNSPEC;
+}
+RT_FN obj rt_write_simple(obj x, obj port) {
+    io_check(port, RT_PF_OUT, "write-simple");
+    rt_print(x, port, RT_PRINT_WRITE | RT_PRINT_SIMPLE);
+    return RT_UNSPEC;
+}
+/* Strings and chars also have their own primitives (rt_write_string, rt_write_char), so a call
+ * whose argument type is known (M4) links neither the general printer nor the label pre-pass. */
+RT_FN obj rt_display(obj x, obj port) {
+    io_check(port, RT_PF_OUT, "display");
+    if (rt_is_string(x)) rt_port_write(port, RT_STR(x)->buf, (size_t)RT_STR(x)->bytes);
+    else if (rt_is_char(x)) rt_port_putc(port, RT_CHARVAL(x));
+    else rt_print(x, port, 0);
+    return RT_UNSPEC;
+}
 RT_FN obj rt_newline(obj port) { io_check(port, RT_PF_OUT, "newline"); rt_port_putc(port, '\n'); return RT_UNSPEC; }
 RT_FN obj rt_flush_output_port(obj port) { io_check(port, RT_PF_OUT | IO_ANY, "flush-output-port"); rt_flush(port); return RT_UNSPEC; }

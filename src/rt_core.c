@@ -144,16 +144,60 @@ RT_FN int rt_eqv(obj a, obj b) {
     }
     return 0;
 }
-/* TODO(M5): R7RS requires equal? to terminate on circular structures. */
-RT_FN int rt_equal(obj a, obj b) {
+/* ---- address tables: entries [a, b, value] keyed by one or two object addresses, open
+ * addressing over a raw heap buffer (write's datum labels, equal? on cycles). The buffer is
+ * reached from the caller's C stack, so it survives a collection; the keyed objects stay
+ * reachable from the caller's arguments, and the collector never moves objects. ---- */
+RT_FN intptr_t *rt_addrtab_get(rt_addrtab *t, obj a, obj b, int insert) {
+    uintptr_t *e, h;
+    intptr_t i;
+    if (insert && 2 * (t->n + 1) > t->cap) { /* grow and rehash */
+        rt_addrtab o = *t;
+        t->cap = o.cap ? 2 * o.cap : 64;
+        t->n = 0;
+        t->e = (uintptr_t *)rt_alloc_raw(3 * sizeof(uintptr_t) * (size_t)t->cap);
+        rt_memset(t->e, 0, 3 * sizeof(uintptr_t) * (size_t)t->cap);
+        for (i = 0; i < o.cap; i++)
+            if (o.e[3 * i]) *rt_addrtab_get(t, RT_O(o.e[3 * i]), RT_O(o.e[3 * i + 1]), 1) = (intptr_t)o.e[3 * i + 2];
+    }
+    if (!t->cap) return 0;
+    h = (RT_W(a) * 0x9E3779B97F4A7C15u) ^ (RT_W(b) * 0xC2B2AE3D27D4EB4Fu);
+    for (i = (intptr_t)(h >> 24) & (t->cap - 1);; i = (i + 1) & (t->cap - 1)) {
+        e = t->e + 3 * i;
+        if (e[0] == RT_W(a) && e[1] == RT_W(b)) return (intptr_t *)&e[2];
+        if (!e[0]) {
+            if (!insert) return 0;
+            e[0] = RT_W(a);
+            e[1] = RT_W(b);
+            t->n++;
+            return (intptr_t *)&e[2];
+        }
+    }
+}
+
+/* equal? terminates on circular structures (R7RS 6.1): a first pass gives up after visiting
+ * CORE_EQ_BUDGET pairs and vectors; the second pass records every pair of compound objects it
+ * enters and treats a pair met again as equal (the comparison is a bisimulation), so it
+ * terminates. Returns 1, 0, or -1 when the budget ran out. */
+#define CORE_EQ_BUDGET 100000
+static int core_equal(obj a, obj b, intptr_t *budget, rt_addrtab *seen) {
     for (;;) {
         if (rt_eqv(a, b)) return 1;
-        if (rt_is_pair(a) && rt_is_pair(b)) {
-            if (!rt_equal(RT_CAR(a), RT_CAR(b))) return 0;
+        if (rt_is_pair(a) ? !rt_is_pair(b) : !rt_is_heap(a) || !rt_is_heap(b) || RT_HTYPE(a) != RT_HTYPE(b)) return 0;
+        if (rt_is_pair(a) || RT_HTYPE(a) == RT_T_VECTOR) {
+            if (!seen) { if (--*budget < 0) return -1; }
+            else {
+                intptr_t *v = rt_addrtab_get(seen, a, b, 1);
+                if (*v) return 1;
+                *v = 1;
+            }
+        }
+        if (rt_is_pair(a)) {
+            int r = core_equal(RT_CAR(a), RT_CAR(b), budget, seen);
+            if (r != 1) return r;
             a = RT_CDR(a); b = RT_CDR(b);
             continue;
         }
-        if (!rt_is_heap(a) || !rt_is_heap(b) || RT_HTYPE(a) != RT_HTYPE(b)) return 0;
         switch (RT_HTYPE(a)) {
         case RT_T_STRING:
             return RT_STR(a)->bytes == RT_STR(b)->bytes &&
@@ -163,15 +207,22 @@ RT_FN int rt_equal(obj a, obj b) {
                    rt_memcmp(RT_PTR(a, rt_bytevector)->b, RT_PTR(b, rt_bytevector)->b, (size_t)RT_HLEN(a)) == 0;
         case RT_T_VECTOR: {
             intptr_t i, n = RT_HLEN(a);
+            int r;
             if (n != RT_HLEN(b)) return 0;
             if (n == 0) return 1;
-            for (i = 0; i < n - 1; i++) if (!rt_equal(RT_VEC(a)[i], RT_VEC(b)[i])) return 0;
+            for (i = 0; i < n - 1; i++) if ((r = core_equal(RT_VEC(a)[i], RT_VEC(b)[i], budget, seen)) != 1) return r;
             a = RT_VEC(a)[n - 1]; b = RT_VEC(b)[n - 1];
             continue;
         }
         default: return 0;
         }
     }
+}
+RT_FN int rt_equal(obj a, obj b) {
+    intptr_t budget = CORE_EQ_BUDGET;
+    int r = core_equal(a, b, &budget, 0);
+    rt_addrtab seen = {0, 0, 0};
+    return r >= 0 ? r : core_equal(a, b, &budget, &seen);
 }
 RT_FN obj rt_eqv_p(obj a, obj b) { return RT_BOOL(rt_eqv(a, b)); }
 RT_FN obj rt_equal_p(obj a, obj b) { return RT_BOOL(rt_equal(a, b)); }

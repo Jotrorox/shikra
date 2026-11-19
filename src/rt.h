@@ -349,6 +349,10 @@ RT_FN obj rt_make_values(obj list);
 RT_FN obj rt_values_n(intptr_t n, const obj *v);
 RT_FN obj rt_values_to_list(obj v);
 RT_FN obj rt_make_proc(rt_code code, intptr_t nfree); /* free slots set to #f */
+/* Address tables (write's datum labels, equal? on cycles): entries keyed by one or two object
+ * addresses (b = 0 for one), value 0 when inserted; NULL if absent and !insert. Zero-initialise. */
+typedef struct { uintptr_t *e; intptr_t cap, n; } rt_addrtab;
+RT_FN intptr_t *rt_addrtab_get(rt_addrtab *t, obj a, obj b, int insert);
 
 /* ---- compiled calling convention (rt_core.c; spec §8.1, DESIGN.md §4, §11 M0 part B) ----
  * Every compiled procedure: obj f(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3).
@@ -507,7 +511,10 @@ RT_FN void rt_port_putc(obj port, int cp);
 RT_FN void rt_port_puts(obj port, const char *s);
 RT_FN void rt_flush(obj port);
 RT_FN void rt_flush_all(void);
-RT_FN void rt_print(obj x, obj port, int write); /* write = 1: external representation */
+#define RT_PRINT_WRITE 1  /* rt_print modes: external representation (else display) */
+#define RT_PRINT_SHARED 2 /* datum labels for all shared pairs and vectors (else for cycles only) */
+#define RT_PRINT_SIMPLE 4 /* no datum labels */
+RT_FN void rt_print(obj x, obj port, int mode);
 RT_FN obj rt_input_port_p(obj x);
 RT_FN obj rt_output_port_p(obj x);
 RT_FN obj rt_textual_port_p(obj x);
@@ -528,6 +535,8 @@ RT_FN obj rt_write_bytevector(obj bv, obj port, obj start, obj end);
 RT_FN obj rt_write_char(obj c, obj port);
 RT_FN obj rt_write_string(obj s, obj port);
 RT_FN obj rt_write(obj x, obj port);
+RT_FN obj rt_write_shared(obj x, obj port);
+RT_FN obj rt_write_simple(obj x, obj port);
 RT_FN obj rt_display(obj x, obj port);
 RT_FN obj rt_newline(obj port);
 RT_FN obj rt_flush_output_port(obj port);
