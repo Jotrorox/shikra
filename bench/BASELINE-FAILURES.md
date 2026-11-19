@@ -47,7 +47,9 @@ Before that (commit `143ed71`, 06:31) nothing compiled:
 Ratios are Shikra safe time / reference time from `RESULTS.md`
 (geometric mean over the 53: **1.36x Chez**, **1.24x Gambit**).
 
-1. **`--unsafe` removes almost nothing.** Geometric mean of unsafe/safe time is
+1. **`--unsafe` removes almost nothing.** (Resolved in M4-2: `RT_UNSAFE` removes the type, bounds,
+   overflow, undefined-variable, not-a-procedure, arity and literal checks; unsafe/safe geometric
+   mean 0.88 in the m4-2 series.) Geometric mean of unsafe/safe time is
    1.04 (range 0.83-1.28, i.e. noise). `shikra emit-c --unsafe` differs from the
    safe C only by `#define RT_UNSAFE 1`, and in `src/rt.h` that macro only
    disables `RT_CHECK_MUTABLE_PAIR` (the literal-pair check in
