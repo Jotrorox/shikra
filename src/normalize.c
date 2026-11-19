@@ -636,6 +636,7 @@ static ir_node *norm_prim(obj x, bld *b, int tail) {
         p->u.call.tail = tail;
         return p;
     }
+    if (op >= PI_EVAL) cerror(x, "%s is available only in the REPL", prim_table[op].name);
     p = mk_prim(op, n, x);
     for (i = 0, l = RT_CDR(x); i < n; i++, l = RT_CDR(l)) p->u.prim.args[i] = norm_value(RT_CAR(l), b);
     return p;

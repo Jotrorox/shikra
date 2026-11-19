@@ -32,6 +32,9 @@ enum {
     PI_VALUES,         /* (%values x ...) */
     PI_CWV,            /* (%call-with-values producer consumer) */
     PI_CALLCC,         /* (%call/cc f) */
+    PI_EVAL,           /* (%eval expr env)            REPL only: the interpreter implements */
+    PI_ENVIRONMENT,    /* (%environment import-sets)  these three; the compiler rejects them */
+    PI_INTERENV,       /* (%interaction-environment)  (DESIGN.md §11 M3) */
     NPRIMS_ALL
 };
 typedef struct { const char *name, *who, *cfn; int arity; const char *args; char res; int flags; } prim_info;
@@ -61,6 +64,7 @@ typedef struct global {
     int defined;  /* number of definitions seen */
     obj defloc;   /* the define form (diagnostics) */
     void *mid;    /* middle end: its ir_var */
+    obj cell;     /* interpreter: its value cell (0 until first compiled) */
 } global;
 
 enum { B_CORE, B_MACRO, B_GLOBAL, B_LOCAL, B_PRIM };
@@ -101,6 +105,7 @@ typedef struct {
     int nincdirs;
     int unicode_full;      /* feature full-unicode */
     const char *target;    /* target triple or NULL for the host (features) */
+    int repl;              /* interpreter: (scheme eval), (scheme load), (scheme repl) exist */
 } front_opts;
 
 void front_init(const front_opts *o);
@@ -116,6 +121,10 @@ obj front_local_name(obj sym);        /* source name of a local core symbol, or 
 library *front_repl_new(void);
 void front_repl_import(library *top, obj import_form);
 obj front_repl_expand(library *top, obj form); /* list of top-level core forms */
+void front_repl_recover(void); /* after an error escaped the front end: forget half-loaded libraries */
+/* When set, cerror calls it with the location ("file:line:col", or NULL) and the message
+ * instead of printing and exiting; it must not return (REPL, eval). */
+extern void (*cerror_hook)(const char *loc, const char *msg);
 
 /* Unparse a core form: raw = 0 strips renaming and prints (quote x) as 'x (,expand);
  * raw = 1 prints unique names. */

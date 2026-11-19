@@ -16,6 +16,9 @@ static front_opts opts;
 static htab libs; /* id -> library* */
 static library *order_tail;
 static obj features; /* list of symbols */
+static library *loading[64]; /* libraries being loaded, innermost last (REPL error recovery) */
+static int nloading;
+void (*cerror_hook)(const char *loc, const char *msg);
 
 const prim_info prim_table[NPRIMS_ALL] = {
 #define PRIM(name, who, cfn, arity, args, res, flags) {name, who, #cfn, arity, args, res, flags},
@@ -25,6 +28,9 @@ const prim_info prim_table[NPRIMS_ALL] = {
     {"%values", "values", 0, -1, "", 'a', PF_ALLOC},
     {"%call-with-values", "call-with-values", 0, 2, "xx", 'a', PF_FAIL | PF_EFFECT},
     {"%call/cc", "call-with-current-continuation", 0, 1, "x", 'a', PF_FAIL | PF_EFFECT},
+    {"%eval", "eval", 0, 2, "aa", 'a', PF_FAIL | PF_EFFECT},
+    {"%environment", "environment", 0, 1, "l", 'a', PF_FAIL | PF_EFFECT},
+    {"%interaction-environment", "interaction-environment", 0, 0, "", 'a', 0},
 };
 
 const char *const keyword_names[NKEYWORDS] = {
@@ -94,6 +100,15 @@ void cerror(obj where, const char *fmt, ...) {
     obj f;
     intptr_t l, c;
     va_list ap;
+    if (cerror_hook) {
+        char loc[512], msg[1024];
+        int located = get_loc(where, &f, &l, &c);
+        if (located) snprintf(loc, sizeof loc, "%s:%ld:%ld", RT_STR(f)->buf, (long)l, (long)c);
+        va_start(ap, fmt);
+        vsnprintf(msg, sizeof msg, fmt, ap);
+        va_end(ap);
+        cerror_hook(located ? loc : NULL, msg);
+    }
     rt_flush(rt_stdout);
     fflush(stdout);
     if (get_loc(where, &f, &l, &c)) fprintf(stderr, "%s:%ld:%ld: ", RT_STR(f)->buf, (long)l, (long)c);
@@ -304,8 +319,13 @@ static const char *find_library(const char *id) {
     sb_printf(&b, "<builtin>/%s.sld", id);
     return arena_strdup(&compiler_arena, b.s);
 }
+/* The evaluator libraries exist only in the interpreter (spec §3.1). */
+static int repl_only(const char *id) {
+    return !strcmp(id, "scheme/eval") || !strcmp(id, "scheme/load") || !strcmp(id, "scheme/repl");
+}
 int library_exists(obj name) {
     const char *id = libname_id(name, name);
+    if (!opts.repl && repl_only(id)) return 0;
     return ht_get(&libs, id) || find_library(id);
 }
 
@@ -429,6 +449,9 @@ static library *load_library(obj name, obj where) {
         if (lib->state == 1) cerror(where, "library cycle: %s imports itself (directly or indirectly)", dstr(name));
         return lib;
     }
+    if (!opts.repl && repl_only(id))
+        cerror(where, "library %s exists only in the REPL (shikra repl): compiled programs cannot use eval, load or interaction-environment", dstr(name));
+    if (nloading == 64) cerror(where, "libraries nested too deeply");
     if (!(path = find_library(id))) cerror(where, "library %s not found", dstr(name));
     for (forms = read_source(path, 0, where); forms != RT_NIL; forms = RT_CDR(forms)) {
         obj f = RT_CAR(forms);
@@ -438,11 +461,13 @@ static library *load_library(obj name, obj where) {
     lib = new_library(strip_syntax(name), id, path);
     lib->state = 1;
     ht_put(&libs, id, lib);
+    loading[nloading++] = lib;
     loc_ctx = dl;
     process_decls(lib, RT_CDR(RT_CDR(dl)));
     lib->export_specs = rt_reverse(lib->export_specs);
     expand_toplevel(lib, lib->body);
     resolve_exports(lib);
+    nloading--;
     lib->state = 2;
     add_to_order(lib);
     loc_ctx = saved;
@@ -510,6 +535,10 @@ void front_repl_import(library *top, obj form) {
     obj l;
     if (list_len(form) < 1) cerror(form, "malformed import");
     for (l = RT_CDR(form); l != RT_NIL; l = RT_CDR(l)) import_into(top->env, RT_CAR(l));
+}
+void front_repl_recover(void) {
+    while (nloading > 0) ht_put(&libs, loading[--nloading]->id, NULL);
+    loc_ctx = RT_FALSE;
 }
 obj front_repl_expand(library *top, obj form) {
     top->core = RT_NIL;

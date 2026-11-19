@@ -64,6 +64,10 @@ RT_FN void rt_raise(obj e) {
 }
 
 RT_FN void rt_uncaught(obj e) {
+    rt_print_error(e);
+    rt_exit(70);
+}
+RT_FN void rt_print_error(obj e) {
     obj p = rt_stderr;
     rt_flush(rt_stdout);
     if (rt_is_type(e, RT_T_ERROR)) {
@@ -80,7 +84,6 @@ RT_FN void rt_uncaught(obj e) {
         rt_print(e, p, 1);
     }
     rt_port_putc(p, '\n');
-    rt_exit(70);
 }
 
 RT_FN void rt_error(const char *who, const char *msg, obj irritants) {

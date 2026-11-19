@@ -16,6 +16,8 @@ RT_VAR char *rt_hp, *rt_hlim, *rt_pp, *rt_plim;
 static RT_UNUSED void *gc_stack_base;
 static RT_UNUSED int gc_immortal, gc_nroots;
 static RT_UNUSED obj *gc_roots[GC_MAXROOTS][2];
+static RT_UNUSED obj **gc_droots[GC_MAXROOTS][2]; /* ranges whose bounds are read at collection time */
+static RT_UNUSED int gc_ndroots;
 #ifdef SHIKRA_PROGRAM
 static RT_UNUSED int gc_enabled = 1;
 #else
@@ -34,6 +36,12 @@ RT_FN void rt_gc_add_roots(obj *start, obj *end) {
     gc_roots[gc_nroots][0] = start;
     gc_roots[gc_nroots][1] = end;
     gc_nroots++;
+}
+RT_FN void rt_gc_add_dynamic_roots(obj **lo, obj **hi) {
+    if (gc_ndroots == GC_MAXROOTS) gc_oom();
+    gc_droots[gc_ndroots][0] = lo;
+    gc_droots[gc_ndroots][1] = hi;
+    gc_ndroots++;
 }
 RT_FN void rt_gc_enable(int on) { gc_enabled = on; }
 RT_FN void *rt_alloc_raw(size_t nbytes) {
@@ -85,9 +93,9 @@ RT_FN void rt_gc_collect(void) {}
 #else
 #define GC_STACKMAX ((size_t)1 << 20)
 #endif
-enum { GC_FREE = 0, GC_HDR = 1, GC_PAIR = 2, GC_IMM = 4 };         /* block kinds */
+enum { GC_FREE = 0, GC_HDR = 1, GC_PAIR = 2, GC_IMM = 4, GC_PURE = 8 }; /* block kinds */
 enum { L_FREE = 0, L_LIVE = 1, L_NEW = 2, L_RUN = 3, L_MARK = 4 }; /* line states (+ mark bit) */
-enum { S_HDR, S_PAIR, S_OVF, S_IHDR, S_IPAIR, S_N };              /* spaces */
+enum { S_HDR, S_PAIR, S_OVF, S_IHDR, S_IPAIR, S_PHDR, S_PPAIR, S_N }; /* spaces */
 
 typedef struct { unsigned char kind, line[GC_NLINES]; uintptr_t start[GC_NWORDS], mark[GC_NWORDS]; } gc_block;
 typedef struct { char *base; size_t n; gc_block *b; } gc_chunk;
@@ -104,8 +112,10 @@ static gc_large **gc_larges;
 static size_t gc_nlarge, gc_caplarge, gc_large_since, gc_large_limit;
 static gc_range *gc_stack;
 static size_t gc_top, gc_cap;
-#ifdef RT_GC_STRESS
-static intptr_t gc_stress, gc_countdown; /* collect every gc_stress-th allocation */
+/* Stress builds (and the tool, for the interpreter) can collect every gc_stress-th allocation. */
+#if defined(RT_GC_STRESS) || !defined(SHIKRA_PROGRAM)
+#define GC_STRESS_ON 1
+static intptr_t gc_stress, gc_countdown;
 #endif
 
 /* Size in bytes of the headered object at p (rt_alloc rounds to 8). */
@@ -143,17 +153,21 @@ static void gc_add_chunk(size_t n) {
 }
 
 static void gc_setup(void) {
-    static const int kinds[S_N] = {GC_HDR, GC_PAIR, GC_HDR, GC_HDR | GC_IMM, GC_PAIR | GC_IMM};
+    static const int kinds[S_N] = {GC_HDR, GC_PAIR, GC_HDR, GC_HDR | GC_IMM, GC_PAIR | GC_IMM,
+                                   GC_HDR | GC_IMM | GC_PURE, GC_PAIR | GC_IMM | GC_PURE};
     int i;
     for (i = 0; i < S_N; i++) { gc_sp[i].kind = kinds[i]; gc_sp[i].bi = -1; }
     gc_add_chunk(GC_FIRST);
     if (!(gc_stack = (gc_range *)rt_sys_mem(GC_STACK0 * sizeof(gc_range)))) gc_oom();
     gc_cap = GC_STACK0;
     gc_large_limit = (size_t)4 << 20;
-#ifdef RT_GC_STRESS
-    { /* SHIKRA_GC_STRESS=N: collect every N-th allocation (default 1; 0 turns stress off) */
+#ifdef GC_STRESS_ON
+    { /* SHIKRA_GC_STRESS=N: collect every N-th allocation (stress builds: default 1; the tool,
+       * whose interpreter enables collection: default 0; 0 turns stress off) */
         const char *e = rt_sys_getenv("SHIKRA_GC_STRESS");
+#ifdef RT_GC_STRESS
         gc_stress = 1;
+#endif
         if (e) for (gc_stress = 0; *e >= '0' && *e <= '9'; e++) gc_stress = gc_stress * 10 + (*e - '0');
         gc_countdown = gc_stress;
     }
@@ -162,19 +176,19 @@ static void gc_setup(void) {
 }
 
 /* The fast-path globals mirror the active headered and pair spaces. */
-static gc_space *gc_hs(void) { return &gc_sp[gc_immortal ? S_IHDR : S_HDR]; }
-static gc_space *gc_ps(void) { return &gc_sp[gc_immortal ? S_IPAIR : S_PAIR]; }
+static gc_space *gc_hs(void) { return &gc_sp[gc_immortal == 2 ? S_PHDR : gc_immortal ? S_IHDR : S_HDR]; }
+static gc_space *gc_ps(void) { return &gc_sp[gc_immortal == 2 ? S_PPAIR : gc_immortal ? S_IPAIR : S_PAIR]; }
 static void gc_sync_in(void) { gc_hs()->cur = rt_hp; gc_ps()->cur = rt_pp; }
 static void gc_sync_out(void) {
     rt_hp = gc_hs()->cur; rt_hlim = gc_hs()->end;
     rt_pp = gc_ps()->cur; rt_plim = gc_ps()->end;
-#ifdef RT_GC_STRESS
-    if (gc_stress && gc_enabled) { rt_hlim = rt_hp; rt_plim = rt_pp; } /* every allocation takes the slow path */
+#ifdef GC_STRESS_ON
+    if (gc_stress && gc_enabled && !gc_immortal) { rt_hlim = rt_hp; rt_plim = rt_pp; } /* every allocation takes the slow path */
 #endif
 }
 RT_FN void rt_gc_set_immortal(int on) {
     if (gc_ready) gc_sync_in();
-    gc_immortal = on != 0;
+    gc_immortal = on;
     if (gc_ready) gc_sync_out();
 }
 
@@ -348,6 +362,10 @@ static void gc_run(void *arg) {
         obj *r;
         for (r = gc_roots[c][0]; r < gc_roots[c][1]; r++) { gc_mark(*r); gc_drain(); }
     }
+    for (c = 0; c < gc_ndroots; c++) {
+        obj *r;
+        for (r = *gc_droots[c][0]; r < *gc_droots[c][1]; r++) { gc_mark(*r); gc_drain(); }
+    }
     for (c = 0; c < gc_nchunks; c++)
         for (j = 0; j < gc_chunks[c].n; j++) {
             gc_block *b = &gc_chunks[c].b[j];
@@ -358,7 +376,7 @@ static void gc_run(void *arg) {
                 for (; a < end && *(uintptr_t *)a; a += gc_size(a)) { gc_scan(a, 0); gc_drain(); }
         }
     for (k = 0; k < gc_nlarge; k++)
-        if (gc_larges[k]->imm) { gc_scan((char *)gc_larges[k] + GC_LHDR, 0); gc_drain(); }
+        if (gc_larges[k]->imm == 1) { gc_scan((char *)gc_larges[k] + GC_LHDR, 0); gc_drain(); }
     sp = (uintptr_t *)((uintptr_t)&here & ~(uintptr_t)7);
     top = (uintptr_t *)((uintptr_t)gc_stack_base & ~(uintptr_t)7);
     if (sp > top) { uintptr_t *t = sp; sp = top; top = t; }
@@ -399,6 +417,15 @@ static void gc_collect_now(void) {
     rt_jmpbuf jb;
     rt_sys_catch(&jb, gc_run, 0);
 }
+#ifndef SHIKRA_PROGRAM
+RT_FN int rt_gc_immortal_pair(obj x) {
+    char *base;
+    gc_block *b;
+    if (!gc_ready) return 0;
+    b = gc_find(RT_W(x) - 1, &base);
+    return b && (b->kind & ~GC_PURE) == (GC_PAIR | GC_IMM);
+}
+#endif
 RT_FN void rt_gc_collect(void) {
     if (!gc_ready) return;
     gc_sync_in();
@@ -479,8 +506,8 @@ RT_FN void *rt_alloc_slow(size_t bytes, int pair_stream) {
     char *p;
     if (!gc_ready) gc_setup();
     gc_sync_in();
-#ifdef RT_GC_STRESS
-    if (gc_stress && gc_enabled && --gc_countdown <= 0) { gc_countdown = gc_stress; gc_collect_now(); }
+#ifdef GC_STRESS_ON
+    if (gc_stress && gc_enabled && !gc_immortal && --gc_countdown <= 0) { gc_countdown = gc_stress; gc_collect_now(); }
 #endif
     if (bytes > GC_MEDIUM) p = (char *)gc_large_alloc(bytes);
     else {

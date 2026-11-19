@@ -255,6 +255,7 @@ RT_FN void rt_port_write(obj port, const char *s, size_t n) {
     if ((intptr_t)n >= p->cap) rt_sys_write((int)p->fd, s, n);
     else { rt_memcpy(p->buf + p->len, s, n); p->len += (intptr_t)n; }
     if (RT_HFLAGS(port) & RT_PF_UNBUF) io_flush(p);
+    if (n) p->col = s[n - 1] != '\n'; /* output: 0 at the start of a line (the REPL's fresh line) */
 }
 RT_FN void rt_port_putc(obj port, int c) {
     char b[4];

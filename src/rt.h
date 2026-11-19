@@ -133,7 +133,7 @@ typedef struct {
     intptr_t fd;        /* OS descriptor, -1 for string ports */
     char *buf;
     intptr_t pos, len, cap; /* input: unread bytes are buf[pos..len); output: buf[0..len) */
-    intptr_t line, col; /* input position: 1-based line, chars consumed on this line */
+    intptr_t line, col; /* input: 1-based line, chars consumed on it; output (fd): col 0 at line start */
     obj name;           /* file name string or #f; used for read-error locations */
 } rt_port;
 #define RT_PF_IN 0x01
@@ -257,7 +257,11 @@ RT_INLINE obj rt_cons(obj a, obj d) {
 RT_FN void *rt_alloc_raw(size_t nbytes);           /* raw (unscanned) buffer; returns its data */
 RT_FN void rt_gc_init(void *stack_base);           /* records the stack base only (no allocation) */
 RT_FN void rt_gc_add_roots(obj *start, obj *end);  /* register a range of obj words as roots */
-RT_FN void rt_gc_set_immortal(int on);             /* REPL front end: allocations never reclaimed, scanned as roots */
+RT_FN void rt_gc_add_dynamic_roots(obj **lo, obj **hi); /* the range [*lo, *hi), read at each collection (VM stack) */
+/* Immortal mode (the REPL front end): 1 = allocations are never reclaimed and are scanned as
+ * roots; 2 = never reclaimed and NOT scanned ("pure": only for objects that point to nothing but
+ * immortal objects, static data and interned symbols); 0 = off. */
+RT_FN void rt_gc_set_immortal(int on);
 RT_FN void rt_gc_enable(int on);                   /* automatic collection; off in tool mode until the REPL enables it */
 RT_FN void rt_gc_collect(void);                    /* collect now (no-op under bump or before the first allocation) */
 
@@ -267,6 +271,10 @@ RT_FN void rt_gc_collect(void);                    /* collect now (no-op under b
 #if defined(SHIKRA_PROGRAM) && RT_NLITPAIRS > 0
 static const rt_pair rt_lit_pairs[RT_NLITPAIRS];
 #define RT_LITPAIR(x) ((uintptr_t)((const char *)(x) - 1 - (const char *)rt_lit_pairs) < sizeof rt_lit_pairs)
+#elif !defined(SHIKRA_PROGRAM)
+/* Tool: the interpreter's quoted data are immortal heap pairs (DESIGN.md §11 M3). */
+RT_FN int rt_gc_immortal_pair(obj x);
+#define RT_LITPAIR(x) rt_gc_immortal_pair(x)
 #else
 #define RT_LITPAIR(x) 0
 #endif
@@ -297,6 +305,7 @@ RT_EXTVAR void (*rt_raise_hook)(obj e);
 #endif
 RT_FN RT_NORETURN void rt_raise(obj e);
 RT_FN RT_NORETURN void rt_uncaught(obj e);
+RT_FN void rt_print_error(obj e); /* what rt_uncaught prints, without exiting (the REPL) */
 RT_FN RT_NORETURN void rt_error(const char *who, const char *msg, obj irritants); /* "who: msg" */
 RT_FN RT_NORETURN void rt_type_error(const char *who, const char *expected, obj x);
 RT_FN RT_NORETURN void rt_range_error(const char *who, obj x);

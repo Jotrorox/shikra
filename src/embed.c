@@ -892,6 +892,36 @@ static const char *const e14[] = {
 "",
 0};
 static const char *const e15[] = {
+";; (scheme eval) -- REPL only (spec \302\2473.1). The interpreter implements %eval and %environment\n"
+";; (DESIGN.md \302\24711 M3); importing this library into a compiled program is a compile error.\n"
+";; An environment is an open top level (like the REPL's) with the given imports.\n"
+"(define-library (scheme eval)\n"
+"  (import (shikra primitives))\n"
+"  (export eval environment)\n"
+"  (begin\n"
+"    (define (eval expr env) (%eval expr env))\n"
+"    (define (environment . import-sets) (%environment import-sets))))\n"
+"",
+0};
+static const char *const e16[] = {
+";; (scheme load) -- REPL only (spec \302\2473.1): read the file's forms one at a time and evaluate\n"
+";; each in the environment (default: the interaction environment) before reading the next.\n"
+"(define-library (scheme load)\n"
+"  (import (shikra primitives))\n"
+"  (export load)\n"
+"  (begin\n"
+"    (define (load-forms port env)\n"
+"      (let ((x (%read port)))\n"
+"        (if (%eof-object? x)\n"
+"            (begin (%close-port port) (if #f #f))\n"
+"            (begin (%eval x env) (load-forms port env)))))\n"
+"    (define load\n"
+"      (case-lambda\n"
+"        ((file) (load-forms (%open-input-file file) (%interaction-environment)))\n"
+"        ((file env) (load-forms (%open-input-file file) env))))))\n"
+"",
+0};
+static const char *const e17[] = {
 ";; (scheme process-context) -- exit unwinds (runs outstanding dynamic-wind after thunks)\n"
 ";; before it flushes the ports and exits; emergency-exit does not unwind. Exit status: #t or\n"
 ";; no argument 0, #f 1, an exact integer itself, anything else 0.\n"
@@ -907,7 +937,17 @@ static const char *const e15[] = {
 "    (define emergency-exit (case-lambda (() (%exit #t)) ((obj) (%exit obj))))))\n"
 "",
 0};
-static const char *const e16[] = {
+static const char *const e18[] = {
+";; (scheme repl) -- REPL only (spec \302\2473.1): the environment of the REPL session (in a program\n"
+";; run by the interpreter: an open top level importing the REPL's default libraries).\n"
+"(define-library (scheme repl)\n"
+"  (import (shikra primitives))\n"
+"  (export interaction-environment)\n"
+"  (begin\n"
+"    (define (interaction-environment) (%interaction-environment))))\n"
+"",
+0};
+static const char *const e19[] = {
 ";; (scheme write) -- R7RS 6.13.3. TODO(M5): datum labels for cycles (write, write-shared).\n"
 "(define-library (scheme write)\n"
 "  (import (shikra primitives) (only (scheme base) current-output-port))\n"
@@ -921,7 +961,7 @@ static const char *const e16[] = {
 "      (case-lambda ((x) (%write x (current-output-port))) ((x p) (%write x p))))))\n"
 "",
 0};
-static const char *const e17[] = {
+static const char *const e20[] = {
 ";; (shikra dynamic) -- internal: the walk over the dynamic state that every non-local jump\n"
 ";; performs (spec \302\2478.4, R7RS 6.10). Shared by call/cc and guard in (scheme base) and by exit\n"
 ";; in (scheme process-context); plain Scheme on %primitives, so both engines use it.\n"
@@ -964,7 +1004,7 @@ static const char *const e17[] = {
 "                      (%set-winders! w))))))))))\n"
 "",
 0};
-static const char *const e18[] = {
+static const char *const e21[] = {
 "/* prims.def -- the table of %primitives (DESIGN.md \302\2472, \302\2476). X-macro: define PRIM, include.\n"
 " *\n"
 " *   PRIM(NAME, WHO, CFN, ARITY, ARGS, RES, FLAGS)\n"
@@ -1181,7 +1221,7 @@ static const char *const e18[] = {
 "PRIM(\"%exit\", \"exit\", rt_exit_o, 1, \"a\", 'a', PF_EFFECT)\n"
 "",
 0};
-static const char *const e19[] = {
+static const char *const e22[] = {
 "/* rt.h -- Shikra runtime: value representation and runtime API (spec \302\2476, DESIGN.md \302\2473-\302\2475).\n"
 " *\n"
 " * Two lives (DESIGN.md \302\2473):\n"
@@ -1317,7 +1357,7 @@ static const char *const e19[] = {
 "    intptr_t fd;        /* OS descriptor, -1 for string ports */\n"
 "    char *buf;\n"
 "    intptr_t pos, len, cap; /* input: unread bytes are buf[pos..len); output: buf[0..len) */\n"
-"    intptr_t line, col; /* input position: 1-based line, chars consumed on this line */\n"
+"    intptr_t line, col; /* input: 1-based line, chars consumed on it; output (fd): col 0 at line start */\n"
 "    obj name;           /* file name string or #f; used for read-error locations */\n"
 "} rt_port;\n"
 "#define RT_PF_IN 0x01\n"
@@ -1367,8 +1407,8 @@ static const char *const e19[] = {
 "    *r = a + b; return 0;\n"
 "}\n"
 "RT_INLINE int rt_sub_ovf(intptr_t a, intptr_t b, intptr_t *r) {\n"
-"    if ((b < 0 && a > INTPTR_MAX + b) || (b > 0 && a < INTPTR_MIN + b)) return 1;\n"
-"    *r = a - b; return 0;\n",
+"    if ((b < 0 && a > INTPTR_MAX + b) || (b > 0 && a < INTPTR_MIN + b)) return 1;\n",
+"    *r = a - b; return 0;\n"
 "}\n"
 "RT_INLINE int rt_mul_ovf(intptr_t a, intptr_t b, intptr_t *r) {\n"
 "    if (a > 0 ? (b > 0 ? a > INTPTR_MAX / b : b < INTPTR_MIN / a)\n"
@@ -1441,7 +1481,11 @@ static const char *const e19[] = {
 "RT_FN void *rt_alloc_raw(size_t nbytes);           /* raw (unscanned) buffer; returns its data */\n"
 "RT_FN void rt_gc_init(void *stack_base);           /* records the stack base only (no allocation) */\n"
 "RT_FN void rt_gc_add_roots(obj *start, obj *end);  /* register a range of obj words as roots */\n"
-"RT_FN void rt_gc_set_immortal(int on);             /* REPL front end: allocations never reclaimed, scanned as roots */\n"
+"RT_FN void rt_gc_add_dynamic_roots(obj **lo, obj **hi); /* the range [*lo, *hi), read at each collection (VM stack) */\n"
+"/* Immortal mode (the REPL front end): 1 = allocations are never reclaimed and are scanned as\n"
+" * roots; 2 = never reclaimed and NOT scanned (\"pure\": only for objects that point to nothing but\n"
+" * immortal objects, static data and interned symbols); 0 = off. */\n"
+"RT_FN void rt_gc_set_immortal(int on);\n"
 "RT_FN void rt_gc_enable(int on);                   /* automatic collection; off in tool mode until the REPL enables it */\n"
 "RT_FN void rt_gc_collect(void);                    /* collect now (no-op under bump or before the first allocation) */\n"
 "\n"
@@ -1451,6 +1495,10 @@ static const char *const e19[] = {
 "#if defined(SHIKRA_PROGRAM) && RT_NLITPAIRS > 0\n"
 "static const rt_pair rt_lit_pairs[RT_NLITPAIRS];\n"
 "#define RT_LITPAIR(x) ((uintptr_t)((const char *)(x) - 1 - (const char *)rt_lit_pairs) < sizeof rt_lit_pairs)\n"
+"#elif !defined(SHIKRA_PROGRAM)\n"
+"/* Tool: the interpreter's quoted data are immortal heap pairs (DESIGN.md \302\24711 M3). */\n"
+"RT_FN int rt_gc_immortal_pair(obj x);\n"
+"#define RT_LITPAIR(x) rt_gc_immortal_pair(x)\n"
 "#else\n"
 "#define RT_LITPAIR(x) 0\n"
 "#endif\n"
@@ -1461,7 +1509,7 @@ static const char *const e19[] = {
 "/* ---- initialisation and exit (rt_core.c) ---- */\n"
 "RT_FN void rt_init(int argc, char **argv, void *stack_base);\n"
 "RT_FN RT_NORETURN void rt_exit(int code); /* flushes the standard ports */\n"
-"RT_EXTVAR int rt_argc;\n"
+"RT_EXTVAR int rt_argc;\n",
 "RT_EXTVAR char **rt_argv;\n"
 "#ifdef SHIKRA_PROGRAM\n"
 "/* Provided by the generated code: the program body (rt_sys.c's main calls it). */\n"
@@ -1471,7 +1519,7 @@ static const char *const e19[] = {
 "/* ---- error path (rt_core.c; DESIGN.md \302\2473 \"Engine boundary\") ----\n"
 " * rt_error builds an error object and calls rt_raise, which hands it to the engine:\n"
 " *   program mode: rt_engine_raise (declared here, DEFINED BY THE GENERATED CODE);\n"
-" *   tool mode:    rt_raise_hook if set (it must not return, e.g. longjmp to the VM).\n",
+" *   tool mode:    rt_raise_hook if set (it must not return, e.g. longjmp to the VM).\n"
 " * With no engine handler: rt_uncaught prints \"Error: msg irritant ...\" (or\n"
 " * \"loc: error: msg ...\" when the error carries a location) to stderr, exits 70. */\n"
 "#ifdef SHIKRA_PROGRAM\n"
@@ -1481,6 +1529,7 @@ static const char *const e19[] = {
 "#endif\n"
 "RT_FN RT_NORETURN void rt_raise(obj e);\n"
 "RT_FN RT_NORETURN void rt_uncaught(obj e);\n"
+"RT_FN void rt_print_error(obj e); /* what rt_uncaught prints, without exiting (the REPL) */\n"
 "RT_FN RT_NORETURN void rt_error(const char *who, const char *msg, obj irritants); /* \"who: msg\" */\n"
 "RT_FN RT_NORETURN void rt_type_error(const char *who, const char *expected, obj x);\n"
 "RT_FN RT_NORETURN void rt_range_error(const char *who, obj x);\n"
@@ -1523,7 +1572,7 @@ static const char *const e19[] = {
 "RT_FN obj rt_values_to_list(obj v);\n"
 "RT_FN obj rt_make_proc(rt_code code, intptr_t nfree); /* free slots set to #f */\n"
 "\n"
-"/* ---- compiled calling convention (rt_core.c; spec \302\2478.1, DESIGN.md \302\2474, \302\24711 M0 part B) ----\n"
+"/* ---- compiled calling convention (rt_core.c; spec \302\2478.1, DESIGN.md \302\2474, \302\24711 M0 part B) ----\n",
 " * Every compiled procedure: obj f(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3).\n"
 " * Arguments beyond a3 are stored by the caller in rt_args[0..argc-5] right before the call\n"
 " * and copied out by the callee at entry, before anything else can call. Tail calls are\n"
@@ -1535,7 +1584,7 @@ static const char *const e19[] = {
 "#endif\n"
 "#ifndef RT_MUSTTAIL\n"
 "/* TODO(M4): trampoline fallback (spec \302\2478.1). Until then compilers without musttail rely on\n"
-" * sibling-call optimisation, which -O2 performs for these calls but -O0 does not. */\n",
+" * sibling-call optimisation, which -O2 performs for these calls but -O0 does not. */\n"
 "#define RT_MUSTTAIL\n"
 "#endif\n"
 "#define RT_ARGBUF 64\n"
@@ -1581,7 +1630,7 @@ static const char *const e19[] = {
 "\n"
 "/* ---- strings and chars (rt_str.c) ---- */\n"
 "RT_FN int rt_utf8_encode(char *out, int cp);   /* returns 1..4 */\n"
-"RT_FN int rt_utf8_decode(const char *s, size_t n, size_t *len); /* code point, or 0xFFFD */\n"
+"RT_FN int rt_utf8_decode(const char *s, size_t n, size_t *len); /* code point, or 0xFFFD */\n",
 "RT_FN size_t rt_utf8_count(const char *s, size_t n);\n"
 "RT_FN obj rt_make_string_n(const char *s, size_t nbytes); /* copies; counts chars */\n"
 "RT_FN obj rt_cstring(const char *s);\n"
@@ -1592,7 +1641,7 @@ static const char *const e19[] = {
 "RT_FN obj rt_string_copy_x(obj to, obj at, obj from, obj start, obj end);\n"
 "RT_FN obj rt_string_fill_x(obj s, obj c, obj start, obj end);\n"
 "RT_FN obj rt_string_append(obj a, obj b);\n"
-"RT_FN obj rt_string_compare(obj a, obj b); /* -1, 0, 1 (code point order) */\n",
+"RT_FN obj rt_string_compare(obj a, obj b); /* -1, 0, 1 (code point order) */\n"
 "RT_FN obj rt_string_to_list(obj s, obj start, obj end);\n"
 "RT_FN obj rt_list_to_string(obj l);\n"
 "RT_FN obj rt_string_to_utf8(obj s);\n"
@@ -1653,7 +1702,7 @@ static const char *const e19[] = {
 "}\n"
 "RT_INLINE obj rt_lt(obj a, obj b) {\n"
 "    if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b))) return RT_BOOL((intptr_t)a < (intptr_t)b);\n"
-"    return rt_lt2(a, b);\n"
+"    return rt_lt2(a, b);\n",
 "}\n"
 "RT_INLINE obj rt_gt(obj a, obj b) {\n"
 "    if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b))) return RT_BOOL((intptr_t)a > (intptr_t)b);\n"
@@ -1668,7 +1717,7 @@ static const char *const e19[] = {
 "RT_FN obj rt_open_output_string(void);\n"
 "RT_FN obj rt_get_output_string(obj port);\n"
 "RT_FN obj rt_open_input_bytevector(obj bv);\n"
-"RT_FN obj rt_open_output_bytevector(void);\n",
+"RT_FN obj rt_open_output_bytevector(void);\n"
 "RT_FN obj rt_get_output_bytevector(obj port);\n"
 "RT_FN obj rt_open_input_file(obj path);  /* raises a file error */\n"
 "RT_FN obj rt_open_output_file(obj path);\n"
@@ -1719,7 +1768,7 @@ static const char *const e19[] = {
 "#define RT_CHECK(c, who, ty, x) do { if (RT_UNLIKELY(!(c))) rt_type_error(who, ty, x); } while (0)\n"
 "RT_INLINE obj rt_car(obj x) { RT_CHECK(rt_is_pair(x), \"car\", \"pair\", x); return RT_CAR(x); }\n"
 "RT_INLINE obj rt_cdr(obj x) { RT_CHECK(rt_is_pair(x), \"cdr\", \"pair\", x); return RT_CDR(x); }\n"
-"#ifdef RT_UNSAFE\n"
+"#ifdef RT_UNSAFE\n",
 "#define RT_CHECK_MUTABLE_PAIR(x, who) ((void)0)\n"
 "#else\n"
 "#define RT_CHECK_MUTABLE_PAIR(x, who) do { if (RT_UNLIKELY(RT_LITPAIR(x))) rt_type_error(who, \"mutable pair\", x); } while (0)\n"
@@ -1736,7 +1785,7 @@ static const char *const e19[] = {
 "    RT_CDR(x) = v;\n"
 "    return RT_UNSPEC;\n"
 "}\n"
-"RT_INLINE obj rt_pair_p(obj x) { return RT_BOOL(rt_is_pair(x)); }\n",
+"RT_INLINE obj rt_pair_p(obj x) { return RT_BOOL(rt_is_pair(x)); }\n"
 "RT_INLINE obj rt_null_p(obj x) { return RT_BOOL(x == RT_NIL); }\n"
 "RT_INLINE obj rt_eq_p(obj a, obj b) { return RT_BOOL(a == b); }\n"
 "RT_INLINE obj rt_boolean_p(obj x) { return RT_BOOL(x == RT_TRUE || x == RT_FALSE); }\n"
@@ -1769,7 +1818,7 @@ static const char *const e19[] = {
 "RT_INLINE obj rt_bytevector_u8_set(obj v, obj k, obj b) {\n"
 "    RT_CHECK(rt_is_bytevector(v) && !(RT_HFLAGS(v) & RT_F_RO), \"bytevector-u8-set!\", \"mutable bytevector\", v);\n"
 "    if (RT_UNLIKELY(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v))) rt_range_error(\"bytevector-u8-set!\", k);\n"
-"    if (RT_UNLIKELY(!rt_is_fix(b) || (uintptr_t)RT_FIXVAL(b) > 255)) rt_type_error(\"bytevector-u8-set!\", \"byte\", b);\n"
+"    if (RT_UNLIKELY(!rt_is_fix(b) || (uintptr_t)RT_FIXVAL(b) > 255)) rt_type_error(\"bytevector-u8-set!\", \"byte\", b);\n",
 "    RT_PTR(v, rt_bytevector)->b[RT_FIXVAL(k)] = (unsigned char)RT_FIXVAL(b);\n"
 "    return RT_UNSPEC;\n"
 "}\n"
@@ -1777,7 +1826,7 @@ static const char *const e19[] = {
 "RT_INLINE obj rt_box_set(obj b, obj v) { RT_CHECK(rt_is_type(b, RT_T_BOX), \"box-set!\", \"box\", b); RT_VEC(b)[0] = v; return RT_UNSPEC; }\n"
 "RT_INLINE obj rt_record_ref(obj r, obj rtd, obj k) {\n"
 "    if (RT_UNLIKELY(!rt_is_type(r, RT_T_RECORD) || RT_VEC(r)[0] != rtd)) rt_record_error(r, rtd);\n"
-"    return RT_VEC(r)[1 + RT_FIXVAL(k)]; /* k is a compiler-generated constant */\n",
+"    return RT_VEC(r)[1 + RT_FIXVAL(k)]; /* k is a compiler-generated constant */\n"
 "}\n"
 "RT_INLINE obj rt_record_set(obj r, obj rtd, obj k, obj v) {\n"
 "    if (RT_UNLIKELY(!rt_is_type(r, RT_T_RECORD) || RT_VEC(r)[0] != rtd)) rt_record_error(r, rtd);\n"
@@ -1799,7 +1848,7 @@ static const char *const e19[] = {
 "#endif /* SHIKRA_RT_H */\n"
 "",
 0};
-static const char *const e20[] = {
+static const char *const e23[] = {
 "/* rt_core.c -- initialisation, the error path, and the core data objects\n"
 " * (pairs, symbols, vectors, bytevectors, boxes, records, error objects, values,\n"
 " * equivalence). All primitives are leaves: they never call Scheme code.\n"
@@ -1866,6 +1915,10 @@ static const char *const e20[] = {
 "}\n"
 "\n"
 "RT_FN void rt_uncaught(obj e) {\n"
+"    rt_print_error(e);\n"
+"    rt_exit(70);\n"
+"}\n"
+"RT_FN void rt_print_error(obj e) {\n"
 "    obj p = rt_stderr;\n"
 "    rt_flush(rt_stdout);\n"
 "    if (rt_is_type(e, RT_T_ERROR)) {\n"
@@ -1882,12 +1935,11 @@ static const char *const e20[] = {
 "        rt_print(e, p, 1);\n"
 "    }\n"
 "    rt_port_putc(p, '\\n');\n"
-"    rt_exit(70);\n"
 "}\n"
 "\n"
-"RT_FN void rt_error(const char *who, const char *msg, obj irritants) {\n"
+"RT_FN void rt_error(const char *who, const char *msg, obj irritants) {\n",
 "    obj m = rt_open_output_string();\n"
-"    if (who) { rt_port_puts(m, who); rt_port_puts(m, \": \"); }\n",
+"    if (who) { rt_port_puts(m, who); rt_port_puts(m, \": \"); }\n"
 "    rt_port_puts(m, msg);\n"
 "    rt_raise(rt_make_error(RT_ERR_GENERAL, rt_get_output_string(m), irritants, RT_FALSE));\n"
 "}\n"
@@ -1968,11 +2020,11 @@ static const char *const e20[] = {
 "            a = RT_VEC(a)[n - 1]; b = RT_VEC(b)[n - 1];\n"
 "            continue;\n"
 "        }\n"
-"        default: return 0;\n"
+"        default: return 0;\n",
 "        }\n"
 "    }\n"
 "}\n"
-"RT_FN obj rt_eqv_p(obj a, obj b) { return RT_BOOL(rt_eqv(a, b)); }\n",
+"RT_FN obj rt_eqv_p(obj a, obj b) { return RT_BOOL(rt_eqv(a, b)); }\n"
 "RT_FN obj rt_equal_p(obj a, obj b) { return RT_BOOL(rt_equal(a, b)); }\n"
 "\n"
 "/* ---- symbols ---- */\n"
@@ -2046,10 +2098,10 @@ static const char *const e20[] = {
 "    return RT_TAGPTR(v);\n"
 "}\n"
 "static intptr_t core_count(obj k, const char *who) {\n"
-"    if (!rt_is_fix(k) || RT_FIXVAL(k) < 0 || RT_FIXVAL(k) > ((intptr_t)1 << 40)) rt_type_error(who, \"valid length\", k);\n"
+"    if (!rt_is_fix(k) || RT_FIXVAL(k) < 0 || RT_FIXVAL(k) > ((intptr_t)1 << 40)) rt_type_error(who, \"valid length\", k);\n",
 "    return RT_FIXVAL(k);\n"
 "}\n"
-"RT_FN obj rt_make_vector(obj k, obj fill) { return rt_vector_n(core_count(k, \"make-vector\"), fill); }\n",
+"RT_FN obj rt_make_vector(obj k, obj fill) { return rt_vector_n(core_count(k, \"make-vector\"), fill); }\n"
 "RT_FN obj rt_list_to_vector(obj l) {\n"
 "    intptr_t i, n = rt_list_length(l, \"list->vector\");\n"
 "    obj v = rt_vector_n(n, RT_FALSE);\n"
@@ -2114,12 +2166,12 @@ static const char *const e20[] = {
 "    rt_vector *t;\n"
 "    RT_CHECK(rt_is_symbol(name), \"make-record-type\", \"symbol\", name);\n"
 "    RT_CHECK(rt_is_vector(fields), \"make-record-type\", \"vector\", fields);\n"
-"    t = (rt_vector *)rt_alloc(RT_HDR(RT_T_RTD, 0, 2), 3 * sizeof(obj));\n"
+"    t = (rt_vector *)rt_alloc(RT_HDR(RT_T_RTD, 0, 2), 3 * sizeof(obj));\n",
 "    t->v[0] = name;\n"
 "    t->v[1] = fields;\n"
 "    return RT_TAGPTR(t);\n"
 "}\n"
-"RT_FN obj rt_make_record(obj rtd) {\n",
+"RT_FN obj rt_make_record(obj rtd) {\n"
 "    intptr_t i, n;\n"
 "    rt_vector *r;\n"
 "    RT_CHECK(rt_is_type(rtd, RT_T_RTD), \"make-record\", \"record type\", rtd);\n"
@@ -2185,9 +2237,9 @@ static const char *const e20[] = {
 "RT_FN void rt_args_reserve(intptr_t n) {\n"
 "    if (n > core_argcap) { /* the old buffer stays a root range: clear it */\n"
 "        obj *b = (obj *)rt_sys_mem(sizeof(obj) * (size_t)(2 * n));\n"
-"        if (!b) rt_error(0, \"out of memory\", RT_NIL);\n"
+"        if (!b) rt_error(0, \"out of memory\", RT_NIL);\n",
 "        rt_gc_add_roots(b, b + 2 * n);\n"
-"        rt_memset(rt_args, 0, sizeof(obj) * (size_t)core_argcap);\n",
+"        rt_memset(rt_args, 0, sizeof(obj) * (size_t)core_argcap);\n"
 "        rt_args = b;\n"
 "        core_argcap = 2 * n;\n"
 "    }\n"
@@ -2255,8 +2307,8 @@ static const char *const e20[] = {
 "RT_FN obj rt_handlers_set(obj h) { rt_handlers = h; return RT_UNSPEC; }\n"
 "RT_FN obj rt_parameter_binding(obj cell) {\n"
 "    obj w;\n"
-"    RT_CHECK(rt_is_pair(cell), \"parameter\", \"parameter cell\", cell);\n"
-"    for (w = rt_winders; rt_is_pair(w); w = RT_CDR(w))\n",
+"    RT_CHECK(rt_is_pair(cell), \"parameter\", \"parameter cell\", cell);\n",
+"    for (w = rt_winders; rt_is_pair(w); w = RT_CDR(w))\n"
 "        if (RT_CAR(RT_CAR(w)) == cell) return RT_CAR(w);\n"
 "    return cell;\n"
 "}\n"
@@ -2312,7 +2364,7 @@ static const char *const e20[] = {
 "}\n"
 "",
 0};
-static const char *const e21[] = {
+static const char *const e24[] = {
 "/* rt_gc.c -- allocation and collection (spec \302\2477, DESIGN.md \302\2475 and \"M2 as built\").\n"
 " * One interface (the rt_alloc / rt_cons fast paths in rt.h, rt_alloc_slow, roots, immortal\n"
 " * mode, rt_gc_collect), two collectors chosen by a config macro:\n"
@@ -2331,6 +2383,8 @@ static const char *const e21[] = {
 "static RT_UNUSED void *gc_stack_base;\n"
 "static RT_UNUSED int gc_immortal, gc_nroots;\n"
 "static RT_UNUSED obj *gc_roots[GC_MAXROOTS][2];\n"
+"static RT_UNUSED obj **gc_droots[GC_MAXROOTS][2]; /* ranges whose bounds are read at collection time */\n"
+"static RT_UNUSED int gc_ndroots;\n"
 "#ifdef SHIKRA_PROGRAM\n"
 "static RT_UNUSED int gc_enabled = 1;\n"
 "#else\n"
@@ -2349,6 +2403,12 @@ static const char *const e21[] = {
 "    gc_roots[gc_nroots][0] = start;\n"
 "    gc_roots[gc_nroots][1] = end;\n"
 "    gc_nroots++;\n"
+"}\n"
+"RT_FN void rt_gc_add_dynamic_roots(obj **lo, obj **hi) {\n"
+"    if (gc_ndroots == GC_MAXROOTS) gc_oom();\n"
+"    gc_droots[gc_ndroots][0] = lo;\n"
+"    gc_droots[gc_ndroots][1] = hi;\n"
+"    gc_ndroots++;\n"
 "}\n"
 "RT_FN void rt_gc_enable(int on) { gc_enabled = on; }\n"
 "RT_FN void *rt_alloc_raw(size_t nbytes) {\n"
@@ -2376,10 +2436,10 @@ static const char *const e21[] = {
 "#else\n"
 "/* ==== Immix ============================================================================\n"
 " * Heap: chunks of 32 KB-aligned blocks obtained from rt_sys_mem, each chunk with a side\n"
-" * array of block descriptors (kind, one state byte per line, start and mark bitmaps with\n"
+" * array of block descriptors (kind, one state byte per line, start and mark bitmaps with\n",
 " * one bit per 8-byte granule). A block holds either pairs or headered objects. Spaces bump\n"
 " * through runs of free lines: headered and pair streams (the rt_hp / rt_pp globals), an\n"
-" * overflow space for medium objects that miss the current run (whole free blocks), and\n",
+" * overflow space for medium objects that miss the current run (whole free blocks), and\n"
 " * immortal headered/pair spaces (whole zeroed blocks, never reclaimed). Requests above\n"
 " * GC_MEDIUM that miss the fast path get their own mapping (large object space).\n"
 " * Object starts: a newly claimed headered run is marked L_RUN; collection first walks\n"
@@ -2400,9 +2460,9 @@ static const char *const e21[] = {
 "#else\n"
 "#define GC_STACKMAX ((size_t)1 << 20)\n"
 "#endif\n"
-"enum { GC_FREE = 0, GC_HDR = 1, GC_PAIR = 2, GC_IMM = 4 };         /* block kinds */\n"
+"enum { GC_FREE = 0, GC_HDR = 1, GC_PAIR = 2, GC_IMM = 4, GC_PURE = 8 }; /* block kinds */\n"
 "enum { L_FREE = 0, L_LIVE = 1, L_NEW = 2, L_RUN = 3, L_MARK = 4 }; /* line states (+ mark bit) */\n"
-"enum { S_HDR, S_PAIR, S_OVF, S_IHDR, S_IPAIR, S_N };              /* spaces */\n"
+"enum { S_HDR, S_PAIR, S_OVF, S_IHDR, S_IPAIR, S_PHDR, S_PPAIR, S_N }; /* spaces */\n"
 "\n"
 "typedef struct { unsigned char kind, line[GC_NLINES]; uintptr_t start[GC_NWORDS], mark[GC_NWORDS]; } gc_block;\n"
 "typedef struct { char *base; size_t n; gc_block *b; } gc_chunk;\n"
@@ -2419,8 +2479,10 @@ static const char *const e21[] = {
 "static size_t gc_nlarge, gc_caplarge, gc_large_since, gc_large_limit;\n"
 "static gc_range *gc_stack;\n"
 "static size_t gc_top, gc_cap;\n"
-"#ifdef RT_GC_STRESS\n"
-"static intptr_t gc_stress, gc_countdown; /* collect every gc_stress-th allocation */\n"
+"/* Stress builds (and the tool, for the interpreter) can collect every gc_stress-th allocation. */\n"
+"#if defined(RT_GC_STRESS) || !defined(SHIKRA_PROGRAM)\n"
+"#define GC_STRESS_ON 1\n"
+"static intptr_t gc_stress, gc_countdown;\n"
 "#endif\n"
 "\n"
 "/* Size in bytes of the headered object at p (rt_alloc rounds to 8). */\n"
@@ -2432,7 +2494,7 @@ static const char *const e21[] = {
 "    if (t == RT_T_PORT) return sizeof(rt_port);\n"
 "    return sizeof(rt_proc) + 8 * n; /* RT_T_PROC */\n"
 "}\n"
-"static int gc_hibit(uintptr_t w) {\n"
+"static int gc_hibit(uintptr_t w) {\n",
 "#if defined(__GNUC__) || defined(__clang__)\n"
 "    return 63 - __builtin_clzll((unsigned long long)w);\n"
 "#else\n"
@@ -2446,7 +2508,7 @@ static const char *const e21[] = {
 "    char *m = 0;\n"
 "    gc_block *b = 0;\n"
 "    if (gc_nchunks == GC_MAXCHUNKS || !(m = (char *)rt_sys_mem(n * GC_BLOCK + GC_BLOCK)) ||\n"
-"        !(b = (gc_block *)rt_sys_mem(n * sizeof(gc_block))))\n",
+"        !(b = (gc_block *)rt_sys_mem(n * sizeof(gc_block))))\n"
 "        gc_oom();\n"
 "    m = (char *)(((uintptr_t)m + GC_BLOCK - 1) & ~(uintptr_t)(GC_BLOCK - 1));\n"
 "    gc_chunks[gc_nchunks].base = m;\n"
@@ -2458,17 +2520,21 @@ static const char *const e21[] = {
 "}\n"
 "\n"
 "static void gc_setup(void) {\n"
-"    static const int kinds[S_N] = {GC_HDR, GC_PAIR, GC_HDR, GC_HDR | GC_IMM, GC_PAIR | GC_IMM};\n"
+"    static const int kinds[S_N] = {GC_HDR, GC_PAIR, GC_HDR, GC_HDR | GC_IMM, GC_PAIR | GC_IMM,\n"
+"                                   GC_HDR | GC_IMM | GC_PURE, GC_PAIR | GC_IMM | GC_PURE};\n"
 "    int i;\n"
 "    for (i = 0; i < S_N; i++) { gc_sp[i].kind = kinds[i]; gc_sp[i].bi = -1; }\n"
 "    gc_add_chunk(GC_FIRST);\n"
 "    if (!(gc_stack = (gc_range *)rt_sys_mem(GC_STACK0 * sizeof(gc_range)))) gc_oom();\n"
 "    gc_cap = GC_STACK0;\n"
 "    gc_large_limit = (size_t)4 << 20;\n"
-"#ifdef RT_GC_STRESS\n"
-"    { /* SHIKRA_GC_STRESS=N: collect every N-th allocation (default 1; 0 turns stress off) */\n"
+"#ifdef GC_STRESS_ON\n"
+"    { /* SHIKRA_GC_STRESS=N: collect every N-th allocation (stress builds: default 1; the tool,\n"
+"       * whose interpreter enables collection: default 0; 0 turns stress off) */\n"
 "        const char *e = rt_sys_getenv(\"SHIKRA_GC_STRESS\");\n"
+"#ifdef RT_GC_STRESS\n"
 "        gc_stress = 1;\n"
+"#endif\n"
 "        if (e) for (gc_stress = 0; *e >= '0' && *e <= '9'; e++) gc_stress = gc_stress * 10 + (*e - '0');\n"
 "        gc_countdown = gc_stress;\n"
 "    }\n"
@@ -2477,19 +2543,19 @@ static const char *const e21[] = {
 "}\n"
 "\n"
 "/* The fast-path globals mirror the active headered and pair spaces. */\n"
-"static gc_space *gc_hs(void) { return &gc_sp[gc_immortal ? S_IHDR : S_HDR]; }\n"
-"static gc_space *gc_ps(void) { return &gc_sp[gc_immortal ? S_IPAIR : S_PAIR]; }\n"
+"static gc_space *gc_hs(void) { return &gc_sp[gc_immortal == 2 ? S_PHDR : gc_immortal ? S_IHDR : S_HDR]; }\n"
+"static gc_space *gc_ps(void) { return &gc_sp[gc_immortal == 2 ? S_PPAIR : gc_immortal ? S_IPAIR : S_PAIR]; }\n"
 "static void gc_sync_in(void) { gc_hs()->cur = rt_hp; gc_ps()->cur = rt_pp; }\n"
 "static void gc_sync_out(void) {\n"
 "    rt_hp = gc_hs()->cur; rt_hlim = gc_hs()->end;\n"
 "    rt_pp = gc_ps()->cur; rt_plim = gc_ps()->end;\n"
-"#ifdef RT_GC_STRESS\n"
-"    if (gc_stress && gc_enabled) { rt_hlim = rt_hp; rt_plim = rt_pp; } /* every allocation takes the slow path */\n"
+"#ifdef GC_STRESS_ON\n"
+"    if (gc_stress && gc_enabled && !gc_immortal) { rt_hlim = rt_hp; rt_plim = rt_pp; } /* every allocation takes the slow path */\n"
 "#endif\n"
 "}\n"
 "RT_FN void rt_gc_set_immortal(int on) {\n"
 "    if (gc_ready) gc_sync_in();\n"
-"    gc_immortal = on != 0;\n"
+"    gc_immortal = on;\n"
 "    if (gc_ready) gc_sync_out();\n"
 "}\n"
 "\n"
@@ -2503,7 +2569,7 @@ static const char *const e21[] = {
 "        rt_memcpy(s, gc_stack, gc_cap * sizeof(gc_range));\n"
 "        rt_sys_free(gc_stack, gc_cap * sizeof(gc_range));\n"
 "        gc_stack = s;\n"
-"        gc_cap = n;\n"
+"        gc_cap = n;\n",
 "    }\n"
 "    gc_stack[gc_top].lo = lo;\n"
 "    gc_stack[gc_top++].hi = hi;\n"
@@ -2519,7 +2585,7 @@ static const char *const e21[] = {
 "    t = h & 0xFF;\n"
 "    if (t < 16) gc_push((obj *)p + 1, (obj *)p + 1 + (h >> 16));\n"
 "    else if (t == RT_T_STRING) gc_mark_any((uintptr_t)((rt_string *)p)->buf);\n"
-"    else if (t == RT_T_PORT) { gc_mark_any((uintptr_t)((rt_port *)p)->buf); gc_mark(((rt_port *)p)->name); }\n",
+"    else if (t == RT_T_PORT) { gc_mark_any((uintptr_t)((rt_port *)p)->buf); gc_mark(((rt_port *)p)->name); }\n"
 "    else if (t == RT_T_PROC) gc_push(((rt_proc *)p)->free, ((rt_proc *)p)->free + (h >> 16));\n"
 "}\n"
 "static void gc_mark_obj(gc_block *b, char *base, char *p, int pair) {\n"
@@ -2579,7 +2645,7 @@ static const char *const e21[] = {
 "    if (b->kind == GC_PAIR) {\n"
 "        if ((w & 7) == 1 && !(p & 15) && b->line[(p - (uintptr_t)base) / GC_LINE]) gc_mark_obj(b, base, (char *)p, 1);\n"
 "    } else if (b->kind == GC_HDR && (w & 7) != 1 && (b->start[g >> 6] >> (g & 63) & 1))\n"
-"        gc_mark_obj(b, base, (char *)p, 0);\n"
+"        gc_mark_obj(b, base, (char *)p, 0);\n",
 "}\n"
 "/* Conservative: a is any word; it keeps the object it points at or into alive. */\n"
 "static void gc_mark_any(uintptr_t a) {\n"
@@ -2599,7 +2665,7 @@ static const char *const e21[] = {
 "    w = b->start[i] & (~(uintptr_t)0 >> (63 - (g & 63))); /* starts at or below g */\n"
 "    while (!w) {\n"
 "        if (!i) return;\n"
-"        w = b->start[--i];\n",
+"        w = b->start[--i];\n"
 "    }\n"
 "    p = base + (i * 64 + (size_t)gc_hibit(w)) * 8;\n"
 "    if (a < (uintptr_t)p + gc_size(p)) gc_mark_obj(b, base, p, 0);\n"
@@ -2650,7 +2716,7 @@ static const char *const e21[] = {
 "            for (l = 0; l < GC_NLINES; l = m) {\n"
 "                char *a = base + l * GC_LINE, *end;\n"
 "                for (m = l + 1; m < GC_NLINES && b->line[m] == L_NEW; m++) {}\n"
-"                if (b->line[l] != L_RUN) continue;\n"
+"                if (b->line[l] != L_RUN) continue;\n",
 "                for (end = base + m * GC_LINE; a < end && *(uintptr_t *)a; a += gc_size(a)) {\n"
 "                    k = (size_t)(a - base) >> 3;\n"
 "                    b->start[k >> 6] |= (uintptr_t)1 << (k & 63);\n"
@@ -2663,9 +2729,13 @@ static const char *const e21[] = {
 "        obj *r;\n"
 "        for (r = gc_roots[c][0]; r < gc_roots[c][1]; r++) { gc_mark(*r); gc_drain(); }\n"
 "    }\n"
+"    for (c = 0; c < gc_ndroots; c++) {\n"
+"        obj *r;\n"
+"        for (r = *gc_droots[c][0]; r < *gc_droots[c][1]; r++) { gc_mark(*r); gc_drain(); }\n"
+"    }\n"
 "    for (c = 0; c < gc_nchunks; c++)\n"
 "        for (j = 0; j < gc_chunks[c].n; j++) {\n"
-"            gc_block *b = &gc_chunks[c].b[j];\n",
+"            gc_block *b = &gc_chunks[c].b[j];\n"
 "            char *a = gc_chunks[c].base + j * GC_BLOCK, *end = a + GC_BLOCK;\n"
 "            if (b->kind == (GC_PAIR | GC_IMM))\n"
 "                for (; a < end; a += sizeof(rt_pair)) { gc_scan(a, 1); gc_drain(); }\n"
@@ -2673,7 +2743,7 @@ static const char *const e21[] = {
 "                for (; a < end && *(uintptr_t *)a; a += gc_size(a)) { gc_scan(a, 0); gc_drain(); }\n"
 "        }\n"
 "    for (k = 0; k < gc_nlarge; k++)\n"
-"        if (gc_larges[k]->imm) { gc_scan((char *)gc_larges[k] + GC_LHDR, 0); gc_drain(); }\n"
+"        if (gc_larges[k]->imm == 1) { gc_scan((char *)gc_larges[k] + GC_LHDR, 0); gc_drain(); }\n"
 "    sp = (uintptr_t *)((uintptr_t)&here & ~(uintptr_t)7);\n"
 "    top = (uintptr_t *)((uintptr_t)gc_stack_base & ~(uintptr_t)7);\n"
 "    if (sp > top) { uintptr_t *t = sp; sp = top; top = t; }\n"
@@ -2706,7 +2776,7 @@ static const char *const e21[] = {
 "    /* growth: keep at least half of the block heap free; large objects may allocate as much\n"
 "     * as is live (at least the block heap size, at least 4 MB) before the next collection */\n"
 "    if (2 * (total - nfree) > total) gc_add_chunk(gc_nblocks);\n"
-"    gc_large_limit = live_large > gc_nblocks * GC_BLOCK ? live_large : gc_nblocks * GC_BLOCK;\n"
+"    gc_large_limit = live_large > gc_nblocks * GC_BLOCK ? live_large : gc_nblocks * GC_BLOCK;\n",
 "    if (gc_large_limit < (size_t)4 << 20) gc_large_limit = (size_t)4 << 20;\n"
 "}\n"
 "/* rt_sys_catch saves the callee-saved registers on the stack before gc_run scans it. */\n"
@@ -2714,6 +2784,15 @@ static const char *const e21[] = {
 "    rt_jmpbuf jb;\n"
 "    rt_sys_catch(&jb, gc_run, 0);\n"
 "}\n"
+"#ifndef SHIKRA_PROGRAM\n"
+"RT_FN int rt_gc_immortal_pair(obj x) {\n"
+"    char *base;\n"
+"    gc_block *b;\n"
+"    if (!gc_ready) return 0;\n"
+"    b = gc_find(RT_W(x) - 1, &base);\n"
+"    return b && (b->kind & ~GC_PURE) == (GC_PAIR | GC_IMM);\n"
+"}\n"
+"#endif\n"
 "RT_FN void rt_gc_collect(void) {\n"
 "    if (!gc_ready) return;\n"
 "    gc_sync_in();\n"
@@ -2729,7 +2808,7 @@ static const char *const e21[] = {
 "        if (++s->bi >= (intptr_t)c->n) { s->ci++; s->bi = -1; continue; }\n"
 "        b = &c->b[s->bi];\n"
 "        if (b->kind == GC_FREE || (b->kind == s->kind && (s == &gc_sp[S_HDR] || s == &gc_sp[S_PAIR]))) {\n"
-"            b->kind = (unsigned char)s->kind; /* overflow and immortal spaces take free blocks only */\n",
+"            b->kind = (unsigned char)s->kind; /* overflow and immortal spaces take free blocks only */\n"
 "            s->cur = s->end = c->base + (size_t)s->bi * GC_BLOCK;\n"
 "            return 1;\n"
 "        }\n"
@@ -2776,7 +2855,7 @@ static const char *const e21[] = {
 "    if (gc_nlarge == gc_caplarge) {\n"
 "        size_t n = gc_caplarge ? 2 * gc_caplarge : 64;\n"
 "        gc_large **t = (gc_large **)rt_sys_mem(n * sizeof(gc_large *));\n"
-"        if (!t) gc_oom();\n"
+"        if (!t) gc_oom();\n",
 "        if (gc_caplarge) {\n"
 "            rt_memcpy(t, gc_larges, gc_nlarge * sizeof(gc_large *));\n"
 "            rt_sys_free(gc_larges, gc_caplarge * sizeof(gc_large *));\n"
@@ -2794,8 +2873,8 @@ static const char *const e21[] = {
 "    char *p;\n"
 "    if (!gc_ready) gc_setup();\n"
 "    gc_sync_in();\n"
-"#ifdef RT_GC_STRESS\n"
-"    if (gc_stress && gc_enabled && --gc_countdown <= 0) { gc_countdown = gc_stress; gc_collect_now(); }\n"
+"#ifdef GC_STRESS_ON\n"
+"    if (gc_stress && gc_enabled && !gc_immortal && --gc_countdown <= 0) { gc_countdown = gc_stress; gc_collect_now(); }\n"
 "#endif\n"
 "    if (bytes > GC_MEDIUM) p = (char *)gc_large_alloc(bytes);\n"
 "    else {\n"
@@ -2806,12 +2885,12 @@ static const char *const e21[] = {
 "        s->cur += bytes;\n"
 "    }\n"
 "    gc_sync_out();\n"
-"    return p;\n",
+"    return p;\n"
 "}\n"
 "#endif\n"
 "",
 0};
-static const char *const e22[] = {
+static const char *const e25[] = {
 "/* rt_io.c -- ports and the printer (write/display).\n"
 " * A port is a fixed-field object (rt_port in rt.h) over either an OS descriptor (with a\n"
 " * byte buffer) or an in-memory buffer (RT_PF_STRING: string and bytevector ports).\n"
@@ -3069,6 +3148,7 @@ static const char *const e22[] = {
 "    if ((intptr_t)n >= p->cap) rt_sys_write((int)p->fd, s, n);\n"
 "    else { rt_memcpy(p->buf + p->len, s, n); p->len += (intptr_t)n; }\n"
 "    if (RT_HFLAGS(port) & RT_PF_UNBUF) io_flush(p);\n"
+"    if (n) p->col = s[n - 1] != '\\n'; /* output: 0 at the start of a line (the REPL's fresh line) */\n"
 "}\n"
 "RT_FN void rt_port_putc(obj port, int c) {\n"
 "    char b[4];\n"
@@ -3078,9 +3158,9 @@ static const char *const e22[] = {
 "\n"
 "/* ---- printer ---- */\n"
 "static void io_fix(obj port, intptr_t v) {\n"
-"    char buf[24], *p = buf + sizeof buf;\n"
+"    char buf[24], *p = buf + sizeof buf;\n",
 "    uintptr_t u = v < 0 ? (uintptr_t)0 - (uintptr_t)v : (uintptr_t)v;\n"
-"    do { *--p = (char)('0' + u % 10); u /= 10; } while (u);\n",
+"    do { *--p = (char)('0' + u % 10); u /= 10; } while (u);\n"
 "    if (v < 0) *--p = '-';\n"
 "    rt_port_write(port, p, (size_t)(buf + sizeof buf - p));\n"
 "}\n"
@@ -3150,9 +3230,9 @@ static const char *const e22[] = {
 "        rt_port_putc(port, ')');\n"
 "        return;\n"
 "    }\n"
-"    if (rt_is_proc(x)) { rt_port_puts(port, \"#<procedure>\"); return; }\n"
+"    if (rt_is_proc(x)) { rt_port_puts(port, \"#<procedure>\"); return; }\n",
 "    if (!rt_is_heap(x)) {\n"
-"        rt_port_puts(port, x == RT_TRUE ? \"#t\" : x == RT_FALSE ? \"#f\" : x == RT_NIL ? \"()\" : x == RT_EOF ? \"#<eof>\"\n",
+"        rt_port_puts(port, x == RT_TRUE ? \"#t\" : x == RT_FALSE ? \"#f\" : x == RT_NIL ? \"()\" : x == RT_EOF ? \"#<eof>\"\n"
 "                         : x == RT_UNSPEC ? \"#<unspecified>\" : x == RT_UNDEF ? \"#<undefined>\"\n"
 "                         : x == RT_DEFAULT ? \"#<default>\" : \"#<immediate>\");\n"
 "        return;\n"
@@ -3218,9 +3298,9 @@ static const char *const e22[] = {
 "RT_FN obj rt_write_bytevector(obj bv, obj port, obj start, obj end) {\n"
 "    intptr_t s, e;\n"
 "    RT_CHECK(rt_is_bytevector(bv), \"write-bytevector\", \"bytevector\", bv);\n"
-"    s = rt_check_range(start, end, RT_HLEN(bv), &e, \"write-bytevector\");\n"
+"    s = rt_check_range(start, end, RT_HLEN(bv), &e, \"write-bytevector\");\n",
 "    io_check(port, RT_PF_OUT | RT_PF_BINARY, \"write-bytevector\");\n"
-"    rt_port_write(port, (const char *)RT_PTR(bv, rt_bytevector)->b + s, (size_t)(e - s));\n",
+"    rt_port_write(port, (const char *)RT_PTR(bv, rt_bytevector)->b + s, (size_t)(e - s));\n"
 "    return RT_UNSPEC;\n"
 "}\n"
 "RT_FN obj rt_write(obj x, obj port) { io_check(port, RT_PF_OUT, \"write\"); rt_print(x, port, 1); return RT_UNSPEC; }\n"
@@ -3229,7 +3309,7 @@ static const char *const e22[] = {
 "RT_FN obj rt_flush_output_port(obj port) { io_check(port, RT_PF_OUT | IO_ANY, \"flush-output-port\"); rt_flush(port); return RT_UNSPEC; }\n"
 "",
 0};
-static const char *const e23[] = {
+static const char *const e26[] = {
 "/* rt_num.c -- numbers: 63-bit fixnums and boxed IEEE doubles (spec \302\2473.2, \302\2476.2).\n"
 " * Fixnum overflow raises an error and never wraps. No rationals: (/ 1 3) is a flonum,\n"
 " * (/ 6 3) is the exact 2. No libm and no libc: rounding is done by hand, and float\n"
@@ -3654,7 +3734,7 @@ static const char *const e23[] = {
 "}\n"
 "",
 0};
-static const char *const e24[] = {
+static const char *const e27[] = {
 "/* rt_read.c -- the datum reader (R7RS \302\2477.1.2 lexical syntax), shared by the compiler,\n"
 " * the REPL and compiled programs that use (scheme read). Leaf code: no Scheme calls.\n"
 " * Tool mode additionally records file:line:column for every pair it creates. */\n"
@@ -4009,7 +4089,7 @@ static const char *const e24[] = {
 "}\n"
 "",
 0};
-static const char *const e25[] = {
+static const char *const e28[] = {
 "/* rt_str.c -- strings (UTF-8 with an ASCII fast path, spec \302\2473.2/\302\2476.1) and chars.\n"
 " * A string is [hdr][chars][bytes][buf]; buf is a NUL-terminated UTF-8 buffer that may be\n"
 " * replaced by string-set! when a character's encoded width changes. RT_F_ASCII is kept\n"
@@ -4291,7 +4371,7 @@ static const char *const e25[] = {
 "}\n"
 "",
 0};
-static const char *const e26[] = {
+static const char *const e29[] = {
 "/* rt_sys.c -- platform layer. The ONLY runtime file that calls libc or the OS\n"
 " * (DESIGN.md \302\2473). Everything else goes through the rt_sys_* / rt_mem* functions. */\n"
 "#ifndef SHIKRA_RT_H\n"
@@ -4407,17 +4487,20 @@ const embed_file embed_files[] = {
     {"lib/scheme/base/vectors.scm", e12},
     {"lib/scheme/case-lambda.sld", e13},
     {"lib/scheme/cxr.sld", e14},
-    {"lib/scheme/process-context.sld", e15},
-    {"lib/scheme/write.sld", e16},
-    {"lib/shikra/dynamic.sld", e17},
-    {"src/prims.def", e18},
-    {"src/rt.h", e19},
-    {"src/rt_core.c", e20},
-    {"src/rt_gc.c", e21},
-    {"src/rt_io.c", e22},
-    {"src/rt_num.c", e23},
-    {"src/rt_read.c", e24},
-    {"src/rt_str.c", e25},
-    {"src/rt_sys.c", e26},
+    {"lib/scheme/eval.sld", e15},
+    {"lib/scheme/load.sld", e16},
+    {"lib/scheme/process-context.sld", e17},
+    {"lib/scheme/repl.sld", e18},
+    {"lib/scheme/write.sld", e19},
+    {"lib/shikra/dynamic.sld", e20},
+    {"src/prims.def", e21},
+    {"src/rt.h", e22},
+    {"src/rt_core.c", e23},
+    {"src/rt_gc.c", e24},
+    {"src/rt_io.c", e25},
+    {"src/rt_num.c", e26},
+    {"src/rt_read.c", e27},
+    {"src/rt_str.c", e28},
+    {"src/rt_sys.c", e29},
     {0, 0}
 };
