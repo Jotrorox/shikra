@@ -29,12 +29,14 @@ typedef char rt_assert_64bit[(sizeof(void *) == 8 && sizeof(double) == 8 && size
 #define RT_NORETURN __attribute__((noreturn))
 #define RT_UNUSED __attribute__((unused))
 #define RT_NOINLINE __attribute__((noinline))
+#define RT_ALWAYS __attribute__((always_inline))
 #define RT_LIKELY(x) __builtin_expect(!!(x), 1)
 #define RT_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #else
 #define RT_NORETURN
 #define RT_UNUSED
 #define RT_NOINLINE
+#define RT_ALWAYS
 #define RT_LIKELY(x) (x)
 #define RT_UNLIKELY(x) (x)
 #endif
@@ -556,27 +558,29 @@ RT_FN obj rt_string_to_number(obj s, obj radix);
 RT_FN int rt_parse_number(const char *s, size_t n, int radix, obj *out);
 RT_FN size_t rt_format_double(double d, char *out); /* >= 32 bytes; no NUL */
 
-/* Generic arithmetic: inline fixnum fast path, out-of-line general case. */
-RT_INLINE obj rt_add(obj a, obj b) {
+/* Generic arithmetic: inline fixnum fast path, out-of-line general case. The fast paths are
+ * always inlined: since M4-1 a procedure's body holds all its arithmetic, and the C compiler's
+ * heuristics would otherwise leave some of it out of line. */
+RT_INLINE RT_ALWAYS obj rt_add(obj a, obj b) {
     intptr_t r;
     if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) && !rt_add_ovf((intptr_t)a, (intptr_t)b, &r)) return RT_O(r);
     return rt_add2(a, b);
 }
-RT_INLINE obj rt_sub(obj a, obj b) {
+RT_INLINE RT_ALWAYS obj rt_sub(obj a, obj b) {
     intptr_t r;
     if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) && !rt_sub_ovf((intptr_t)a, (intptr_t)b, &r)) return RT_O(r);
     return rt_sub2(a, b);
 }
-RT_INLINE obj rt_mul(obj a, obj b) {
+RT_INLINE RT_ALWAYS obj rt_mul(obj a, obj b) {
     intptr_t r;
     if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) && !rt_mul_ovf(RT_FIXVAL(a), (intptr_t)b, &r)) return RT_O(r);
     return rt_mul2(a, b);
 }
-RT_INLINE obj rt_lt(obj a, obj b) {
+RT_INLINE RT_ALWAYS obj rt_lt(obj a, obj b) {
     if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b))) return RT_BOOL((intptr_t)a < (intptr_t)b);
     return rt_lt2(a, b);
 }
-RT_INLINE obj rt_gt(obj a, obj b) {
+RT_INLINE RT_ALWAYS obj rt_gt(obj a, obj b) {
     if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b))) return RT_BOOL((intptr_t)a > (intptr_t)b);
     return rt_gt2(a, b);
 }

@@ -130,6 +130,7 @@ run_cases() {
         compiled) $SHIKRA build -O${opt:-2} $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" $args < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
         tramp) $SHIKRA build -O${opt:-0} --no-musttail $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" $args < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
         gcc) $SHIKRA build -O${opt:-2} --cc "$GCC" $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" $args < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
+        gcctramp) $SHIKRA build -O${opt:-0} --no-musttail --cc "$GCC" $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" $args < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
         stress) every=1
             [ -f "$base.stress-interval" ] && every=$(cat "$base.stress-interval")
             $SHIKRA build -O$opt --gc-stress $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 &&
@@ -263,7 +264,8 @@ run_tramp() {
     set -- $(cat "$TMP/tramp.count")
     pass=$1 fail=$2
 }
-# run_gcc: the compiled cases built by GCC (GCC=gcc-16 by default; not part of all).
+# gcc mode: the compiled cases built by GCC (GCC=gcc-16 by default) at -O2, -O0 and -O0 with the
+# trampoline; not part of all (it needs that compiler).
 GCC=${GCC:-gcc-16}
 
 # run_shape: tests/shape/NAME.scm, structural properties of the emitted C (M4-1, spec §12): the
@@ -358,7 +360,10 @@ stress) run_stress ;;
 r7rs) run_r7rs; for opt in 0 s; do saved_runs=$r7rs_runs; r7rs_runs=$compiled_runs; run_r7rs; r7rs_runs=$saved_runs; done; opt= ;;
 levels) run_levels r7rs ;;
 tramp) run_tramp ;;
-gcc) opt=2; run_cases gcc; opt=0; run_cases gcc; opt= ;;
+gcc) opt=2; run_cases gcc
+    ( opt=0; ulimit -s 65520 2> /dev/null; run_cases gcc; echo "$pass $fail" > "$TMP/gcc.count" ); set -- $(cat "$TMP/gcc.count"); pass=$1 fail=$2
+    ( opt=0; ulimit -s 65520 2> /dev/null; run_cases gcctramp; echo "$pass $fail" > "$TMP/gcc.count" ); set -- $(cat "$TMP/gcc.count"); pass=$1 fail=$2
+    opt= ;;
 shape) run_shape ;;
 all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_cases interp; run_repl; run_tramp
     run_stress ;;
