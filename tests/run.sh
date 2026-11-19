@@ -8,13 +8,15 @@
 #             SHIKRA_PROGRAM, -Wall -Wextra -Werror; output must match
 #   compiled  tests/cases/NAME.scm built with `shikra build`, stdout == NAME.out,
 #             exit status == NAME.exit (default 0), stderr contains NAME.err if present,
-#             stdin is NAME.in if present (else /dev/null);
+#             stdin is NAME.in if present (else /dev/null); NAME.flags: extra shikra flags
+#             (e.g. --unicode=full, also given to the interpreter); NAME.args: the program's
+#             arguments (also for interp);
 #             the generated C must compile with -Wall -Wextra -Werror;
 #             tests/errors/NAME.scm: `shikra check` must fail with stderr containing NAME.err
 #   expand    tests/expand/NAME.scm: the program's core forms as `shikra debug-expand`
 #             prints them (renaming stripped, as the REPL's ,expand) must equal NAME.out
-#   r7rs      the adapted R7RS suite (tests/r7rs/README.md): each FILE:ENGINE in r7rs_runs
-#             below; the summary line and the list of failing tests must equal
+#   r7rs      the adapted R7RS suite (tests/r7rs/README.md): each FILE:ENGINE[:FLAG] in r7rs_runs
+#             below (FLAG: an extra shikra flag such as --unicode=full); the summary line and the list of failing tests must equal
 #             tests/r7rs/expected/FILE.ENGINE (so known failures are pinned and an unexpected
 #             pass is flagged too)
 #   interp    tests/cases/NAME.scm run by the interpreter (`shikra interp`, the hidden batch
@@ -34,7 +36,9 @@
 #             (ulimit -s): -O0 frames are larger than 8 MB / 10^5 (callcc.scm recurses 10^5
 #             deep), independent of the collector. Then the interpreter (M3): every case and
 #             tests/r7rs/base.scm run by `shikra interp` with SHIKRA_GC_STRESS=1 (or
-#             NAME.interp-stress-interval; DESIGN.md M3 "Stress mode").
+#             NAME.interp-stress-interval; DESIGN.md M3 "Stress mode"). Since M5 every compiled
+#             r7rs run (r7rs_runs) is part of the stress pass, and every interpreted one of the
+#             interpreter stress pass.
 # `all` runs reader, unit, amalg, expand, compiled, r7rs, interp and stress. Exit status is
 # non-zero if anything failed.
 set -u
@@ -112,27 +116,33 @@ run_cases() {
         [ -f "$base.exit" ] && want_exit=$(cat "$base.exit")
         in=/dev/null
         [ -f "$base.in" ] && in=$base.in
+        flags=
+        [ -f "$base.flags" ] && flags=$(cat "$base.flags")
+        args=
+        [ -f "$base.args" ] && args=$(cat "$base.args")
         case $mode in
         interp | interp-stress)
             if [ -f "$base.compiled-only" ]; then skipped "$f [$mode]: compiled-only: $(cat "$base.compiled-only")"; continue; fi ;;
         esac
+        # shellcheck disable=SC2086
         case $mode in
-        compiled) $SHIKRA build "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
+        compiled) $SHIKRA build $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" $args < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
         stress) every=1
             [ -f "$base.stress-interval" ] && every=$(cat "$base.stress-interval")
-            $SHIKRA build -O$opt --gc-stress "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 &&
-            SHIKRA_GC_STRESS=$every "$TMP/prog" < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
-        interp) $SHIKRA interp "$f" < "$in" > "$TMP/c.out" 2> "$TMP/c.err" ;;
+            $SHIKRA build -O$opt --gc-stress $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 &&
+            SHIKRA_GC_STRESS=$every "$TMP/prog" $args < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
+        interp) $SHIKRA interp $flags "$f" $args < "$in" > "$TMP/c.out" 2> "$TMP/c.err" ;;
         interp-stress) every=1
             [ -f "$base.interp-stress-interval" ] && every=$(cat "$base.interp-stress-interval")
-            SHIKRA_GC_STRESS=$every $SHIKRA interp "$f" < "$in" > "$TMP/c.out" 2> "$TMP/c.err" ;;
+            SHIKRA_GC_STRESS=$every $SHIKRA interp $flags "$f" $args < "$in" > "$TMP/c.out" 2> "$TMP/c.err" ;;
         esac
         st=$?
         if [ "$st" = "$want_exit" ] && cmp -s "$TMP/c.out" "$base.out" &&
             { [ ! -f "$base.err" ] || grep -qF -- "$(cat "$base.err")" "$TMP/c.err"; }; then ok
         else bad "$f [$mode${opt:+ -O$opt}] (exit $st)"; head -5 "$TMP/c.err"; diff "$base.out" "$TMP/c.out" | head -10; fi
         if [ "$mode" = compiled ]; then
-            if $SHIKRA emit-c "$f" > "$TMP/c.c" 2> /dev/null &&
+            # shellcheck disable=SC2086
+            if $SHIKRA emit-c $flags "$f" > "$TMP/c.c" 2> /dev/null &&
                 $CC -std=c99 -Wall -Wextra -Werror -fsyntax-only "$TMP/c.c" 2> "$TMP/cc.err"; then ok
             else bad "$f (generated C is not warning-free)"; head -5 "$TMP/cc.err"; fi
         fi
@@ -165,9 +175,12 @@ run_repl() {
     done
 }
 
-# The R7RS suite (tests/r7rs): FILE:ENGINE pairs. M5 adds the other library files (see
-# tests/r7rs/README.md for which file gates what). eval.scm is REPL-only (spec §3.1).
-r7rs_runs="base:compiled base:interp eval:interp"
+# The R7RS suite (tests/r7rs): FILE:ENGINE[:FLAG] (see tests/r7rs/README.md for which file
+# gates what). eval.scm is REPL-only (spec §3.1); char-unicode.scm needs --unicode=full.
+r7rs_files="base char inexact lazy case-lambda file read write process-context time"
+r7rs_runs=
+for r7f in $r7rs_files; do r7rs_runs="$r7rs_runs $r7f:compiled $r7f:interp"; done
+r7rs_runs="$r7rs_runs char-unicode:compiled:--unicode=full char-unicode:interp:--unicode=full eval:interp"
 # r7rs_summary OUT: the final summary line, then each failing test's report (the
 # "FAIL: ..." / "ERROR: ..." line and its "expected" / "but got" lines), indentation stripped.
 r7rs_summary() {
@@ -178,24 +191,28 @@ run_r7rs() {
     for run in $r7rs_runs; do
         name=${run%%:*}
         engine=${run#*:}
+        flag=
+        case $engine in *:*) flag=${engine#*:}; engine=${engine%%:*} ;; esac
         f=tests/r7rs/$name.scm
         exp=tests/r7rs/expected/$name.$engine
+        # shellcheck disable=SC2086
         case $engine in
-        compiled) $SHIKRA build "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
+        compiled) $SHIKRA build $flag "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
             "$TMP/r7rs" < /dev/null > "$TMP/r7.out" 2>> "$TMP/r7.err" ;;
-        interp) $SHIKRA interp "$f" < /dev/null > "$TMP/r7.out" 2> "$TMP/r7.err" ;;
+        interp) $SHIKRA interp $flag "$f" < /dev/null > "$TMP/r7.out" 2> "$TMP/r7.err" ;;
         stress) exp=tests/r7rs/expected/$name.compiled
-            $SHIKRA build -O$opt --gc-stress "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
+            $SHIKRA build -O$opt --gc-stress $flag "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
             SHIKRA_GC_STRESS=1 "$TMP/r7rs" < /dev/null > "$TMP/r7.out" 2>> "$TMP/r7.err" ;;
         interp-stress) exp=tests/r7rs/expected/$name.interp
-            SHIKRA_GC_STRESS=1 $SHIKRA interp "$f" < /dev/null > "$TMP/r7.out" 2> "$TMP/r7.err" ;;
+            SHIKRA_GC_STRESS=1 $SHIKRA interp $flag "$f" < /dev/null > "$TMP/r7.out" 2> "$TMP/r7.err" ;;
         esac
         r7rs_summary "$TMP/r7.out" > "$TMP/r7.sum"
         if [ ! -f "$exp" ]; then bad "$f [$engine] (no expected results file $exp)"
         elif cmp -s "$TMP/r7.sum" "$exp"; then ok
         else bad "$f [$engine${opt:+ -O$opt}]"; head -5 "$TMP/r7.err"; diff "$exp" "$TMP/r7.sum" | head -20; fi
         if [ "$engine" = compiled ]; then
-            if $SHIKRA emit-c "$f" > "$TMP/r7.c" 2> /dev/null &&
+            # shellcheck disable=SC2086
+            if $SHIKRA emit-c $flag "$f" > "$TMP/r7.c" 2> /dev/null &&
                 $CC -std=c99 -Wall -Wextra -Werror -fsyntax-only "$TMP/r7.c" 2> "$TMP/cc.err"; then ok
             else bad "$f (generated C is not warning-free)"; head -5 "$TMP/cc.err"; fi
         fi
@@ -207,7 +224,8 @@ run_stress() {
     for opt in 2 0; do
         (   [ $opt = 0 ] && ulimit -s 65520 2> /dev/null
             run_cases stress
-            r7rs_runs=base:stress run_r7rs
+            r7rs_runs=$(echo "$r7rs_runs" | tr ' ' '\n' | sed -n 's/:compiled/:stress/p' | tr '\n' ' ')
+            run_r7rs
             echo "$pass $fail" > "$TMP/stress.count" )
         set -- $(cat "$TMP/stress.count")
         pass=$1 fail=$2
@@ -215,7 +233,7 @@ run_stress() {
     opt=
     run_cases interp-stress
     saved_runs=$r7rs_runs
-    r7rs_runs=base:interp-stress
+    r7rs_runs=$(echo "$r7rs_runs" | tr ' ' '\n' | sed -n 's/:interp/:interp-stress/p' | tr '\n' ' ')
     run_r7rs
     r7rs_runs=$saved_runs
 }
