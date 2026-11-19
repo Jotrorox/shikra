@@ -2107,3 +2107,78 @@ ranges. The test's limit is 2 ulp against the host libm (4 for tan, because of m
 Identities that hold exactly: `(exp 1)` = 2.718281828459045, `(* 4 (atan 1))` = pi, `(expt 2. 3)`
 = 8., `(expt 4 .5)` = 2., `(sqrt 16)` = 4, log 8 / log 2 = 3, log 4096 / log 2 = 12, `(log (exp 1))`
 = 1, `(acos -1)` = pi, `(sin 1e22)` = -0.8522008497671888.
+
+**Sizes** (bytes; Debian trixie, GCC 14.2 / clang 19.1 with GNU ld 2.44, `strip` for the
+stripped column; tests/cases/hello.scm):
+
+| hello world | x86-64 -O2 | x86-64 -Os | arm64 -O2 | arm64 -Os |
+|---|---|---|---|---|
+| GCC, unstripped / stripped | 3,208 / 2,088 | 2,984 / 1,864 | 4,544 / 2,424 | 4,080 / 2,032 |
+| clang, unstripped / stripped | 6,408 / 4,936 | 6,440 / 4,936 | 7,608 / 4,936 | 7,664 / 4,936 |
+| `zig cc` from macOS (lld) | 4,760 / 3,248 | 2,496 / 2,368 | 5,832 / 3,272 | 2,608 / 2,480 |
+
+Text is 765-2,198 bytes (the string write, `rt_init`, the port flush, `_start`); the rest is ELF
+headers, the symbol table and, for clang + GNU ld, page padding of the separate read-only segment.
+The 12.8 KB of `.bss` (three 4 KB port buffers) costs no file space. Pinned by run.sh's shape
+mode on Linux: hello world under 30,000 bytes at -O2 and -Os. A 1,000-2,000-line program
+(r7rs-benchmarks `scheme.scm`, 1,137 lines with the harness prelude; `dynamic.scm`, 2,410 lines),
+x86-64, unstripped / stripped:
+
+| program | GCC -O2 | GCC -Os | clang -O2 | clang -Os |
+|---|---|---|---|---|
+| scheme (x86-64) | 215,488 / 173,872 | 133,504 / 90,992 | 249,128 / 208,720 | 156,704 / 115,856 |
+| dynamic (x86-64) | 203,896 / 178,800 | 105,392 / 77,136 | 322,200 / 297,776 | 159,392 / 131,936 |
+| scheme (arm64) | 253,784 / 182,648 | 164,768 / 95,968 | 262,128 / 197,000 | 189,520 / 123,224 |
+| dynamic (arm64) | 203,800 / 160,608 | 125,832 / 78,688 | 306,272 / 264,952 | 173,928 / 127,840 |
+
+-Os is inside the spec's 60-150 KB; -O2 is above it (the optimizer's -O2 inlining budget; on macOS
+the same programs are 293,960 and 350,280 bytes at -O2). tests/r7rs/base.scm (1,605 lines, but
+every `test` form expands in place) is 578 KB at -O2 and 307 KB at -Os on x86-64.
+
+**Linux test runs** (`tests/linux.sh [arm64|amd64] [MODE...]`; README "Tests"). Image: Debian
+trixie-slim + gcc clang make libc6-dev binutils (GCC 14.2, clang 19.1.7, glibc 2.41, GNU ld),
+built once per platform as `localhost/shikra-linux-test:ARCH`. The working tree (`git ls-files
+-co --exclude-standard`) is piped in as a tar into the container's own file system, so nothing is
+written back. Inside: the one-line build with `gcc` and with `clang` under `-Werror` (both
+warning-free), then `tests/run.sh MODE` per program compiler (`SHIKRA_CC=gcc|clang`, `CC` the
+same). Linux-specific behaviour of run.sh: the warning check of the generated C compiles the
+nolibc variant (`-DSHIKRA_NOLIBC=1 -ffreestanding`), the shape mode adds the two hello-world
+size pins, `nm` symbols drop GCC's clone suffixes (`rt_put_fixnum.isra.0`), `GCC` falls back to
+`gcc` when `gcc-16` is absent, `STRESS_SCALE=N` multiplies stress intervals (default 1). The
+unit test's collector check now runs below main's frame (GCC on arm64 put main's locals above
+`&argc`, the stack base it passed). Tail calls: GCC 14 has no `musttail`
+(`__has_attribute(musttail)` is 0), so every GCC build on Linux takes the trampoline path; clang
+19 takes `musttail`.
+
+*arm64* (native, podman machine `applehv`, kernel 7.2.7), every mode in full, both compilers:
+reader 35, unit 3, amalg 1, expand 1, levels 439, shape 34, interp 65 (+1 skip), tramp 64,
+stress 192 (+1 skip): **834 passed, 0 failed, 2 skipped** with GCC and the same with clang (macOS:
+832; the difference is the two Linux size pins).
+
+*amd64* (emulated): the podman machine has no Rosetta but qemu-user-static binfmt handlers
+(`qemu-x86_64-static`, flags POCF), so `--platform linux/amd64` containers run under qemu-user.
+qemu-user gives the guest a fixed 8 MB stack and ignores `ulimit -s`; linux.sh therefore sets
+`QEMU_STACK_SIZE=64 MB` for amd64 on a non-x86 host (without it callcc.scm and optimizer.scm
+crash at -O0 for the libc and nolibc builds alike; with it, every run has 64 MB). Every mode but
+stress in full, both compilers: reader 35, unit 3, amalg 1, expand 1, levels 439, shape 34,
+interp 65 (+1 skip), tramp 64: 642 passed, 0 failed. Stress with `STRESS_SCALE=20` (a collection
+every 20 allocations, every per-case interval times 20): 192 passed, 0 failed, 1 skipped with
+each compiler (about 40 minutes per compiler; collecting at every allocation under qemu was
+started as well, see the M6 report).
+
+Cross-compilation from macOS, executed in the containers: tests/cases hello fib closures callcc
+exceptions float_text gc_cons gc_mixed dynamic_wind values stdlib error_names char_ascii
+numbers_edges built with `--target x86_64-linux|aarch64-linux --cc "zig cc"` (zig 0.17.1): 14/14
+outputs and exit statuses right on both; six of them built with Apple clang + Homebrew ld.lld
+(`--target x86_64-linux-gnu`, `aarch64-unknown-linux-musl`): 6/6 on both; a program printing
+`(features)`, a `cond-expand` on `linux`/`x86-64`/`arm64`, `command-line`, an environment variable
+and math identities gives the expected per-target output.
+
+**Known gaps.** No libc means no `define-c` to libc functions in static Linux programs (the FFI is
+not built yet; a libc variant would have to be selectable then). `clock_gettime` is a real system
+call (no vDSO), so each `current-jiffy` or `current-second` enters the kernel. Errors from system calls
+are not distinguished (as before: "cannot open file"). Only x86-64 and arm64 Linux are targets;
+another Linux architecture would need its system-call numbers and `_start`, and other Unixes use
+the libc branch (math from rt_math.c). `rt_math.c` results are within 1 ulp of glibc and are
+near-correctly rounded, but not guaranteed correctly rounded: a program printing `(sin x)` may
+differ in the last digit between macOS (libm) and Linux.
