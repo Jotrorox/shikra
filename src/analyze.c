@@ -382,6 +382,7 @@ static int pred_mask(int op, int *exact) {
     case PI_rt_bytevector_p: return T_BYTEVECTOR;
     case PI_rt_number_p: return TN;
     case PI_rt_exact_integer_p: return TX;
+    case PI_rt_fixnum_p: return T_FIX;
     case PI_rt_eof_object_p: return T_EOF;
     case PI_rt_port_p: return T_PORTS;
     case PI_rt_flonum_p: return T_FLO;
@@ -430,7 +431,7 @@ static int big_arith(int op, int a, int b, ir_node *p, env *e) {
     case PI_rt_remainder: if (fa || fb) return r | T_FIX; break; /* |r| <= |a| and |r| < |b| */
     case PI_rt_modulo: if (fb) return r | T_FIX; break;
     case PI_rt_quotient: case PI_rt_floor_quotient: /* only fixnum-least / -1 overflows */
-        if (fa && fb && d->kind == IR_CONST && d->u.value != RT_FIX(-1)) return r | T_FIX;
+        if (d && fa && fb && d->kind == IR_CONST && d->u.value != RT_FIX(-1)) return r | T_FIX;
         break;
     default: break;
     }

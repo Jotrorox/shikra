@@ -41,11 +41,12 @@ static rt_bignum *big_new(intptr_t n) { /* n zero limbs (n >= 1) */
     rt_memset(p->d, 0, 4 * (size_t)n);
     return p;
 }
-/* The finished value of p's first n limbs: a fixnum if it fits, else p shrunk to its significant
- * limbs (the freed tail becomes a raw filler object, so the collector's walk over headers works). */
+/* The finished value of p's first n limbs (p fresh from big_new): a fixnum if it fits, else p shrunk
+ * to its significant limbs (the freed tail becomes a raw filler object, so the collector's walk over
+ * headers works). */
 static obj big_fin(rt_bignum *p, intptr_t n, int neg) {
     intptr_t m = n;
-    size_t o = big_bytes(n), s;
+    size_t o = big_bytes((intptr_t)(p->hdr >> 18)), s; /* as allocated */
     while (m && !p->d[m - 1]) m--;
     if (m <= 2) {
         uint64_t u = m == 2 ? (uint64_t)p->d[1] << 32 | p->d[0] : m ? p->d[0] : 0;

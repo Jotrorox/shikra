@@ -907,6 +907,7 @@ RT_INLINE obj rt_exact_p(obj x) { RT_CHECK(rt_is_num(x), "exact?", "number", x);
 RT_INLINE obj rt_inexact_p(obj x) { RT_CHECK(rt_is_num(x), "inexact?", "number", x); return RT_BOOL(rt_is_flo(x)); }
 #ifdef RT_HAVE_BIG
 RT_INLINE obj rt_exact_integer_p(obj x) { return RT_BOOL(rt_is_exact(x)); }
+RT_INLINE obj rt_fixnum_p(obj x) { return RT_BOOL(rt_is_fix(x)); }
 #else
 RT_INLINE obj rt_exact_integer_p(obj x) { return RT_BOOL(rt_is_fix(x)); }
 #endif

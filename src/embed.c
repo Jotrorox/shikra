@@ -1292,7 +1292,9 @@ static const char *const e30[] = {
 "    (define fx-width 63)\n"
 "    (define fx-greatest 4611686018427387903)\n"
 "    (define fx-least -4611686018427387904)\n"
-"    (define (fixnum? x) (%exact-integer? x))\n"
+"    (cond-expand ; --bignum: a bignum is an exact integer but no fixnum\n"
+"      (bignum (define (fixnum? x) (%fixnum? x)))\n"
+"      (else (define (fixnum? x) (%exact-integer? x))))\n"
 "    (define-syntax define-compare\n"
 "      (syntax-rules ()\n"
 "        ((_ name prim)\n"
@@ -1335,10 +1337,10 @@ static const char *const e30[] = {
 "    (define (fxzero? i) (%fxzero? i))\n"
 "    (define (fxpositive? i) (%fxpositive? i))\n"
 "    (define (fxnegative? i) (%fxnegative? i))\n"
-"    (define (fxodd? i) (%fxodd? i))\n"
+"    (define (fxodd? i) (%fxodd? i))\n",
 "    (define (fxeven? i) (%fxeven? i))\n"
 "    (define (fx+ i j) (%fx+ i j))\n"
-"    (define (fx- i j) (%fx- i j))\n",
+"    (define (fx- i j) (%fx- i j))\n"
 "    (define (fx* i j) (%fx* i j))\n"
 "    (define (fxneg i) (%fxneg i))\n"
 "    (define (fxabs i) (%fxabs i))\n"
@@ -2090,6 +2092,8 @@ static const char *const e34[] = {
 "PRIM(\"%exact?\", \"exact?\", rt_exact_p, 1, \"n\", 'b', PF_FAIL)\n"
 "PRIM(\"%inexact?\", \"inexact?\", rt_inexact_p, 1, \"n\", 'b', PF_FAIL)\n"
 "PRIM(\"%exact-integer?\", \"exact-integer?\", rt_exact_integer_p, 1, \"a\", 'b', PF_PURE)\n"
+"/* --bignum only: (shikra fixnum) fixnum? (without bignums it is exact-integer?) */\n"
+"PRIM(\"%fixnum?\", \"fixnum?\", rt_fixnum_p, 1, \"a\", 'b', PF_PURE)\n"
 "PRIM(\"%nan?\", \"nan?\", rt_nan_p, 1, \"n\", 'b', PF_FAIL)\n"
 "PRIM(\"%infinite?\", \"infinite?\", rt_infinite_p, 1, \"n\", 'b', PF_FAIL)\n"
 "PRIM(\"%finite?\", \"finite?\", rt_finite_p, 1, \"n\", 'b', PF_FAIL)\n"
@@ -2108,9 +2112,9 @@ static const char *const e34[] = {
 "PRIM(\"%quotient\", \"quotient\", rt_quotient, 2, \"nn\", 'n', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%remainder\", \"remainder\", rt_remainder, 2, \"nn\", 'n', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%modulo\", \"modulo\", rt_modulo, 2, \"nn\", 'n', PF_ALLOC | PF_FAIL)\n"
-"PRIM(\"%floor-quotient\", \"floor-quotient\", rt_floor_quotient, 2, \"nn\", 'n', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%floor-quotient\", \"floor-quotient\", rt_floor_quotient, 2, \"nn\", 'n', PF_ALLOC | PF_FAIL)\n",
 "PRIM(\"%exact\", \"exact\", rt_exact, 1, \"n\", 'f', PF_FAIL)\n"
-"PRIM(\"%inexact\", \"inexact\", rt_inexact, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n",
+"PRIM(\"%inexact\", \"inexact\", rt_inexact, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%floor\", \"floor\", rt_floor, 1, \"n\", 'n', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%ceiling\", \"ceiling\", rt_ceiling, 1, \"n\", 'n', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%round\", \"round\", rt_round, 1, \"n\", 'n', PF_ALLOC | PF_FAIL)\n"
@@ -2147,8 +2151,8 @@ static const char *const e34[] = {
 "PRIM(\"%open-output-bytevector\", \"open-output-bytevector\", rt_open_output_bytevector, 0, \"\", 'a', PF_ALLOC)\n"
 "PRIM(\"%get-output-bytevector\", \"get-output-bytevector\", rt_get_output_bytevector, 1, \"a\", 'u', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%open-input-file\", \"open-input-file\", rt_open_input_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
-"PRIM(\"%open-output-file\", \"open-output-file\", rt_open_output_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
-"PRIM(\"%open-binary-input-file\", \"open-binary-input-file\", rt_open_binary_input_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n",
+"PRIM(\"%open-output-file\", \"open-output-file\", rt_open_output_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n",
+"PRIM(\"%open-binary-input-file\", \"open-binary-input-file\", rt_open_binary_input_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%open-binary-output-file\", \"open-binary-output-file\", rt_open_binary_output_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%file-exists?\", \"file-exists?\", rt_file_exists_p, 1, \"s\", 'b', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%delete-file\", \"delete-file\", rt_delete_file, 1, \"s\", 'a', PF_FAIL | PF_EFFECT)\n"
@@ -2184,8 +2188,8 @@ static const char *const e34[] = {
 "PRIM(\"%current-second\", \"current-second\", rt_current_second, 0, \"\", 'd', PF_ALLOC | PF_EFFECT)\n"
 "PRIM(\"%current-jiffy\", \"current-jiffy\", rt_current_jiffy, 0, \"\", 'f', PF_EFFECT)\n"
 "\n"
-"/* ---- (shikra ...) extension libraries (spec \302\24710; rt_ext.c, DESIGN.md \"Extensions as built\").\n"
-" * Type letter w: f64vector. The compiler specialises most of them (emit.c ext_special); the\n",
+"/* ---- (shikra ...) extension libraries (spec \302\24710; rt_ext.c, DESIGN.md \"Extensions as built\").\n",
+" * Type letter w: f64vector. The compiler specialises most of them (emit.c ext_special); the\n"
 " * functions below are the checked generic forms (the interpreter, unproven arguments). */\n"
 "/* (shikra fixnum), SRFI 143: fixnum-only, overflow raises (wraps only with --unsafe) */\n"
 "PRIM(\"%fx+\", \"fx+\", rt_fx_add, 2, \"ff\", 'f', PF_FAIL)\n"
@@ -2227,8 +2231,8 @@ static const char *const e34[] = {
 "/* (fx+/carry i j k sel): sel 0 the balanced remainder, 1 the carry (SRFI 143 values) */\n"
 "PRIM(\"%fx+/carry\", \"fx+/carry\", rt_fx_add_carry, 4, \"ffff\", 'f', PF_FAIL)\n"
 "PRIM(\"%fx-/carry\", \"fx-/carry\", rt_fx_sub_carry, 4, \"ffff\", 'f', PF_FAIL)\n"
-"PRIM(\"%fx*/carry\", \"fx*/carry\", rt_fx_mul_carry, 4, \"ffff\", 'f', PF_FAIL)\n"
-"/* (shikra flonum), SRFI 144: flonum-only arguments, results unboxed where proven */\n",
+"PRIM(\"%fx*/carry\", \"fx*/carry\", rt_fx_mul_carry, 4, \"ffff\", 'f', PF_FAIL)\n",
+"/* (shikra flonum), SRFI 144: flonum-only arguments, results unboxed where proven */\n"
 "PRIM(\"%flonum?\", \"flonum?\", rt_flonum_p, 1, \"a\", 'b', PF_PURE)\n"
 "PRIM(\"%fl+\", \"fl+\", rt_fl_add, 2, \"dd\", 'd', PF_FAIL)\n"
 "PRIM(\"%fl-\", \"fl-\", rt_fl_sub, 2, \"dd\", 'd', PF_FAIL)\n"
@@ -2273,8 +2277,8 @@ static const char *const e34[] = {
 "PRIM(\"%f64vector?\", \"f64vector?\", rt_f64vector_p, 1, \"a\", 'b', PF_PURE)\n"
 "PRIM(\"%f64vector-length\", \"f64vector-length\", rt_f64vector_length, 1, \"w\", 'f', PF_FAIL)\n"
 "PRIM(\"%f64vector-ref\", \"f64vector-ref\", rt_f64vector_ref, 2, \"wf\", 'd', PF_FAIL)\n"
-"PRIM(\"%f64vector-set!\", \"f64vector-set!\", rt_f64vector_set, 3, \"wfn\", 'a', PF_FAIL | PF_EFFECT)\n"
-"PRIM(\"%f64vector->list\", \"f64vector->list\", rt_f64vector_to_list, 1, \"w\", 'l', PF_ALLOC | PF_FAIL)\n",
+"PRIM(\"%f64vector-set!\", \"f64vector-set!\", rt_f64vector_set, 3, \"wfn\", 'a', PF_FAIL | PF_EFFECT)\n",
+"PRIM(\"%f64vector->list\", \"f64vector->list\", rt_f64vector_to_list, 1, \"w\", 'l', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%list->f64vector\", \"list->f64vector\", rt_list_to_f64vector, 1, \"l\", 'w', PF_ALLOC | PF_FAIL)\n"
 "/* (shikra assume), SRFI 145: a failed assumption (the irritants are the messages); the analysis\n"
 " * treats it as never returning, and with --unsafe it is not emitted at all */\n"
@@ -3191,6 +3195,7 @@ static const char *const e35[] = {
 "RT_INLINE obj rt_inexact_p(obj x) { RT_CHECK(rt_is_num(x), \"inexact?\", \"number\", x); return RT_BOOL(rt_is_flo(x)); }\n"
 "#ifdef RT_HAVE_BIG\n"
 "RT_INLINE obj rt_exact_integer_p(obj x) { return RT_BOOL(rt_is_exact(x)); }\n"
+"RT_INLINE obj rt_fixnum_p(obj x) { return RT_BOOL(rt_is_fix(x)); }\n"
 "#else\n"
 "RT_INLINE obj rt_exact_integer_p(obj x) { return RT_BOOL(rt_is_fix(x)); }\n"
 "#endif\n"
@@ -3213,8 +3218,8 @@ static const char *const e35[] = {
 "RT_FN obj rt_fx_positive_p(obj); RT_FN obj rt_fx_negative_p(obj); RT_FN obj rt_fx_odd_p(obj); RT_FN obj rt_fx_even_p(obj);\n"
 "RT_FN obj rt_fx_not(obj); RT_FN obj rt_fx_and(obj, obj); RT_FN obj rt_fx_ior(obj, obj); RT_FN obj rt_fx_xor(obj, obj);\n"
 "RT_FN obj rt_fx_ash(obj, obj); RT_FN obj rt_fx_ashl(obj, obj); RT_FN obj rt_fx_ashr(obj, obj); RT_FN obj rt_fx_if(obj, obj, obj);\n"
-"RT_FN obj rt_fx_bit_set_p(obj, obj); RT_FN obj rt_fx_bit_count(obj); RT_FN obj rt_fx_length(obj); RT_FN obj rt_fx_first_set_bit(obj);\n"
-"RT_FN obj rt_fx_copy_bit(obj, obj, obj); RT_FN obj rt_fx_bit_field(obj, obj, obj); RT_FN obj rt_fx_bit_field_rotate(obj, obj, obj, obj);\n",
+"RT_FN obj rt_fx_bit_set_p(obj, obj); RT_FN obj rt_fx_bit_count(obj); RT_FN obj rt_fx_length(obj); RT_FN obj rt_fx_first_set_bit(obj);\n",
+"RT_FN obj rt_fx_copy_bit(obj, obj, obj); RT_FN obj rt_fx_bit_field(obj, obj, obj); RT_FN obj rt_fx_bit_field_rotate(obj, obj, obj, obj);\n"
 "RT_FN obj rt_fx_bit_field_reverse(obj, obj, obj); RT_FN obj rt_fx_add_carry(obj, obj, obj, obj);\n"
 "RT_FN obj rt_fx_sub_carry(obj, obj, obj, obj); RT_FN obj rt_fx_mul_carry(obj, obj, obj, obj);\n"
 "RT_FN obj rt_flonum_p(obj); RT_FN obj rt_fl_add(obj, obj); RT_FN obj rt_fl_sub(obj, obj); RT_FN obj rt_fl_mul(obj, obj);\n"
@@ -3283,11 +3288,12 @@ static const char *const e36[] = {
 "    rt_memset(p->d, 0, 4 * (size_t)n);\n"
 "    return p;\n"
 "}\n"
-"/* The finished value of p's first n limbs: a fixnum if it fits, else p shrunk to its significant\n"
-" * limbs (the freed tail becomes a raw filler object, so the collector's walk over headers works). */\n"
+"/* The finished value of p's first n limbs (p fresh from big_new): a fixnum if it fits, else p shrunk\n"
+" * to its significant limbs (the freed tail becomes a raw filler object, so the collector's walk over\n"
+" * headers works). */\n"
 "static obj big_fin(rt_bignum *p, intptr_t n, int neg) {\n"
 "    intptr_t m = n;\n"
-"    size_t o = big_bytes(n), s;\n"
+"    size_t o = big_bytes((intptr_t)(p->hdr >> 18)), s; /* as allocated */\n"
 "    while (m && !p->d[m - 1]) m--;\n"
 "    if (m <= 2) {\n"
 "        uint64_t u = m == 2 ? (uint64_t)p->d[1] << 32 | p->d[0] : m ? p->d[0] : 0;\n"
@@ -3300,9 +3306,9 @@ static const char *const e36[] = {
 "}\n"
 "static int big_clz(big_l x) {\n"
 "    int n = 0;\n"
-"    if (!(x >> 16)) { n += 16; x <<= 16; }\n"
+"    if (!(x >> 16)) { n += 16; x <<= 16; }\n",
 "    if (!(x >> 24)) { n += 8; x <<= 8; }\n"
-"    if (!(x >> 28)) { n += 4; x <<= 4; }\n",
+"    if (!(x >> 28)) { n += 4; x <<= 4; }\n"
 "    if (!(x >> 30)) { n += 2; x <<= 2; }\n"
 "    return n + !(x >> 31);\n"
 "}\n"
@@ -3367,12 +3373,12 @@ static const char *const e36[] = {
 "        if (t >> 63) { /* qh was one too large: add v back */\n"
 "            qh--;\n"
 "            for (c = 0, i = 0; i < n; i++) { c += (uint64_t)u[i + j] + v[i]; u[i + j] = (big_l)c; c >>= 32; }\n"
-"            u[j + n] += (big_l)c;\n"
+"            u[j + n] += (big_l)c;\n",
 "        }\n"
 "        q[j] = (big_l)qh;\n"
 "    }\n"
 "}\n"
-"/* Truncating division of views: *q and *r as finished values (either may be NULL). */\n",
+"/* Truncating division of views: *q and *r as finished values (either may be NULL). */\n"
 "static void big_divmod(const big_v *a, const big_v *b, obj *q, obj *r) {\n"
 "    intptr_t n = b->n, m = a->n;\n"
 "    rt_bignum *qq, *u, *v;\n"
@@ -3456,9 +3462,9 @@ static const char *const e36[] = {
 "/* ---- doubles ---- */\n"
 "static double big_dbits(uint64_t u) { union { uint64_t u; double d; } x; x.u = u; return x.d; }\n"
 "static uint64_t big_ubits(double d) { union { uint64_t u; double d; } x; x.d = d; return x.u; }\n"
-"/* m (top bit set) * 2^(e-63), plus a sticky bit for anything below m, rounded to nearest even;\n"
+"/* m (top bit set) * 2^(e-63), plus a sticky bit for anything below m, rounded to nearest even;\n",
 " * subnormal results and overflow to infinity included. */\n"
-"static double big_round(uint64_t m, int sticky, intptr_t e, int neg) {\n",
+"static double big_round(uint64_t m, int sticky, intptr_t e, int neg) {\n"
 "    intptr_t keep = e < -1022 ? e + 1075 : 53; /* significant bits the result can hold */\n"
 "    uint64_t q, rest, bits;\n"
 "    if (e > 1023) bits = 0x7FF0000000000000u;\n"
@@ -3532,11 +3538,11 @@ static const char *const e36[] = {
 "    big_divmod(&x, b, &q, &r);\n"
 "    big_view(q, &x);\n"
 "    nq = x.n;\n"
-"    return big_dbl(x.d, nq, a->neg != b->neg, s, r != RT_FIX(0));\n"
+"    return big_dbl(x.d, nq, a->neg != b->neg, s, r != RT_FIX(0));\n",
 "}\n"
 "RT_FN obj rt_big_div(obj a, obj b) {\n"
 "    big_v x, y;\n"
-"    obj q, r;\n",
+"    obj q, r;\n"
 "    big_view(a, &x);\n"
 "    big_view(b, &y);\n"
 "    if (!y.n) rt_error(\"/\", \"division by zero\", rt_cons(a, rt_cons(b, RT_NIL)));\n"
@@ -3610,8 +3616,8 @@ static const char *const e36[] = {
 "        rt_bignum *t = big_new(n);\n"
 "        rt_memcpy(t->d, v.d, 4 * (size_t)n);\n"
 "        while (n) {\n"
-"            big_l r = mag_div1(t->d, t->d, n, 1000000000u);\n"
-"            while (n && !t->d[n - 1]) n--;\n",
+"            big_l r = mag_div1(t->d, t->d, n, 1000000000u);\n",
+"            while (n && !t->d[n - 1]) n--;\n"
 "            for (i = 0; i < 9 && (n || r); i++) { *--p = (char)('0' + r % 10); r /= 10; }\n"
 "        }\n"
 "    } else {\n"

@@ -163,6 +163,8 @@ PRIM("%integer?", "integer?", rt_integer_p, 1, "a", 'b', PF_PURE)
 PRIM("%exact?", "exact?", rt_exact_p, 1, "n", 'b', PF_FAIL)
 PRIM("%inexact?", "inexact?", rt_inexact_p, 1, "n", 'b', PF_FAIL)
 PRIM("%exact-integer?", "exact-integer?", rt_exact_integer_p, 1, "a", 'b', PF_PURE)
+/* --bignum only: (shikra fixnum) fixnum? (without bignums it is exact-integer?) */
+PRIM("%fixnum?", "fixnum?", rt_fixnum_p, 1, "a", 'b', PF_PURE)
 PRIM("%nan?", "nan?", rt_nan_p, 1, "n", 'b', PF_FAIL)
 PRIM("%infinite?", "infinite?", rt_infinite_p, 1, "n", 'b', PF_FAIL)
 PRIM("%finite?", "finite?", rt_finite_p, 1, "n", 'b', PF_FAIL)

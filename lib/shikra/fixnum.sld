@@ -14,7 +14,9 @@
     (define fx-width 63)
     (define fx-greatest 4611686018427387903)
     (define fx-least -4611686018427387904)
-    (define (fixnum? x) (%exact-integer? x))
+    (cond-expand ; --bignum: a bignum is an exact integer but no fixnum
+      (bignum (define (fixnum? x) (%fixnum? x)))
+      (else (define (fixnum? x) (%exact-integer? x))))
     (define-syntax define-compare
       (syntax-rules ()
         ((_ name prim)
