@@ -2184,7 +2184,19 @@ file that `cc out.c` and `gcc-16 out.c` build with no flags (tested). `--target`
 port's and was not touched.
 
 **Tests** (`make test` adds the modes size, cache, debug, driver to `all`): see the headers of each
-mode in tests/run.sh.
+mode in tests/run.sh. `make test`: 1,020 checks before the last fixes of this milestone (2 skips as
+before); the final count is in the commit that records it.
+
+**Benchmarks** (M4's done-when; bench/RESULTS.md). Series `m4-3` / `m4-3-unsafe` (CSV
+`m4-3-20261119-1616`, `m4-3-unsafe-20261119-1619`; an earlier pair at 15:39/15:42 is kept too): 53/53
+`ok` in both modes, the 4 others unsupported by design as before. The machine carried a load average
+of 6-11 from other work all afternoon, so Chez, Chez unsafe, Gambit and Gambit unsafe were re-recorded
+right before (15:46-16:05): Chez came out 1.28x slower than its morning run, and so did m4-3 against
+m4-2's run, i.e. the ratios hold: Shikra/Chez **0.79** (m4-2: 0.78), Shikra/Gambit **0.75**,
+unsafe/Chez-unsafe **0.70**, unsafe/Gambit-unsafe 0.77. Slowest against Chez: ack 4.3, ctak 3.1, fibc
+3.0, divrec 2.4, cpstak 2.0, sum1 1.8 (the same set as in M4-2: unknown arithmetic through `hide`,
+tier-2 captures). The run-to-run noise was large (the 15:39 series was 1.38x slower than the 16:16 one
+for the same binary); the numbers must be re-recorded on a quiet machine.
 
 **Known gaps**
 - 1,000-2,000-line programs at -O2: scheme (241 KB) and dynamic (311 KB) exceed 200 KB (their -Os
