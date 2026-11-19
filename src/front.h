@@ -192,6 +192,8 @@ void cache_note_exists(const char *id, int r); /* its cond-expand asked (library
 void cache_begin_expand(library *lib);    /* its declarations are processed; expansion starts */
 void cache_store(library *lib);           /* it was expanded: write its entry */
 library *front_loading(void);             /* the innermost library being loaded, or NULL */
+unsigned long long cache_program_key(void); /* shikra run: key of the expanded program, 0: none */
+extern sbuf *front_warn_capture;          /* when set, cwarning also appends its line here */
 /* expand.c internals the cache restores */
 int front_alias_info(obj sym, obj *orig, frame **env); /* 1 if sym is an alias */
 obj front_alias(obj orig, frame *env);

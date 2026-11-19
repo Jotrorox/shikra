@@ -417,6 +417,8 @@ run_cache() {
         cache_emit "$C" "$TMP/k.cached" "$L/p.scm"
         $SHIKRA emit-c -w --no-cache "$L/p.scm" > "$TMP/k.none" 2>&1
         if cmp -s "$TMP/k.cached" "$TMP/k.none"; then ok; else bad "cache: stale entry used after editing ($step)"; fi
+        $SHIKRA build -w --no-cache "$L/p.scm" -o "$TMP/k.prog"
+        if [ "$(SHIKRA_CACHE_DIR=$C $SHIKRA run -w "$L/p.scm")" = "$("$TMP/k.prog")" ]; then ok; else bad "run: stale executable after editing ($step)"; fi
     done
     if SHIKRA_CACHE_DIR=$C $SHIKRA build -w "$L/p.scm" -o "$TMP/k.prog" && [ "$("$TMP/k.prog")" = 84 ]; then ok
     else bad "cache: edited program gives $("$TMP/k.prog" 2>&1)"; fi
@@ -474,6 +476,46 @@ run_debug() {
     if "$TMP/dbg" 1 2>&1 >/dev/null | grep -qx 'Error: car: expected pair 5'; then ok; else bad "error message without -g"; fi
 }
 
+# run_driver (M4-3): the commands and flags of spec §11. `emit-c` output is one self-contained C
+# file that a plain `cc out.c` (and gcc, when GCC exists) builds; `check` reports exactly the
+# diagnostics `build` reports; `run` passes arguments and the exit status, reuses its executable
+# and replays its warnings; -I is repeatable; --cc takes a command with arguments; the default
+# output name; --help, --version, unknown flags.
+run_driver() {
+    for c in hello fib records stdlib; do
+        f=tests/cases/$c.scm
+        if $SHIKRA emit-c -w "$f" > "$TMP/drv.c" && (cd "$TMP" && $CC drv.c -o drv 2> drv.err) && "$TMP/drv" < /dev/null > "$TMP/drv.out" 2>&1 &&
+            cmp -s "$TMP/drv.out" "${f%.scm}.out"; then ok
+        else bad "emit-c $c: plain cc out.c"; head -3 "$TMP/drv.err"; fi
+        if command -v "$GCC" > /dev/null 2>&1; then
+            if (cd "$TMP" && "$GCC" drv.c -o drvg 2> drv.err) && "$TMP/drvg" < /dev/null > "$TMP/drv.out" 2>&1 && cmp -s "$TMP/drv.out" "${f%.scm}.out"; then ok
+            else bad "emit-c $c: plain $GCC out.c"; head -3 "$TMP/drv.err"; fi
+        fi
+    done
+    for f in tests/warnings/*.scm tests/errors/*.scm; do
+        $SHIKRA check "$f" > /dev/null 2> "$TMP/chk.err"; a=$?
+        $SHIKRA build "$f" -o "$TMP/chk" > /dev/null 2> "$TMP/bld.err"; b=$?
+        if [ $a = $b ] && cmp -s "$TMP/chk.err" "$TMP/bld.err"; then ok; else bad "check and build report differently: $f"; diff "$TMP/chk.err" "$TMP/bld.err" | head -4; fi
+    done
+    D=$TMP/drvrun
+    rm -rf "$D"; mkdir -p "$D/one/x" "$D/two/y"
+    printf '(define-library (x a) (export a) (import (scheme base)) (begin (define a 40)))\n' > "$D/one/x/a.sld"
+    printf '(define-library (y b) (export b) (import (scheme base)) (begin (define b 2)))\n' > "$D/two/y/b.sld"
+    printf '(import (scheme base) (scheme write) (scheme process-context) (x a) (y b))\n(define unused 1)\n(write (cons (+ a b) (cdr (command-line))))\n(newline)\n(exit 3)\n' > "$D/main.scm"
+    for i in 1 2; do
+        SHIKRA_CACHE_DIR=$(pwd)/$D/cache $SHIKRA run -I "$D/one" -I "$D/two" "$D/main.scm" p "q r" > "$D/out" 2> "$D/err"; st=$?
+        if [ $st = 3 ] && [ "$(cat "$D/out")" = '(42 "p" "q r")' ] && grep -q 'warning: unused definition unused' "$D/err"; then ok
+        else bad "run (pass $i): exit $st, $(cat "$D/out") $(cat "$D/err")"; fi
+    done
+    [ "$(ls "$D/cache" | grep -c '^run-.*[0-9a-f]$')" = 1 ] && ok || bad "run: the second run did not reuse the executable"
+    if (cd "$D" && ../../../$SHIKRA build -w -I one -I two --cc "$CC -DSHIKRA_TEST_FLAG=1" main.scm) && [ -x "$D/main" ]; then ok
+    else bad "build: default output name, -I, --cc with arguments"; fi
+    if $SHIKRA --version | grep -q '^shikra 0'; then ok; else bad "--version"; fi
+    if $SHIKRA --help > "$TMP/help" && for w in build run repl check emit-c size -O0 --unsafe --gc --unicode -I --cc --target -g; do
+           grep -q -- " $w" "$TMP/help" || exit 1; done; then ok; else bad "--help does not list every command and flag"; fi
+    if ! $SHIKRA build --no-such-flag tests/cases/hello.scm 2> "$TMP/flag.err" && grep -q 'unknown flag' "$TMP/flag.err"; then ok; else bad "unknown flag"; fi
+}
+
 # run_stress: cases and r7rs files with a collection at every allocation, at -O2 and -O0.
 run_stress() {
     for opt in 2 0; do
@@ -515,9 +557,10 @@ shape) run_shape ;;
 size) run_size ;;
 cache) run_cache ;;
 debug) run_debug ;;
-all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_size; run_cache; run_debug; run_cases interp; run_repl; run_tramp
+driver) run_driver ;;
+all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_size; run_cache; run_debug; run_driver; run_cases interp; run_repl; run_tramp
     run_stress ;;
-*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape|size|cache|debug]"; exit 2 ;;
+*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape|size|cache|debug|driver]"; exit 2 ;;
 esac
 if [ "$skip" -gt 0 ]; then echo "tests: $pass passed, $fail failed, $skip skipped (see above)"
 else echo "tests: $pass passed, $fail failed"; fi

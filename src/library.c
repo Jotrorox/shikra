@@ -119,18 +119,23 @@ void cerror(obj where, const char *fmt, ...) {
     fputc('\n', stderr);
     exit(1);
 }
+sbuf *front_warn_capture;
 void cwarning(obj where, const char *fmt, ...) {
     obj f;
     intptr_t l, c;
     va_list ap;
+    char msg[1024];
     rt_flush(rt_stdout);
     fflush(stdout);
-    if (get_loc(where, &f, &l, &c)) fprintf(stderr, "%s:%ld:%ld: ", RT_STR(f)->buf, (long)l, (long)c);
-    fputs("warning: ", stderr);
     va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
+    vsnprintf(msg, sizeof msg, fmt, ap);
     va_end(ap);
-    fputc('\n', stderr);
+    if (get_loc(where, &f, &l, &c)) fprintf(stderr, "%s:%ld:%ld: ", RT_STR(f)->buf, (long)l, (long)c);
+    fprintf(stderr, "warning: %s\n", msg);
+    if (front_warn_capture) { /* shikra run replays the warnings of a cached build */
+        if (get_loc(where, &f, &l, &c)) sb_printf(front_warn_capture, "%s:%ld:%ld: ", RT_STR(f)->buf, (long)l, (long)c);
+        sb_printf(front_warn_capture, "warning: %s\n", msg);
+    }
 }
 const char *idname(obj id) { return RT_STR(RT_PTR(strip_id(id), rt_symbol)->name)->buf; }
 

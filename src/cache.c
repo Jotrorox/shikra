@@ -63,8 +63,9 @@ static c_rec *rec_of(library *l) {
     if (!(r = (c_rec *)pm_get(&recs, l))) { r = NEW(c_rec); pm_put(&recs, l, r); }
     return r;
 }
+static c_rec prog; /* what the program itself read and asked (shikra run's key) */
 void cache_note_file(const char *path, const char *text, size_t n) {
-    c_rec *r = rec_of(front_loading());
+    c_rec *r = front_loading() ? rec_of(front_loading()) : dir ? &prog : NULL;
     if (!r) return;
     if (r->nfiles == 64) { r->overflow = 1; return; }
     r->files[r->nfiles].path = arena_strdup(&compiler_arena, path);
@@ -77,7 +78,7 @@ void cache_note_dep(library *dep) {
     r->deps[r->ndeps++] = dep;
 }
 void cache_note_exists(const char *id, int e) {
-    c_rec *r = rec_of(front_loading());
+    c_rec *r = front_loading() ? rec_of(front_loading()) : dir ? &prog : NULL;
     if (!r) return;
     if (r->nex == 16) { r->overflow = 1; return; }
     r->ex[r->nex].id = id;
@@ -719,4 +720,24 @@ miss:
     }
     free(buf);
     return ok;
+}
+
+/* shikra run: a hash of everything the front end's result depends on (the program's sources
+ * and cond-expand answers, the fingerprint of every library, compiler build, features), or 0
+ * when there is no cache. Equal keys mean equal expanded programs, so equal C. */
+unsigned long long cache_program_key(void) {
+    library *l;
+    u64 h = FNV0;
+    int i;
+    if (!dir || prog.overflow) return 0;
+    h = fnv(fnv(h, &build_id, 8), &feat_id, 8);
+    for (i = 0; i < prog.nfiles; i++) { h = fnv(h, prog.files[i].path, strlen(prog.files[i].path) + 1); h = fnv(h, &prog.files[i].hash, 8); }
+    for (i = 0; i < prog.nex; i++) { h = fnv(h, prog.ex[i].id, strlen(prog.ex[i].id) + 1); h = fnv(h, &prog.ex[i].r, sizeof(int)); }
+    for (l = front_order; l; l = l->next) {
+        u64 f;
+        if (l->name == RT_FALSE) continue; /* the program */
+        if (!(f = fingerprint(l))) return 0;
+        h = fnv(fnv(h, l->id, strlen(l->id) + 1), &f, 8);
+    }
+    return h;
 }
