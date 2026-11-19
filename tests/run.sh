@@ -1,7 +1,8 @@
 #!/bin/sh
 # tests/run.sh [all|reader|unit|amalg|compiled|interp|stress]   (DESIGN.md §9)
 #   reader    tests/reader/NAME.scm: `shikra debug-read` output must equal NAME.out and
-#             read back to itself; or, with NAME.err, fail with stderr containing it
+#             read back to itself; or, with NAME.err, fail with stderr containing it;
+#             plus: every tests/r7rs/*.scm and chibi/*.sld must read without error
 #   unit      C-level runtime tests (tests/unit/rt_unit.c, tool mode)
 #   amalg     program-mode self-check: rt.h + stand-in program + rt_*.c as ONE TU with
 #             SHIKRA_PROGRAM, -Wall -Wextra -Werror; output must match
@@ -35,6 +36,11 @@ run_reader() {
             elif grep -qF -- "$(cat "$base.err")" "$TMP/r.err"; then ok
             else bad "$f"; echo "  expected: $(cat "$base.err")"; echo "  got:      $(cat "$TMP/r.err")"; fi
         fi
+    done
+    # smoke: every adapted R7RS test file must read without error
+    for f in tests/r7rs/*.scm tests/r7rs/chibi/*.sld; do
+        [ -f "$f" ] || continue
+        if $SHIKRA debug-read "$f" > /dev/null 2> "$TMP/r.err"; then ok; else bad "$f (read)"; cat "$TMP/r.err"; fi
     done
 }
 
