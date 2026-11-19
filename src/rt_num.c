@@ -30,12 +30,10 @@ static double num_d(obj x, const char *who) {
 }
 static RT_NORETURN void num_overflow(const char *who, obj a, obj b) { rt_fx_overflow(who, a, b); }
 static obj num_fix(intptr_t v, const char *who, obj a, obj b) {
-    if (v < RT_FIX_MIN || v > RT_FIX_MAX) {
 #ifdef RT_HAVE_BIG
-        if (RT_BIG_ON) return rt_big_fromi(v);
+    if ((v < RT_FIX_MIN || v > RT_FIX_MAX) && RT_BIG_ON) return rt_big_fromi(v);
 #endif
-        num_overflow(who, a, b);
-    }
+    if (v < RT_FIX_MIN || v > RT_FIX_MAX) num_overflow(who, a, b);
     return RT_FIX(v);
 }
 /* --bignum: both operands exact (bignums exist only when promotion is on) */
@@ -156,13 +154,12 @@ static intptr_t num_int(obj x, const char *who, int *inexact) {
 }
 static obj num_idiv(obj a, obj b, int op, const char *who) {
     int inexact = 0;
-    intptr_t x, y, r;
 #ifdef RT_HAVE_BIG /* a bignum, or an integral flonum beyond the fixnum range */
     if (RT_BIG_ON && (!rt_is_fix(a) || !rt_is_fix(b)) &&
         (rt_is_big(a) || rt_is_big(b) || !(rt_flabs(num_d(a, who)) < NUM_2P62 && rt_flabs(num_d(b, who)) < NUM_2P62)))
         return rt_big_idiv(a, b, op, who);
 #endif
-    x = num_int(a, who, &inexact), y = num_int(b, who, &inexact);
+    intptr_t x = num_int(a, who, &inexact), y = num_int(b, who, &inexact), r;
     if (y == 0) rt_error(who, "division by zero", rt_cons(a, rt_cons(b, RT_NIL)));
     switch (op) {
     case 0: r = x / y; break;                                         /* truncate-quotient */
@@ -250,8 +247,8 @@ RT_FN obj rt_integer_p(obj x) {
 #define NUM_FINITE_BIG(x, r)
 #endif
 RT_FN obj rt_nan_p(obj x) { double d = num_d(x, "nan?"); return RT_BOOL(d != d); }
-RT_FN obj rt_infinite_p(obj x) { double d; NUM_FINITE_BIG(x, RT_FALSE) d = num_d(x, "infinite?"); return RT_BOOL(d == NUM_INF || d == -NUM_INF); }
-RT_FN obj rt_finite_p(obj x) { double d; NUM_FINITE_BIG(x, RT_TRUE) d = num_d(x, "finite?"); return RT_BOOL(d - d == 0); }
+RT_FN obj rt_infinite_p(obj x) { NUM_FINITE_BIG(x, RT_FALSE) double d = num_d(x, "infinite?"); return RT_BOOL(d == NUM_INF || d == -NUM_INF); }
+RT_FN obj rt_finite_p(obj x) { NUM_FINITE_BIG(x, RT_TRUE) double d = num_d(x, "finite?"); return RT_BOOL(d - d == 0); }
 
 /* ---- (scheme inexact): through the platform layer (rt_sys.c) ---- */
 #define NUM_MATH1(name, who, f) RT_FN obj name(obj x) { return rt_make_flonum(f(num_d(x, who))); }
@@ -544,7 +541,7 @@ static int num_real(const char *s, const char *e, int radix, int exactness, obj 
     const char *d0, *d1, *f0 = 0, *f1 = 0;
 #define NUM_AT(v, x) (v = (x))
 #else
-#define NUM_AT(v, x) (x)
+#define NUM_AT(v, x) x /* the same tokens as without bignums */
 #endif
     if (s < e && (*s == '+' || *s == '-')) { neg = *s == '-'; sign = 1; s++; }
     if (sign && e - s == 5 && (num_ci(s, "inf.0") || num_ci(s, "nan.0"))) {

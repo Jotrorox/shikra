@@ -1,0 +1,10 @@
+658 tests, 655 passed, 3 failed
+FAIL: (/ -4611686018427387904 -1)
+expected an error to be raised
+but got 4611686018427387904
+FAIL: (quotient -4611686018427387904 -1)
+expected an error to be raised
+but got 4611686018427387904
+FAIL: (string->number "#x4000000000000001/3e1")
+expected #f
+but got 4644195386130300.0

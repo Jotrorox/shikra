@@ -6610,12 +6610,10 @@ static const char *const e42[] = {
 "}\n"
 "static RT_NORETURN void num_overflow(const char *who, obj a, obj b) { rt_fx_overflow(who, a, b); }\n"
 "static obj num_fix(intptr_t v, const char *who, obj a, obj b) {\n"
-"    if (v < RT_FIX_MIN || v > RT_FIX_MAX) {\n"
 "#ifdef RT_HAVE_BIG\n"
-"        if (RT_BIG_ON) return rt_big_fromi(v);\n"
+"    if ((v < RT_FIX_MIN || v > RT_FIX_MAX) && RT_BIG_ON) return rt_big_fromi(v);\n"
 "#endif\n"
-"        num_overflow(who, a, b);\n"
-"    }\n"
+"    if (v < RT_FIX_MIN || v > RT_FIX_MAX) num_overflow(who, a, b);\n"
 "    return RT_FIX(v);\n"
 "}\n"
 "/* --bignum: both operands exact (bignums exist only when promotion is on) */\n"
@@ -6659,8 +6657,8 @@ static const char *const e42[] = {
 "\n"
 "/* Exact comparison of a fixnum with a non-NaN double. */\n"
 "static int num_cmp_id(intptr_t i, double d) {\n"
-"    intptr_t t;\n"
-"    double f;\n",
+"    intptr_t t;\n",
+"    double f;\n"
 "    if (d >= 9223372036854775808.0) return -1;\n"
 "    if (d < -9223372036854775808.0) return 1;\n"
 "    t = (intptr_t)d;\n"
@@ -6733,16 +6731,15 @@ static const char *const e42[] = {
 "    if (num_trunc(d) != d || !(d > -NUM_2P62 && d < NUM_2P62)) rt_type_error(who, \"integer\", x);\n"
 "    *inexact = 1;\n"
 "    return (intptr_t)d;\n"
-"}\n"
-"static obj num_idiv(obj a, obj b, int op, const char *who) {\n",
+"}\n",
+"static obj num_idiv(obj a, obj b, int op, const char *who) {\n"
 "    int inexact = 0;\n"
-"    intptr_t x, y, r;\n"
 "#ifdef RT_HAVE_BIG /* a bignum, or an integral flonum beyond the fixnum range */\n"
 "    if (RT_BIG_ON && (!rt_is_fix(a) || !rt_is_fix(b)) &&\n"
 "        (rt_is_big(a) || rt_is_big(b) || !(rt_flabs(num_d(a, who)) < NUM_2P62 && rt_flabs(num_d(b, who)) < NUM_2P62)))\n"
 "        return rt_big_idiv(a, b, op, who);\n"
 "#endif\n"
-"    x = num_int(a, who, &inexact), y = num_int(b, who, &inexact);\n"
+"    intptr_t x = num_int(a, who, &inexact), y = num_int(b, who, &inexact), r;\n"
 "    if (y == 0) rt_error(who, \"division by zero\", rt_cons(a, rt_cons(b, RT_NIL)));\n"
 "    switch (op) {\n"
 "    case 0: r = x / y; break;                                         /* truncate-quotient */\n"
@@ -6796,8 +6793,8 @@ static const char *const e42[] = {
 "        }\n"
 "        for (;;) {\n"
 "            if ((e & 1) && rt_mul_ovf(r, base, &r)) ovf = 1;\n"
-"            if ((e >>= 1) == 0) break;\n"
-"            if (rt_mul_ovf(base, base, &base)) ovf = 1;\n",
+"            if ((e >>= 1) == 0) break;\n",
+"            if (rt_mul_ovf(base, base, &base)) ovf = 1;\n"
 "        }\n"
 "        if (ovf || r < RT_FIX_MIN || r > RT_FIX_MAX) rt_error(\"expt\", \"fixnum overflow\", rt_cons(a, rt_cons(b, RT_NIL)));\n"
 "        return RT_FIX(r);\n"
@@ -6830,8 +6827,8 @@ static const char *const e42[] = {
 "#define NUM_FINITE_BIG(x, r)\n"
 "#endif\n"
 "RT_FN obj rt_nan_p(obj x) { double d = num_d(x, \"nan?\"); return RT_BOOL(d != d); }\n"
-"RT_FN obj rt_infinite_p(obj x) { double d; NUM_FINITE_BIG(x, RT_FALSE) d = num_d(x, \"infinite?\"); return RT_BOOL(d == NUM_INF || d == -NUM_INF); }\n"
-"RT_FN obj rt_finite_p(obj x) { double d; NUM_FINITE_BIG(x, RT_TRUE) d = num_d(x, \"finite?\"); return RT_BOOL(d - d == 0); }\n"
+"RT_FN obj rt_infinite_p(obj x) { NUM_FINITE_BIG(x, RT_FALSE) double d = num_d(x, \"infinite?\"); return RT_BOOL(d == NUM_INF || d == -NUM_INF); }\n"
+"RT_FN obj rt_finite_p(obj x) { NUM_FINITE_BIG(x, RT_TRUE) double d = num_d(x, \"finite?\"); return RT_BOOL(d - d == 0); }\n"
 "\n"
 "/* ---- (scheme inexact): through the platform layer (rt_sys.c) ---- */\n"
 "#define NUM_MATH1(name, who, f) RT_FN obj name(obj x) { return rt_make_flonum(f(num_d(x, who))); }\n"
@@ -6858,8 +6855,8 @@ static const char *const e42[] = {
 " * Both directions are exact, on small fixed-size big integers (32-bit limbs, up to 4160 bits:\n"
 " * enough for every double and for the 780 significant digits that parsing keeps).\n"
 " * Printing: Burger & Dybvig's free-format algorithm -- the shortest digit string that reads\n"
-" * back to the same double (a tie in the last digit rounds up), with the decimal exponent\n"
-" * estimated from the bit length. Parsing: the number is an exact ratio num/den; its 54\n",
+" * back to the same double (a tie in the last digit rounds up), with the decimal exponent\n",
+" * estimated from the bit length. Parsing: the number is an exact ratio num/den; its 54\n"
 " * leading quotient bits plus a sticky bit round to nearest even, into the subnormal range\n"
 " * too. Digits beyond the 780th only set the sticky bit (a point halfway between two doubles\n"
 " * has at most 767 significant digits). */\n"
@@ -6929,9 +6926,9 @@ static const char *const e42[] = {
 "}\n"
 "\n"
 "/* Shortest round-trip digits: d = 0.D1D2...Dn * 10^k. Positional notation for\n"
-" * 1e-7 <= |d| < 1e21, otherwise D1.D2...Dn e<sign><exponent>, always with a fraction digit. */\n"
+" * 1e-7 <= |d| < 1e21, otherwise D1.D2...Dn e<sign><exponent>, always with a fraction digit. */\n",
 "RT_FN size_t rt_format_double(double d, char *out) {\n"
-"    num_big r, s, mp, mm, t;\n",
+"    num_big r, s, mp, mm, t;\n"
 "    char dig[20], *o = out;\n"
 "    uint64_t bits = num_dbits(d), f = bits & 0xFFFFFFFFFFFFFu;\n"
 "    int be = (int)(bits >> 52) & 0x7FF, e, w, k, n = 0, i, x, even, lo, hi;\n"
@@ -7006,10 +7003,10 @@ static const char *const e42[] = {
 "    intptr_t r = rt_is_fix(radix) ? RT_FIXVAL(radix) : 0;\n"
 "    if (r != 2 && r != 8 && r != 10 && r != 16) rt_type_error(\"number->string\", \"radix 2, 8, 10 or 16\", radix);\n"
 "#ifdef RT_HAVE_BIG\n"
-"    if (rt_is_big(x)) return rt_big_to_string(x, (int)r);\n"
+"    if (rt_is_big(x)) return rt_big_to_string(x, (int)r);\n",
 "#endif\n"
 "    if (rt_is_fix(x)) {\n"
-"        intptr_t v = RT_FIXVAL(x);\n",
+"        intptr_t v = RT_FIXVAL(x);\n"
 "        uintptr_t u = v < 0 ? (uintptr_t)0 - (uintptr_t)v : (uintptr_t)v;\n"
 "        char *p = buf + sizeof buf;\n"
 "        do { *--p = \"0123456789abcdef\"[u % (uintptr_t)r]; u /= (uintptr_t)r; } while (u);\n"
@@ -7076,8 +7073,8 @@ static const char *const e42[] = {
 "    for (; *lit; s++, lit++) if ((*s | 0x20) != *lit) return 0;\n"
 "    return 1;\n"
 "}\n"
-"/* Digits in radix: the value in *mant (*ovf when it exceeds 64 bits) and the significant digits\n"
-" * (at most NUM_MAXDIG, leading zeros dropped) in dig; *dexp counts digits dropped beyond the\n",
+"/* Digits in radix: the value in *mant (*ovf when it exceeds 64 bits) and the significant digits\n",
+" * (at most NUM_MAXDIG, leading zeros dropped) in dig; *dexp counts digits dropped beyond the\n"
 " * cap (radix 10: a power of ten each; other radices: the number is too large), *sticky whether\n"
 " * any of them was nonzero. With frac, digits after a decimal point: each kept one lowers *dexp. */\n"
 "static const char *num_digits(const char *s, const char *e, int radix, int frac, char *dig, int *nd,\n"
@@ -7124,7 +7121,7 @@ static const char *const e42[] = {
 "    const char *d0, *d1, *f0 = 0, *f1 = 0;\n"
 "#define NUM_AT(v, x) (v = (x))\n"
 "#else\n"
-"#define NUM_AT(v, x) (x)\n"
+"#define NUM_AT(v, x) x /* the same tokens as without bignums */\n"
 "#endif\n"
 "    if (s < e && (*s == '+' || *s == '-')) { neg = *s == '-'; sign = 1; s++; }\n"
 "    if (sign && e - s == 5 && (num_ci(s, \"inf.0\") || num_ci(s, \"nan.0\"))) {\n"
@@ -7139,9 +7136,9 @@ static const char *const e42[] = {
 "        s = NUM_AT(f1, num_digits(NUM_AT(f0, s + 1), e, 10, 1, dig, &nd, &dexp, &sticky, &mant, &ovf, &ndig));\n"
 "    }\n"
 "    if (ndig == 0) return -1;\n"
-"    if (radix == 10 && s < e && ((*s | 0x20) == 'e' || (*s | 0x20) == 's' || (*s | 0x20) == 'f' ||\n"
+"    if (radix == 10 && s < e && ((*s | 0x20) == 'e' || (*s | 0x20) == 's' || (*s | 0x20) == 'f' ||\n",
 "                                 (*s | 0x20) == 'd' || (*s | 0x20) == 'l')) { /* exponent markers */\n"
-"        int eneg = 0, d, n = 0;\n",
+"        int eneg = 0, d, n = 0;\n"
 "        inexact = 1;\n"
 "        if (++s < e && (*s == '+' || *s == '-')) eneg = *s++ == '-';\n"
 "        for (; s < e && (d = num_digit(*s, 10)) >= 0; s++, n++) if (ex < 100000) ex = ex * 10 + d;\n"
@@ -7202,10 +7199,10 @@ static const char *const e42[] = {
 "    int exactness = 0, seen_radix = 0;\n"
 "    while (e - s >= 2 && s[0] == '#') {\n"
 "        int c = s[1] | 0x20;\n"
-"        if (c == 'e' || c == 'i') { if (exactness) return -1; exactness = c; }\n"
+"        if (c == 'e' || c == 'i') { if (exactness) return -1; exactness = c; }\n",
 "        else if (seen_radix) return -1;\n"
 "        else if (c == 'x') radix = 16, seen_radix = 1;\n"
-"        else if (c == 'b') radix = 2, seen_radix = 1;\n",
+"        else if (c == 'b') radix = 2, seen_radix = 1;\n"
 "        else if (c == 'o') radix = 8, seen_radix = 1;\n"
 "        else if (c == 'd') radix = 10, seen_radix = 1;\n"
 "        else return -1;\n"
