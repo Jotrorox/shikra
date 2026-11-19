@@ -1,0 +1,8 @@
+tests/debug/locations.scm:8:10: error: car: expected pair 5
+tests/debug/locations.scm:9:10: error: vector-ref: index out of range 7
+tests/debug/locations.scm:10:10: error: +: fixnum overflow 4611686018427387903 1
+tests/debug/locations.scm:11:10: error: lambda: wrong number of arguments 2
+tests/debug/locations.scm:12:10: error: boom 5
+tests/debug/locations.scm:13:10: error: car: expected pair ()
+tests/debug/locations.scm:14:10: error: list-tail: index out of range 5
+tests/debug/locations.scm:15:10: error: string-ref: index out of range 9

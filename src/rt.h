@@ -451,6 +451,9 @@ RT_FN obj rt_values_tail(obj v, obj i);               /* list of the values from
  *             (converter . global-value)).
  * rt_handlers: exception handler procedures. */
 RT_EXTVAR obj rt_winders, rt_handlers;
+#ifdef RT_DEBUG
+RT_EXTVAR const char *rt_loc; /* -g: "file:line:col" of the check generated code runs next (M4-3) */
+#endif
 RT_FN obj rt_winders_get(void);
 RT_FN obj rt_winders_set(obj w);
 RT_FN obj rt_handlers_get(void);

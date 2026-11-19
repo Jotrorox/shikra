@@ -1,0 +1,9 @@
+ELF fixtures for `shikra size` (tests/run.sh size): hello world (tests/cases/hello.scm),
+`shikra emit-c` output cross-compiled on macOS with zig 0.17.1 for static musl Linux, then the
+debug sections removed (zig cc keeps no symbol table when it strips):
+
+  shikra emit-c tests/cases/hello.scm > h.c
+  zig cc -target x86_64-linux-musl -std=c99 -O2 -g0 -ffunction-sections -fdata-sections \
+         -Wl,--gc-sections h.c -o h -lm
+  llvm-objcopy --strip-debug h hello-x86_64-linux.elf
+  (likewise with -target aarch64-linux-musl -> hello-aarch64-linux.elf)

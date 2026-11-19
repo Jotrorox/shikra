@@ -1,5 +1,5 @@
-/* main.c -- the shikra driver (spec §11). Commands: build, run, repl, check, emit-c (size is
- * an M4 stub). Hidden commands:
+/* main.c -- the shikra driver (spec §11). Commands: build, run, repl, check, emit-c, size
+ * (size.c). Hidden commands:
  *   interp FILE [args]  run a program on the interpreter, like the compiled program (tests)
  *   debug-read FILE     the reader's datums
  *   debug-expand FILE   every top-level core form of the program and its libraries, with
@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include "util.h"
 #include "front.h"
 #include "ir.h"
@@ -48,7 +49,11 @@ typedef struct {
     int nincdirs;
     char **args;            /* run: arguments for the program */
     int nargs;
+    int size_all, size_tsv; /* size: --all (every procedure), --tsv (machine-readable) */
+    int no_cache;           /* --no-cache: expand every library from source */
 } options;
+
+int size_command(const char *path, int all, int tsv); /* size.c */
 
 static const struct { const char *name; command cmd; } commands[] = {
     {"build", CMD_BUILD}, {"run", CMD_RUN}, {"repl", CMD_REPL}, {"check", CMD_CHECK},
@@ -56,25 +61,31 @@ static const struct { const char *name; command cmd; } commands[] = {
     {"debug-expand", CMD_DEBUG_EXPAND}, {"debug-core", CMD_DEBUG_CORE}, {"debug-ir", CMD_DEBUG_IR},
     {0, CMD_BUILD}};
 
+#define SHIKRA_VERSION "0.1 (M4)"
 static void usage(FILE *f) {
     fputs("usage: shikra <command> [flags] [file]\n"
           "commands:\n"
-          "  build main.scm -o app   compile a program to a native executable\n"
-          "  run main.scm [args]     build at -O0 into a cache directory and run it\n"
-          "  repl [main.scm]         start the interactive interpreter\n"
-          "  check main.scm          expand and analyse only; report errors\n"
-          "  emit-c main.scm         print the generated C\n"
-          "  size app                break a binary down by library and procedure\n"
+          "  build main.scm [-o app]  compile a program to a native executable (default name: main)\n"
+          "  run main.scm [args]      build at -O0 into the cache directory and run it; the executable\n"
+          "                           is reused while the program and its libraries are unchanged\n"
+          "  repl [main.scm]          start the interactive interpreter (with a file: load it first)\n"
+          "  check main.scm           expand and analyse only: errors and warnings, no C\n"
+          "  emit-c main.scm          print the generated C (one file: cc out.c builds it)\n"
+          "  size app [--all] [--tsv] bytes per library, procedure and runtime component\n"
           "flags:\n"
-          "  -O0 | -O2 | -Os         optimisation: fast build, speed (default), size\n"
-          "  --unsafe                remove remaining run-time checks\n"
-          "  --gc=immix|bump         collector (default immix)\n"
-          "  --unicode=ascii|full    character tables (default ascii)\n"
-          "  -I dir                  add a library search directory\n"
-          "  --cc=CC                 C compiler to invoke (default cc)\n"
-          "  --target=TRIPLE         cross-compilation target (default host)\n"
-          "  -g                      add source locations to run-time errors\n"
-          "  -o file                 output file\n", f);
+          "  -O0 | -O2 | -Os          fast build | speed (default) | size\n"
+          "  --unsafe                 remove the remaining run-time checks\n"
+          "  --gc=immix|bump          collector (default immix; bump never frees)\n"
+          "  --unicode=ascii|full     character tables (default ascii)\n"
+          "  -I dir                   add a library search directory (repeatable)\n"
+          "  --cc=CC                  C compiler command, may include arguments (default cc)\n"
+          "  --target=TRIPLE          cross-compilation target (default: the host)\n"
+          "  -g                       source locations in run-time errors; debug information\n"
+          "  -o file                  output file\n"
+          "  -w                       no warnings\n"
+          "  --no-cache               do not use the expansion cache\n"
+          "  --help, --version\n"
+          "environment: SHIKRA_CACHE_DIR (default $XDG_CACHE_HOME/shikra or ~/.cache/shikra)\n", f);
 }
 
 /* Value of a flag given as "--name=value" or "--name value" (also "-Xvalue"/"-X value"). */
@@ -100,6 +111,10 @@ static void parse_args(int argc, char **argv, options *o) {
     o->keep = (const char **)xmalloc(sizeof(char *) * (size_t)(argc + 1));
     if (argc < 2) { usage(stderr); exit(2); }
     if (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "help")) { usage(stdout); exit(0); }
+    if (!strcmp(argv[1], "--version") || !strcmp(argv[1], "version")) {
+        printf("shikra %s, built %s %s\n", SHIKRA_VERSION, __DATE__, __TIME__);
+        exit(0);
+    }
     for (k = 0; commands[k].name && strcmp(commands[k].name, argv[1]); k++) {}
     if (!commands[k].name) { fprintf(stderr, "shikra: unknown command '%s'\n", argv[1]); usage(stderr); exit(2); }
     o->cmd = commands[k].cmd;
@@ -116,6 +131,9 @@ static void parse_args(int argc, char **argv, options *o) {
         else if (!strcmp(a, "--gc-stress")) o->gc_stress = 1;
         else if (!strcmp(a, "--no-musttail")) o->no_musttail = 1;
         else if (!strcmp(a, "-w")) o->nowarn = 1;
+        else if (!strcmp(a, "--no-cache")) o->no_cache = 1;
+        else if (o->cmd == CMD_SIZE && !strcmp(a, "--all")) o->size_all = 1;
+        else if (o->cmd == CMD_SIZE && !strcmp(a, "--tsv")) o->size_tsv = 1;
         else if ((v = flag_value(argc, argv, &i, "--keep"))) o->keep[o->nkeep++] = v;
         else if ((v = flag_value(argc, argv, &i, "--gc"))) {
             if (!strcmp(v, "bump")) o->gc_bump = 1;
@@ -129,7 +147,8 @@ static void parse_args(int argc, char **argv, options *o) {
         else if ((v = flag_value(argc, argv, &i, "--target"))) o->target = v;
         else if ((v = flag_value(argc, argv, &i, "-I"))) o->incdirs[o->nincdirs++] = v;
         else if ((v = flag_value(argc, argv, &i, "-o"))) o->output = v;
-        else if (a[0] == '-' && a[1]) die("unknown flag '%s'", a);
+        else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(stdout); exit(0); }
+        else if (a[0] == '-' && a[1]) die("unknown flag '%s' (shikra --help lists them)", a);
         else if (o->input) die("more than one input file ('%s' and '%s')", o->input, a);
         else o->input = a;
     }
@@ -155,20 +174,37 @@ static char *dir_of(const char *path) {
     return *d ? d : arena_strdup(&compiler_arena, "/");
 }
 
+static const char *cache_dir(void);
 static void front_options(const options *o, front_opts *fo) {
     memset(fo, 0, sizeof *fo);
+    if (!o->no_cache && o->cmd != CMD_REPL && o->cmd != CMD_INTERP) fo->cache_dir = cache_dir(); /* expansion cache */
     fo->progdir = o->input ? dir_of(o->input) : ".";
     fo->incdirs = o->incdirs;
     fo->nincdirs = o->nincdirs;
     fo->unicode_full = o->unicode_full;
     fo->target = o->target;
 }
+/* SHIKRA_TIME=1: the time of each phase on stderr (cache measurements, DESIGN.md "M4-3 as built"). */
+static double phase_t0;
+static void phase(const char *name) {
+    struct timespec ts;
+    double t;
+    if (!getenv("SHIKRA_TIME")) return;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    t = (double)ts.tv_sec * 1e3 + (double)ts.tv_nsec / 1e6;
+    if (name) fprintf(stderr, "shikra: %-6s %8.2f ms\n", name, t - phase_t0);
+    phase_t0 = t;
+}
 static library *run_front(const options *o) {
     front_opts fo;
+    library *prog;
+    phase(NULL);
     front_options(o, &fo);
     compile_errors_init();
     front_init(&fo);
-    return front_load_program(o->input);
+    prog = front_load_program(o->input);
+    phase("front");
+    return prog;
 }
 
 /* The middle end with the driver's options; warnings come after a successful build of the
@@ -183,13 +219,12 @@ static ir_program *middle(options *o) {
     io.unsafe = o->unsafe;
     p = ir_build(front_order, &io);
     if (io.warn) front_warn_imports();
+    phase("middle");
     return p;
 }
-static void gen_c(options *o, sbuf *out) {
+static void emit_program(options *o, sbuf *out) { /* after the front end */
     emit_opts eo;
-    ir_program *p;
-    run_front(o);
-    p = middle(o);
+    ir_program *p = middle(o);
     eo.unsafe = o->unsafe;
     eo.debug = o->debug;
     eo.gc_bump = o->gc_bump;
@@ -197,6 +232,11 @@ static void gen_c(options *o, sbuf *out) {
     eo.gc_stress = o->gc_stress;
     eo.no_musttail = o->no_musttail;
     emit_c(p, &eo, out);
+    phase("emit");
+}
+static void gen_c(options *o, sbuf *out) {
+    run_front(o);
+    emit_program(o, out);
 }
 
 static void mkdirs(const char *path) {
@@ -206,10 +246,11 @@ static void mkdirs(const char *path) {
     if (mkdir(p, 0777) != 0 && errno != EEXIST) die("cannot create directory %s", p);
 }
 static const char *cache_dir(void) {
-    const char *x = getenv("XDG_CACHE_HOME"), *h = getenv("HOME");
+    const char *x = getenv("XDG_CACHE_HOME"), *h = getenv("HOME"), *e = getenv("SHIKRA_CACHE_DIR");
     sbuf b = {0};
     const char *r;
-    if (x && *x) sb_printf(&b, "%s/shikra", x);
+    if (e && *e) sb_puts(&b, e);
+    else if (x && *x) sb_printf(&b, "%s/shikra", x);
     else if (h && *h) sb_printf(&b, "%s/.cache/shikra", h);
     else sb_printf(&b, "/tmp/shikra-%ld", (long)getuid());
     mkdirs(b.s);
@@ -243,6 +284,11 @@ static char **cc_argv(const options *o, const char *cfile, const char *out) {
     }
     av[n++] = "-std=c99";
     av[n++] = optflag;
+    {   /* Apple clang splits every cold path (error calls) into its own function with its own
+         * symbol: 15% of a large program, no measurable speed (DESIGN.md "M4-3 as built") */
+        const char *base = strrchr(av[0], '/') ? strrchr(av[0], '/') + 1 : av[0];
+        if ((darwin && !strcmp(base, "cc")) || !strncmp(base, "clang", 5)) { av[n++] = "-Xclang"; av[n++] = "-fno-split-cold-code"; }
+    }
     av[n++] = "-ffunction-sections";
     av[n++] = "-fdata-sections";
     if (o->debug) av[n++] = "-g";
@@ -280,31 +326,63 @@ static int cmd_build(options *o) {
     sbuf c = {0}, cf = {0};
     const char *out = o->output ? o->output : default_output(o->input);
     gen_c(o, &c);
-    sb_printf(&cf, "%s/build-%ld.c", cache_dir(), (long)getpid());
+    if (o->debug) { /* -g: the C stays where the debug information points (one file per output) */
+        char abs[4096];
+        unsigned long long h = 14695981039346656037ull;
+        const char *a = out[0] == '/' || !getcwd(abs, sizeof abs) ? out : abs;
+        size_t i;
+        for (i = 0; a[i]; i++) h = (h ^ (unsigned char)a[i]) * 1099511628211ull;
+        if (a == abs) for (i = 0; out[i]; i++) h = (h ^ (unsigned char)out[i]) * 1099511628211ull;
+        sb_printf(&cf, "%s/debug-%016llx.c", cache_dir(), h);
+    } else sb_printf(&cf, "%s/build-%ld.c", cache_dir(), (long)getpid());
     write_text(cf.s, &c);
     if (!run_cc(o, cf.s, out)) {
         fprintf(stderr, "shikra: C compilation failed; generated C kept in %s\n", cf.s);
         return 1;
     }
-    remove(cf.s);
+    if (!o->debug) remove(cf.s);
     return 0;
 }
 
+/* shikra run (spec §11): build at -O0 into the cache directory and run. The executable is
+ * reused when nothing changed: its name is a hash of the expanded program (the expansion
+ * cache's key: sources, libraries, compiler build, features) and the flags, so a warm run is
+ * the front end plus exec; the warnings of the build are stored beside it and replayed.
+ * Without the expansion cache (--no-cache) the key is a hash of the generated C. */
+static unsigned long long fnv_str(unsigned long long h, const char *s) {
+    for (; *s; s++) h = (h ^ (unsigned char)*s) * 1099511628211ull;
+    return (h ^ 0xff) * 1099511628211ull;
+}
 static int cmd_run(options *o) {
-    sbuf c = {0}, bin = {0}, tmp = {0};
-    unsigned long long h = 14695981039346656037ull;
+    sbuf c = {0}, bin = {0}, tmp = {0}, warn = {0}, wf = {0};
+    unsigned long long h = 14695981039346656037ull, key;
     size_t i;
-    char **av;
+    char **av, *w;
     const char *dir;
-    gen_c(o, &c);
-    sb_printf(&c, "/* cc: %s -O%c */\n", o->cc, o->opt); /* the key covers compiler and flags */
-    for (i = 0; i < c.len; i++) h = (h ^ (unsigned char)c.s[i]) * 1099511628211ull;
+    char flags[160];
+    int k;
+    snprintf(flags, sizeof flags, "-O%c u%d b%d f%d g%d s%d t%d w%d", o->opt, o->unsafe, o->gc_bump, o->unicode_full, o->debug,
+             o->gc_stress, o->no_musttail, o->nowarn);
     dir = cache_dir();
-    sb_printf(&bin, "%s/run-%016llx", dir, h);
+    run_front(o);
+    if ((key = cache_program_key())) {
+        key = fnv_str(fnv_str(fnv_str(key, flags), o->cc), o->target ? o->target : "");
+        for (k = 0; k < o->nkeep; k++) key = fnv_str(key, o->keep[k]);
+        sb_printf(&bin, "%s/run-%016llx", dir, key);
+        sb_printf(&wf, "%s.warn", bin.s);
+        if (access(bin.s, X_OK) == 0 && (w = read_file(wf.s, &i))) { fwrite(w, 1, i, stderr); goto exec; }
+        front_warn_capture = &warn;
+    }
+    emit_program(o, &c);
+    if (!key) {
+        sb_printf(&c, "/* cc: %s %s */\n", o->cc, flags); /* the key covers compiler and flags */
+        for (i = 0; i < c.len; i++) h = (h ^ (unsigned char)c.s[i]) * 1099511628211ull;
+        sb_printf(&bin, "%s/run-%016llx", dir, h);
+    }
     if (access(bin.s, X_OK) != 0) { /* build under a private name, then rename atomically */
         sbuf cf = {0};
-        sb_printf(&cf, "%s/run-%016llx-%ld.c", dir, h, (long)getpid());
-        sb_printf(&tmp, "%s/run-%016llx-%ld.tmp", dir, h, (long)getpid());
+        sb_printf(&cf, "%s-%ld.c", bin.s, (long)getpid());
+        sb_printf(&tmp, "%s-%ld.tmp", bin.s, (long)getpid());
         write_text(cf.s, &c);
         if (!run_cc(o, cf.s, tmp.s)) {
             fprintf(stderr, "shikra: C compilation failed; generated C kept in %s\n", cf.s);
@@ -313,11 +391,20 @@ static int cmd_run(options *o) {
         remove(cf.s);
         if (rename(tmp.s, bin.s) != 0) die("cannot rename %s", tmp.s);
     }
+    if (key) { /* the warnings, for later runs */
+        tmp.len = 0;
+        sb_printf(&tmp, "%s-%ld.tmp", wf.s, (long)getpid());
+        sb_putn(&warn, "", 0);
+        write_text(tmp.s, &warn);
+        if (rename(tmp.s, wf.s) != 0) remove(tmp.s);
+    }
+exec:
     av = (char **)xmalloc(sizeof(char *) * (size_t)(o->nargs + 2));
     av[0] = (char *)o->input;
     for (i = 0; i < (size_t)o->nargs; i++) av[i + 1] = o->args[i];
     av[o->nargs + 1] = NULL;
     fflush(stdout);
+    fflush(stderr);
     execv(bin.s, av);
     die("cannot execute %s", bin.s);
 }
@@ -369,8 +456,7 @@ int main(int argc, char **argv) {
         if (o.cmd == CMD_REPL) return repl_main(o.input, &io);
         return interp_main(o.input, &io, o.nargs, o.args);
     }
-    case CMD_SIZE: break;
+    case CMD_SIZE: return size_command(o.input, o.size_all, o.size_tsv);
     }
-    fprintf(stderr, "shikra: '%s' is not implemented yet (milestone M4)\n", argv[1]);
     return 1;
 }

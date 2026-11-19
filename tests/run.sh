@@ -1,5 +1,5 @@
 #!/bin/sh
-# tests/run.sh [all|reader|unit|amalg|expand|compiled|r7rs|interp|stress]   (DESIGN.md §9)
+# tests/run.sh [all|reader|unit|amalg|expand|compiled|r7rs|interp|stress|shape|size|...]   (DESIGN.md §9)
 #   reader    tests/reader/NAME.scm: `shikra debug-read` output must equal NAME.out and
 #             read back to itself; or, with NAME.err, fail with stderr containing it;
 #             plus: every tests/r7rs/*.scm and chibi/*.sld must read without error
@@ -48,6 +48,9 @@ SHIKRA=./shikra
 CC=${CC:-cc}
 TMP=tests/tmp
 mkdir -p "$TMP"
+# the cache directory of build/run (and the expansion cache) stays inside the tree
+SHIKRA_CACHE_DIR=$(pwd)/$TMP/cache
+export SHIKRA_CACHE_DIR
 pass=0
 fail=0
 skip=0
@@ -334,6 +337,185 @@ run_shape() {
     done
 }
 
+# run_size (M4-3): `shikra size` (spec §9.3, §11). For programs built here and for the committed
+# ELF fixtures (tests/size/*.elf, see tests/size/README): the report has the expected headings,
+# its total equals the file size, and the --tsv rows add up to the file size. A stripped binary
+# and one not built by shikra are refused with a clear message. Hello world is pinned at 52 KB
+# or less on macOS arm64 (spec §9.3: about 50 KB, the format floor).
+size_check() { # $1 binary, $2 what
+    fsz=$(wc -c < "$1" | tr -d ' ')
+    if $SHIKRA size "$1" > "$TMP/size.out" 2> "$TMP/size.err" && grep -q '^program ' "$TMP/size.out" &&
+        grep -q '^(runtime) ' "$TMP/size.out" && grep -q '^format overhead ' "$TMP/size.out" &&
+        [ "$(sed -n 's/^total = file size  *//p' "$TMP/size.out" | tr -d ,)" = "$fsz" ]; then ok
+    else bad "shikra size $2"; head -5 "$TMP/size.err"; tail -5 "$TMP/size.out"; fi
+    if $SHIKRA size --tsv "$1" > "$TMP/size.tsv" &&
+        [ "$(awk -F '\t' '$5 == "yes" && $1 != "total" { s += $4 } END { print s }' "$TMP/size.tsv")" = "$fsz" ]; then ok
+    else bad "shikra size --tsv $2 (rows do not add up to $fsz)"; fi
+}
+run_size() {
+    for c in hello fib records libraries stdlib; do
+        [ -f "tests/cases/$c.scm" ] || continue
+        for lev in 2 s; do
+            if $SHIKRA build -O$lev -w "tests/cases/$c.scm" -o "$TMP/sz_$c" 2> "$TMP/size.err"; then size_check "$TMP/sz_$c" "$c -O$lev"
+            else bad "size: build $c"; head -3 "$TMP/size.err"; fi
+        done
+    done
+    for f in tests/size/*.elf; do size_check "$f" "$f"; done
+    if [ "$(uname -s)-$(uname -m)" = Darwin-arm64 ]; then
+        $SHIKRA build tests/cases/hello.scm -o "$TMP/sz_hello" 2> /dev/null
+        hsz=$(wc -c < "$TMP/sz_hello" | tr -d ' ')
+        if [ "$hsz" -le 52000 ]; then ok; else bad "hello world is $hsz bytes (spec §9.3: about 50 KB; pinned at 52,000)"; fi
+    fi
+    cp "$TMP/sz_hello" "$TMP/sz_stripped" && strip "$TMP/sz_stripped" 2> /dev/null
+    if ! $SHIKRA size "$TMP/sz_stripped" > /dev/null 2> "$TMP/size.err" && grep -q 'stripped' "$TMP/size.err"; then ok
+    else bad "shikra size of a stripped binary: expected an error"; cat "$TMP/size.err"; fi
+    printf 'int main(void) { return 0; }\n' > "$TMP/sz_c.c"
+    if $CC "$TMP/sz_c.c" -o "$TMP/sz_c" && ! $SHIKRA size "$TMP/sz_c" > /dev/null 2> "$TMP/size.err" &&
+        grep -q 'not built by shikra' "$TMP/size.err"; then ok
+    else bad "shikra size of a C program: expected an error"; cat "$TMP/size.err"; fi
+    if ! $SHIKRA size tests/cases/hello.scm > /dev/null 2> "$TMP/size.err" && grep -q 'not a 64-bit' "$TMP/size.err"; then ok
+    else bad "shikra size of a non-binary: expected an error"; cat "$TMP/size.err"; fi
+}
+
+# run_cache (M4-3): the expansion cache (spec §4.2) in a private directory. For every case and
+# r7rs program, `emit-c` with a cold cache, then warm, equals `emit-c --no-cache` byte for byte;
+# a cache shared by all programs too. Editing a library, an included file or a library's
+# dependency invalidates the entries that depend on it; corrupted and truncated entries are
+# ignored; concurrent cold builds agree and leave no temporary files.
+cache_emit() { # $1 cache dir, $2 output, rest: emit-c arguments
+    d=$1 o=$2; shift 2
+    SHIKRA_CACHE_DIR=$d $SHIKRA emit-c -w "$@" > "$o" 2>&1
+}
+run_cache() {
+    C=$(pwd)/$TMP/cachetest
+    for f in tests/cases/*.scm tests/r7rs/*.scm; do
+        fl=
+        [ -f "${f%.scm}.flags" ] && fl=$(cat "${f%.scm}.flags")
+        case $f in */char-unicode.scm) fl=--unicode=full ;; */eval.scm) continue ;; esac
+        rm -rf "$C"
+        # shellcheck disable=SC2086
+        cache_emit "$C" "$TMP/k.cold" $fl "$f"; cache_emit "$C" "$TMP/k.warm" $fl "$f"; cache_emit "$C.shared" "$TMP/k.shared" $fl "$f"
+        # shellcheck disable=SC2086
+        $SHIKRA emit-c -w --no-cache $fl "$f" > "$TMP/k.none" 2>&1
+        if cmp -s "$TMP/k.cold" "$TMP/k.none" && cmp -s "$TMP/k.warm" "$TMP/k.none" && cmp -s "$TMP/k.shared" "$TMP/k.none"; then ok
+        else bad "$f [cache: cold, warm, shared and --no-cache output differ]"; fi
+    done
+    [ "$(ls "$C.shared/expand" | wc -l)" -ge 5 ] && ok || bad "cache: built-in libraries were not cached"
+    # invalidation: a dependency of a library, a library, an included file
+    L=$TMP/cachelib
+    rm -rf "$L" "$C"; mkdir -p "$L/a"
+    printf '(define-library (a c) (export k twice) (import (scheme base))\n (begin (define k 1) (define-syntax twice (syntax-rules () ((_ e) (+ e e))))))\n' > "$L/a/c.sld"
+    printf '(define-library (a b) (export f) (import (scheme base) (a c))\n (include "b-body.scm"))\n' > "$L/a/b.sld"
+    printf '(define (f) (twice k))\n' > "$L/a/b-body.scm"
+    printf '(import (scheme base) (scheme write) (a b))\n(display (f))\n(newline)\n' > "$L/p.scm"
+    for step in none dep lib include; do
+        case $step in
+        dep) sed 's/(define k 1)/(define k 21)/' "$L/a/c.sld" > "$L/x" && mv "$L/x" "$L/a/c.sld" ;;
+        lib) sed 's/(export f)/(export f g)/; s/(include/(begin (define (g) 0)) (include/' "$L/a/b.sld" > "$L/x" && mv "$L/x" "$L/a/b.sld" ;;
+        include) printf '(define (f) (twice (twice k)))\n' > "$L/a/b-body.scm" ;;
+        esac
+        cache_emit "$C" "$TMP/k.cached" "$L/p.scm"
+        $SHIKRA emit-c -w --no-cache "$L/p.scm" > "$TMP/k.none" 2>&1
+        if cmp -s "$TMP/k.cached" "$TMP/k.none"; then ok; else bad "cache: stale entry used after editing ($step)"; fi
+        $SHIKRA build -w --no-cache "$L/p.scm" -o "$TMP/k.prog"
+        if [ "$(SHIKRA_CACHE_DIR=$C $SHIKRA run -w "$L/p.scm")" = "$("$TMP/k.prog")" ]; then ok; else bad "run: stale executable after editing ($step)"; fi
+    done
+    if SHIKRA_CACHE_DIR=$C $SHIKRA build -w "$L/p.scm" -o "$TMP/k.prog" && [ "$("$TMP/k.prog")" = 84 ]; then ok
+    else bad "cache: edited program gives $("$TMP/k.prog" 2>&1)"; fi
+    # corrupted and truncated entries are ignored (and rewritten)
+    $SHIKRA emit-c -w --no-cache tests/cases/libraries.scm > "$TMP/k.none" 2>&1
+    for how in flip truncate garbage; do
+        rm -rf "$C"; cache_emit "$C" "$TMP/k.cold" tests/cases/libraries.scm
+        for e in "$C"/expand/*; do
+            sz=$(wc -c < "$e")
+            case $how in
+            flip) { head -c $((sz / 2)) "$e"; printf 'X'; tail -c $((sz - sz / 2 - 1)) "$e"; } > "$e.x" ;;
+            truncate) head -c $((sz / 3)) "$e" > "$e.x" ;;
+            garbage) printf 'not a cache entry' > "$e.x" ;;
+            esac
+            mv "$e.x" "$e"
+        done
+        cache_emit "$C" "$TMP/k.bad" tests/cases/libraries.scm; cache_emit "$C" "$TMP/k.again" tests/cases/libraries.scm
+        if cmp -s "$TMP/k.bad" "$TMP/k.none" && cmp -s "$TMP/k.again" "$TMP/k.none"; then ok; else bad "cache: $how entries changed the output"; fi
+    done
+    # concurrent cold builds
+    rm -rf "$C"
+    for i in 1 2 3 4; do cache_emit "$C" "$TMP/k.par$i" tests/r7rs/base.scm & done
+    wait
+    $SHIKRA emit-c -w --no-cache tests/r7rs/base.scm > "$TMP/k.none" 2>&1
+    pok=1
+    for i in 1 2 3 4; do cmp -s "$TMP/k.par$i" "$TMP/k.none" || pok=0; done
+    if [ $pok = 1 ] && [ -z "$(ls "$C/expand" | grep tmp)" ]; then ok; else bad "cache: concurrent builds"; fi
+    rm -rf "$C" "$C.shared"
+}
+
+# run_debug (M4-3): -g (spec §11.3). tests/debug/locations.scm, built with -g at -O2, -O0 and -Os,
+# run with each argument 1..8, prints line k of locations.expected as its last stderr line (exit
+# 70): type, range, overflow, unknown-call arity and user errors, an inlined library wrapper and
+# library procedures, each named by the user's expression. handler.scm: the same through an
+# error object. Without -g the C has no rt_loc store and the binary no location string.
+run_debug() {
+    for lev in 2 0 s; do
+        if $SHIKRA build -O$lev -g -w tests/debug/locations.scm -o "$TMP/dbg" 2> "$TMP/dbg.err"; then
+            k=1
+            while [ $k -le 8 ]; do
+                "$TMP/dbg" $k > /dev/null 2> "$TMP/dbg.err"
+                st=$?
+                if [ $st = 70 ] && [ "$(tail -1 "$TMP/dbg.err")" = "$(sed -n ${k}p tests/debug/locations.expected)" ]; then ok
+                else bad "-g -O$lev locations $k (exit $st): $(tail -1 "$TMP/dbg.err")"; fi
+                k=$((k + 1))
+            done
+        else bad "-g -O$lev: build failed"; head -3 "$TMP/dbg.err"; fi
+        if $SHIKRA build -O$lev -g -w tests/debug/handler.scm -o "$TMP/dbg" && ! "$TMP/dbg" > /dev/null 2> "$TMP/dbg.err" &&
+            [ "$(tail -1 "$TMP/dbg.err")" = "$(cat tests/debug/handler.expected)" ]; then ok
+        else bad "-g -O$lev handler: $(tail -1 "$TMP/dbg.err")"; fi
+    done
+    if $SHIKRA emit-c -w tests/debug/locations.scm | grep -q 'rt_loc = '; then bad "rt_loc without -g"; else ok; fi
+    $SHIKRA build -w tests/debug/locations.scm -o "$TMP/dbg"
+    if grep -q 'locations.scm' "$TMP/dbg"; then bad "location strings in a binary built without -g"; else ok; fi
+    if "$TMP/dbg" 1 2>&1 >/dev/null | grep -qx 'Error: car: expected pair 5'; then ok; else bad "error message without -g"; fi
+}
+
+# run_driver (M4-3): the commands and flags of spec §11. `emit-c` output is one self-contained C
+# file that a plain `cc out.c` (and gcc, when GCC exists) builds; `check` reports exactly the
+# diagnostics `build` reports; `run` passes arguments and the exit status, reuses its executable
+# and replays its warnings; -I is repeatable; --cc takes a command with arguments; the default
+# output name; --help, --version, unknown flags.
+run_driver() {
+    for c in hello fib records stdlib; do
+        f=tests/cases/$c.scm
+        if $SHIKRA emit-c -w "$f" > "$TMP/drv.c" && (cd "$TMP" && $CC drv.c -o drv 2> drv.err) && "$TMP/drv" < /dev/null > "$TMP/drv.out" 2>&1 &&
+            cmp -s "$TMP/drv.out" "${f%.scm}.out"; then ok
+        else bad "emit-c $c: plain cc out.c"; head -3 "$TMP/drv.err"; fi
+        if command -v "$GCC" > /dev/null 2>&1; then
+            if (cd "$TMP" && "$GCC" drv.c -o drvg 2> drv.err) && "$TMP/drvg" < /dev/null > "$TMP/drv.out" 2>&1 && cmp -s "$TMP/drv.out" "${f%.scm}.out"; then ok
+            else bad "emit-c $c: plain $GCC out.c"; head -3 "$TMP/drv.err"; fi
+        fi
+    done
+    for f in tests/warnings/*.scm tests/errors/*.scm; do
+        $SHIKRA check "$f" > /dev/null 2> "$TMP/chk.err"; a=$?
+        $SHIKRA build "$f" -o "$TMP/chk" > /dev/null 2> "$TMP/bld.err"; b=$?
+        if [ $a = $b ] && cmp -s "$TMP/chk.err" "$TMP/bld.err"; then ok; else bad "check and build report differently: $f"; diff "$TMP/chk.err" "$TMP/bld.err" | head -4; fi
+    done
+    D=$TMP/drvrun
+    rm -rf "$D"; mkdir -p "$D/one/x" "$D/two/y"
+    printf '(define-library (x a) (export a) (import (scheme base)) (begin (define a 40)))\n' > "$D/one/x/a.sld"
+    printf '(define-library (y b) (export b) (import (scheme base)) (begin (define b 2)))\n' > "$D/two/y/b.sld"
+    printf '(import (scheme base) (scheme write) (scheme process-context) (x a) (y b))\n(define unused 1)\n(write (cons (+ a b) (cdr (command-line))))\n(newline)\n(exit 3)\n' > "$D/main.scm"
+    for i in 1 2; do
+        SHIKRA_CACHE_DIR=$(pwd)/$D/cache $SHIKRA run -I "$D/one" -I "$D/two" "$D/main.scm" p "q r" > "$D/out" 2> "$D/err"; st=$?
+        if [ $st = 3 ] && [ "$(cat "$D/out")" = '(42 "p" "q r")' ] && grep -q 'warning: unused definition unused' "$D/err"; then ok
+        else bad "run (pass $i): exit $st, $(cat "$D/out") $(cat "$D/err")"; fi
+    done
+    [ "$(ls "$D/cache" | grep -c '^run-.*[0-9a-f]$')" = 1 ] && ok || bad "run: the second run did not reuse the executable"
+    if (cd "$D" && ../../../$SHIKRA build -w -I one -I two --cc "$CC -DSHIKRA_TEST_FLAG=1" main.scm) && [ -x "$D/main" ]; then ok
+    else bad "build: default output name, -I, --cc with arguments"; fi
+    if $SHIKRA --version | grep -q '^shikra 0'; then ok; else bad "--version"; fi
+    if $SHIKRA --help > "$TMP/help" && for w in build run repl check emit-c size -O0 --unsafe --gc --unicode -I --cc --target -g; do
+           grep -q -- " $w" "$TMP/help" || exit 1; done; then ok; else bad "--help does not list every command and flag"; fi
+    if ! $SHIKRA build --no-such-flag tests/cases/hello.scm 2> "$TMP/flag.err" && grep -q 'unknown flag' "$TMP/flag.err"; then ok; else bad "unknown flag"; fi
+}
+
 # run_stress: cases and r7rs files with a collection at every allocation, at -O2 and -O0.
 run_stress() {
     for opt in 2 0; do
@@ -372,9 +554,13 @@ gcc) opt=2; run_cases gcc
     ( opt=0; ulimit -s 65520 2> /dev/null; run_cases gcctramp; echo "$pass $fail" > "$TMP/gcc.count" ); set -- $(cat "$TMP/gcc.count"); pass=$1 fail=$2
     opt= ;;
 shape) run_shape ;;
-all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_cases interp; run_repl; run_tramp
+size) run_size ;;
+cache) run_cache ;;
+debug) run_debug ;;
+driver) run_driver ;;
+all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_size; run_cache; run_debug; run_driver; run_cases interp; run_repl; run_tramp
     run_stress ;;
-*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape]"; exit 2 ;;
+*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape|size|cache|debug|driver]"; exit 2 ;;
 esac
 if [ "$skip" -gt 0 ]; then echo "tests: $pass passed, $fail failed, $skip skipped (see above)"
 else echo "tests: $pass passed, $fail failed"; fi

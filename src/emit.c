@@ -18,7 +18,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-static sbuf lits, code;    /* literal definitions; function bodies */
+static sbuf lits, code;    /* members of the literal struct rt_lits; function bodies */
+static sbuf linit;         /* initialisers of rt_lits, in member order */
+static htab litcontent;    /* "kind:hex bytes" of a string, flonum or bytevector literal -> C expression */
 static sbuf pairs;         /* initialisers of rt_lit_pairs[] (all literal pairs, spec §3.2) */
 static int nlits, nsyms, npairs;
 static pmap litmap;        /* heap literal datum -> C expression */
@@ -77,14 +79,38 @@ static void c_string(sbuf *b, const char *s, size_t n) {
     }
     sb_putc(b, '"');
 }
-static const char *lit_string(const char *s, size_t n) {
+/* Every literal is a member L<k> of one static const struct rt_lits (one symbol instead of
+ * one per literal: DESIGN.md "M4-3 as built"); lit_member declares the next one and starts
+ * its initialiser, and returns its tagged address. */
+static const char *lit_member(const char *type) {
     int k = nlits++;
+    sb_printf(&lits, "    %s L%d;\n", type, k);
+    sb_puts(&linit, k ? ",\n    " : "    ");
+    return fmt("((obj)((char *)&rt_lits.L%d + 5))", k);
+}
+/* Equal strings, flonums (same bits) and bytevectors share one literal (literals are
+ * read-only; R7RS lets equal constants share), whichever library they came from. */
+static const char *lit_shared(const char *kind, const unsigned char *b, size_t n, const char *r) {
+    sbuf key = {0};
+    size_t i;
+    const char *old;
+    sb_puts(&key, kind);
+    for (i = 0; i < n; i++) sb_printf(&key, "%02x", b[i]);
+    if (!r) r = (const char *)ht_get(&litcontent, key.s);
+    else ht_put(&litcontent, arena_strdup(&compiler_arena, key.s), (void *)r);
+    old = r;
+    sb_free(&key);
+    return old;
+}
+static const char *lit_string(const char *s, size_t n) {
     int ascii = rt_utf8_count(s, n) == n;
-    sb_printf(&lits, "static const rt_string L%d = {RT_HDR(RT_T_STRING, RT_F_RO%s, 0), %ld, %ld, ", k, ascii ? " | RT_F_ASCII" : "",
-              (long)rt_utf8_count(s, n), (long)n);
-    c_string(&lits, s, n);
-    sb_puts(&lits, "};\n");
-    return fmt("((obj)((char *)&L%d + 5))", k);
+    const char *r = lit_shared("s:", (const unsigned char *)s, n, NULL);
+    if (r) return r;
+    r = lit_member("rt_string");
+    sb_printf(&linit, "{RT_HDR(RT_T_STRING, RT_F_RO%s, 0), %ld, %ld, ", ascii ? " | RT_F_ASCII" : "", (long)rt_utf8_count(s, n), (long)n);
+    c_string(&linit, s, n);
+    sb_puts(&linit, "}");
+    return lit_shared("s:", (const unsigned char *)s, n, r);
 }
 static const char *lit(obj x) {
     const char *r;
@@ -106,9 +132,11 @@ static const char *lit(obj x) {
         int k;
         if ((r = (const char *)ht_get(&symmap, s->buf))) return r;
         r = lit_string(s->buf, (size_t)s->bytes);
-        k = nlits++;
-        sb_printf(&lits, "static const rt_symbol L%d = {RT_HDR(RT_T_SYMBOL, 0, 1), %s};\n", k, r);
-        r = fmt("((obj)((char *)&L%d + 5))", k);
+        k = nlits; /* the symbol's own member follows */
+        sb_printf(&linit, "%s{RT_HDR(RT_T_SYMBOL, 0, 1), %s}", k ? ",\n    " : "    ", r);
+        sb_printf(&lits, "    rt_symbol L%d;\n", k);
+        nlits++;
+        r = fmt("((obj)((char *)&rt_lits.L%d + 5))", k);
         sb_printf(&symtab, "%s%s", nsyms++ ? ", " : "", r);
         ht_put(&symmap, arena_strdup(&compiler_arena, s->buf), (void *)r);
         return r;
@@ -123,35 +151,38 @@ static const char *lit(obj x) {
         r = lit_string(RT_STR(x)->buf, (size_t)RT_STR(x)->bytes);
     } else if (rt_is_flo(x)) {
         double d = RT_FLO(x);
-        int k = nlits++;
-        if (d != d) sb_printf(&lits, "static const rt_flonum L%d = {RT_HDR(RT_T_FLONUM, 0, 8), G_NAN};\n", k);
-        else if (d - d != 0) sb_printf(&lits, "static const rt_flonum L%d = {RT_HDR(RT_T_FLONUM, 0, 8), %sG_INF};\n", k, d < 0 ? "-" : "");
-        else sb_printf(&lits, "static const rt_flonum L%d = {RT_HDR(RT_T_FLONUM, 0, 8), %a};\n", k, d);
-        r = fmt("((obj)((char *)&L%d + 5))", k);
+        if ((r = lit_shared("f:", (const unsigned char *)&d, sizeof d, NULL))) return r;
+        r = lit_shared("f:", (const unsigned char *)&d, sizeof d, lit_member("rt_flonum"));
+        if (d != d) sb_puts(&linit, "{RT_HDR(RT_T_FLONUM, 0, 8), G_NAN}");
+        else if (d - d != 0) sb_printf(&linit, "{RT_HDR(RT_T_FLONUM, 0, 8), %sG_INF}", d < 0 ? "-" : "");
+        else sb_printf(&linit, "{RT_HDR(RT_T_FLONUM, 0, 8), %a}", d);
     } else if (rt_is_vector(x)) {
         const char **el;
-        int k;
         n = RT_HLEN(x);
         el = NEWN(const char *, n);
         for (i = 0; i < n; i++) el[i] = lit(RT_VEC(x)[i]);
-        k = nlits++;
-        if (n == 0) sb_printf(&lits, "static const struct { uintptr_t hdr; } L%d = {RT_HDR(RT_T_VECTOR, RT_F_RO, 0)};\n", k);
-        else {
-            sb_printf(&lits, "static const struct { uintptr_t hdr; obj v[%ld]; } L%d = {RT_HDR(RT_T_VECTOR, RT_F_RO, %ld), {", (long)n, k, (long)n);
-            for (i = 0; i < n; i++) sb_printf(&lits, "%s%s", i ? ", " : "", el[i]);
-            sb_puts(&lits, "}};\n");
+        if (n == 0) {
+            r = lit_member("struct { uintptr_t hdr; }");
+            sb_puts(&linit, "{RT_HDR(RT_T_VECTOR, RT_F_RO, 0)}");
+        } else {
+            r = lit_member(fmt("struct { uintptr_t hdr; obj v[%ld]; }", (long)n));
+            sb_printf(&linit, "{RT_HDR(RT_T_VECTOR, RT_F_RO, %ld), {", (long)n);
+            for (i = 0; i < n; i++) sb_printf(&linit, "%s%s", i ? ", " : "", el[i]);
+            sb_puts(&linit, "}}");
         }
-        r = fmt("((obj)((char *)&L%d + 5))", k);
     } else if (rt_is_bytevector(x)) {
-        int k = nlits++;
         n = RT_HLEN(x);
-        if (n == 0) sb_printf(&lits, "static const struct { uintptr_t hdr; } L%d = {RT_HDR(RT_T_BYTEVECTOR, RT_F_RO, 0)};\n", k);
-        else {
-            sb_printf(&lits, "static const struct { uintptr_t hdr; unsigned char b[%ld]; } L%d = {RT_HDR(RT_T_BYTEVECTOR, RT_F_RO, %ld), {", (long)n, k, (long)n);
-            for (i = 0; i < n; i++) sb_printf(&lits, "%s%d", i ? ", " : "", RT_PTR(x, rt_bytevector)->b[i]);
-            sb_puts(&lits, "}};\n");
+        if ((r = lit_shared("b:", RT_PTR(x, rt_bytevector)->b, (size_t)n, NULL))) return r;
+        if (n == 0) {
+            r = lit_member("struct { uintptr_t hdr; }");
+            sb_puts(&linit, "{RT_HDR(RT_T_BYTEVECTOR, RT_F_RO, 0)}");
+        } else {
+            r = lit_member(fmt("struct { uintptr_t hdr; unsigned char b[%ld]; }", (long)n));
+            sb_printf(&linit, "{RT_HDR(RT_T_BYTEVECTOR, RT_F_RO, %ld), {", (long)n);
+            for (i = 0; i < n; i++) sb_printf(&linit, "%s%d", i ? ", " : "", RT_PTR(x, rt_bytevector)->b[i]);
+            sb_puts(&linit, "}}");
         }
-        r = fmt("((obj)((char *)&L%d + 5))", k);
+        lit_shared("b:", RT_PTR(x, rt_bytevector)->b, (size_t)n, r);
     } else cerror(RT_FALSE, "internal error: cannot emit literal %s", dstr(x));
     pm_put(&litmap, x, (void *)r);
     return r;
@@ -271,7 +302,25 @@ static void put_call(ir_node *c, const char *dest, int drep, int ind, const char
     else if (cur->rrep == R_OBJ) out(ind, "RT_DTAIL(%s, %s, %s%s);", fn, self, argc, args);
     else out(ind, "return %s;", conv(nt(call), R_OBJ, cur->rrep));
 }
+/* -g (spec §11.3): before a check or a call in user code, rt_loc = its source location, so a
+ * run-time error raised there (or in library code it calls) names it. Inlined library code
+ * carries the location of the user's call; code located in a built-in library sets nothing. */
+static int debug_;
+static void emit_loc(ir_node *n, int ind) {
+    obj f;
+    intptr_t l, c;
+    sbuf b = {0};
+    if (!debug_ || !n->loc || !rt_srcloc_lookup(n->loc, &f, &l, &c) || !strncmp(RT_STR(f)->buf, "<builtin>", 9)) return;
+    sb_printf(&b, "%s:%ld:%ld", RT_STR(f)->buf, (long)l, (long)c);
+    {   sbuf q = {0};
+        c_string(&q, b.s, b.len);
+        out(ind, "rt_loc = %s;", q.s);
+        sb_free(&q);
+    }
+    sb_free(&b);
+}
 static void emit_call(ir_node *c, const char *dest, int drep, int ind) {
+    emit_loc(c, ind);
     if (c->u.call.ctl == CTL_CALLCC) { /* tier 2: the runtime keeps the frame (not a tail call) */
         const char *e = fmt("rt_call_cc(%s)", atom_as(c->u.call.args[0], R_OBJ));
         if (c->u.call.tail) out(ind, "return %s;", conv(e, R_OBJ, fn_rep(cur)));
@@ -453,6 +502,7 @@ static void emit_prim(ir_node *r, const char *dest, int drep, int ind) {
     const prim_info *p = &prim_table[r->u.prim.op];
     int i, erep;
     const char *e;
+    if (p->flags & PF_FAIL) emit_loc(r, ind);
     if (r->u.prim.op == PI_VALUES) {
         sbuf b = {0};
         if (drep == R_MV) return; /* returned in a struct (M4-2): no heap object */
@@ -727,6 +777,7 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     for (i = 0; i < p->nglobals; i++)
         if (!p->globals[i]->known) p->globals[i]->slot = nglob++;
     unsafe_ = o->unsafe;
+    debug_ = o->debug;
     prog_ = p;
     for (L = p->lambdas; L; L = L->next)
         if (L->direct && L->rrep == R_MV && !(mvs & (1u << L->nvals))) {
@@ -756,8 +807,17 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     sb_puts(o_, "\n/* ==== program ==== */\n");
     sb_puts(o_, "#if defined(__GNUC__) || defined(__clang__)\n#define G_INF __builtin_inf()\n#define G_NAN __builtin_nan(\"\")\n"
                 "#else\n#define G_INF (1e308 * 10.0)\n#define G_NAN (G_INF - G_INF)\n#endif\n");
-    if (lits.len) sb_putn(o_, lits.s, lits.len);
+    if (nlits) { /* the literal struct: type, tentative definition, pairs (which point into it), definition */
+        sb_puts(o_, "typedef struct {\n");
+        sb_putn(o_, lits.s, lits.len);
+        sb_puts(o_, "} rt_lits_t;\nstatic const rt_lits_t rt_lits;\n");
+    }
     if (npairs) sb_printf(o_, "static const rt_pair rt_lit_pairs[%d] = {\n    %s};\n", npairs, pairs.s);
+    if (nlits) {
+        sb_puts(o_, "static const rt_lits_t rt_lits = {\n");
+        sb_putn(o_, linit.s, linit.len);
+        sb_puts(o_, "\n};\n");
+    }
     sb_printf(o_, "static obj rt_g[%d]; /* globals: a GC root range */\n", nglob + 1);
     if (nsyms) /* entered into the symbol table only if the program creates it (spec §9.1) */
         sb_printf(o_, "static const obj rt_static_syms[%d] = {%s};\n", nsyms, symtab.s);

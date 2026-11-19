@@ -1119,9 +1119,14 @@ static void name_lambda(ir_lambda *L) {
         for (i = 0; L->dispatch->clauses[i] != L; i++) {}
         sb_printf(&b, "%s__%d", L->dispatch->cname, i + 1);
     } else {
-        if (!L->parent || L->parent == prog->main) {
+        if (!L->parent || L->parent == prog->main) { /* the library part never contains "__" (shikra size splits there) */
+            sbuf l = {0};
+            size_t i;
             sb_puts(&b, "P_");
-            c_mangle(&b, L->lib ? L->lib->id : "main");
+            c_mangle(&l, L->lib ? L->lib->id : "main");
+            for (i = 0; i < l.len; i++)
+                if (l.s[i] != '_' || (b.len > 2 && b.s[b.len - 1] != '_' && i + 1 < l.len)) sb_putc(&b, l.s[i]);
+            sb_free(&l);
         } else {
             name_lambda(L->parent);
             sb_puts(&b, L->parent->cname);

@@ -79,8 +79,15 @@ RT_FN obj rt_current_second(void) { return rt_make_flonum((double)rt_sys_clock_n
 RT_FN obj rt_current_jiffy(void) { return RT_FIX(rt_sys_clock_ns(1)); } /* nanoseconds */
 
 /* ---- error path ---- */
+#ifdef RT_DEBUG
+RT_VAR const char *rt_loc;
+#endif
 RT_FN obj rt_make_error(int kind, obj message, obj irritants, obj loc) {
-    rt_vector *e = (rt_vector *)rt_alloc(RT_HDR(RT_T_ERROR, kind, 3), 4 * sizeof(obj));
+    rt_vector *e;
+#ifdef RT_DEBUG
+    if (loc == RT_FALSE && rt_loc) loc = rt_cstring(rt_loc);
+#endif
+    e = (rt_vector *)rt_alloc(RT_HDR(RT_T_ERROR, kind, 3), 4 * sizeof(obj));
     e->v[0] = message;
     e->v[1] = irritants;
     e->v[2] = loc;
@@ -126,6 +133,9 @@ RT_FN void rt_print_error(obj e) {
  * and no Scheme raise: the error path allocates nothing. */
 static void core_die_head(const char *who, const char *msg, const char *msg2) {
     rt_flush(rt_stdout);
+#ifdef RT_DEBUG
+    if (rt_loc) { rt_port_write_fd(rt_stderr, rt_loc, rt_strlen(rt_loc)); rt_port_write_fd(rt_stderr, ": error: ", 9); } else
+#endif
     rt_port_write_fd(rt_stderr, "Error: ", 7);
     if (who) { rt_port_write_fd(rt_stderr, who, rt_strlen(who)); rt_port_write_fd(rt_stderr, ": ", 2); }
     rt_port_write_fd(rt_stderr, msg, rt_strlen(msg));
