@@ -1,0 +1,176 @@
+/* prims.def -- the table of %primitives (DESIGN.md §2, §6). X-macro: define PRIM, include.
+ *
+ *   PRIM(NAME, WHO, CFN, ARITY, ARGS, RES, FLAGS)
+ *
+ *   NAME   string  name the expander emits in (%prim arg ...) forms, e.g. "%car"
+ *   WHO    string  user-visible procedure name used in error messages, e.g. "car"
+ *   CFN    ident   runtime C function. Fixed arity: obj CFN(obj, ...) taking exactly ARITY
+ *                  arguments (0-arity: obj CFN(void)). The naive backend emits CFN(args...);
+ *                  the VM builds a table of function pointers from this file.
+ *   ARITY  int     number of arguments. (Reserved: -1-n would mean "n or more", with
+ *                  obj CFN(intptr_t argc, obj *argv); no row uses it yet.)
+ *   ARGS   string  one type letter per argument, as the primitive CHECKS it
+ *   RES    char    type letter of the result
+ *   FLAGS  int     PF_* bits, or 0
+ *
+ * Type letters (spec §5.2 lattice, plus two unions):
+ *   a any     f fixnum   d flonum   n number (f|d)   c char     b boolean
+ *   p pair    e null     l list (p|e)                s string   y symbol
+ *   v vector  u bytevector          x procedure      r record   (ports, error objects,
+ *   boxes, values and unspecified results are 'a')
+ *
+ * Flags (define them before including; suggested values):
+ *   PF_PURE    no side effects and no observable allocation identity: may be folded,
+ *              hoisted, CSE'd or deleted when unused (if it cannot fail, or args are known)
+ *   PF_ALLOC   may allocate a fresh object (eq?-distinct result)
+ *   PF_FAIL    may raise an error (type/range check, overflow, I/O)
+ *   PF_EFFECT  mutates memory or performs I/O: never reorder or delete
+ *
+ * Optional arguments are filled in by the Scheme library (lib/), never here: every
+ * primitive has an exact arity. The four engine-specific control operations (%call/cc,
+ * %apply, %values, %call-with-values) are NOT in this table; each engine implements them.
+ * Record primitives take the record-type descriptor explicitly; %record-ref/-set! take a
+ * compiler-constant field index (unchecked). */
+
+/* pairs and lists */
+PRIM("%cons", "cons", rt_cons, 2, "aa", 'p', PF_ALLOC)
+PRIM("%car", "car", rt_car, 1, "p", 'a', PF_FAIL)
+PRIM("%cdr", "cdr", rt_cdr, 1, "p", 'a', PF_FAIL)
+PRIM("%set-car!", "set-car!", rt_set_car, 2, "pa", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%set-cdr!", "set-cdr!", rt_set_cdr, 2, "pa", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%pair?", "pair?", rt_pair_p, 1, "a", 'b', PF_PURE)
+PRIM("%null?", "null?", rt_null_p, 1, "a", 'b', PF_PURE)
+PRIM("%list?", "list?", rt_list_p, 1, "a", 'b', 0)
+PRIM("%length", "length", rt_length, 1, "l", 'f', PF_FAIL)
+PRIM("%reverse", "reverse", rt_reverse, 1, "l", 'l', PF_ALLOC | PF_FAIL)
+
+/* equivalence, booleans, procedures */
+PRIM("%eq?", "eq?", rt_eq_p, 2, "aa", 'b', PF_PURE)
+PRIM("%eqv?", "eqv?", rt_eqv_p, 2, "aa", 'b', PF_PURE)
+PRIM("%equal?", "equal?", rt_equal_p, 2, "aa", 'b', 0)
+PRIM("%boolean?", "boolean?", rt_boolean_p, 1, "a", 'b', PF_PURE)
+PRIM("%procedure?", "procedure?", rt_procedure_p, 1, "a", 'b', PF_PURE)
+
+/* symbols */
+PRIM("%symbol?", "symbol?", rt_symbol_p, 1, "a", 'b', PF_PURE)
+PRIM("%symbol->string", "symbol->string", rt_symbol_to_string, 1, "y", 's', PF_FAIL)
+PRIM("%string->symbol", "string->symbol", rt_string_to_symbol, 1, "s", 'y', PF_ALLOC | PF_FAIL)
+
+/* chars */
+PRIM("%char?", "char?", rt_char_p, 1, "a", 'b', PF_PURE)
+PRIM("%char->integer", "char->integer", rt_char_to_integer, 1, "c", 'f', PF_FAIL)
+PRIM("%integer->char", "integer->char", rt_integer_to_char, 1, "f", 'c', PF_FAIL)
+
+/* strings */
+PRIM("%string?", "string?", rt_string_p, 1, "a", 'b', PF_PURE)
+PRIM("%make-string", "make-string", rt_make_string, 2, "fc", 's', PF_ALLOC | PF_FAIL)
+PRIM("%string-length", "string-length", rt_string_length, 1, "s", 'f', PF_FAIL)
+PRIM("%string-ref", "string-ref", rt_string_ref, 2, "sf", 'c', PF_FAIL)
+PRIM("%string-set!", "string-set!", rt_string_set, 3, "sfc", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%substring", "substring", rt_substring, 3, "sff", 's', PF_ALLOC | PF_FAIL)
+PRIM("%string-append", "string-append", rt_string_append, 2, "ss", 's', PF_ALLOC | PF_FAIL)
+PRIM("%string-compare", "string-compare", rt_string_compare, 2, "ss", 'f', PF_FAIL)
+PRIM("%string->list", "string->list", rt_string_to_list, 3, "sff", 'l', PF_ALLOC | PF_FAIL)
+PRIM("%list->string", "list->string", rt_list_to_string, 1, "l", 's', PF_ALLOC | PF_FAIL)
+PRIM("%string->utf8", "string->utf8", rt_string_to_utf8, 1, "s", 'u', PF_ALLOC | PF_FAIL)
+PRIM("%utf8->string", "utf8->string", rt_utf8_to_string, 1, "u", 's', PF_ALLOC | PF_FAIL)
+
+/* vectors */
+PRIM("%vector?", "vector?", rt_vector_p, 1, "a", 'b', PF_PURE)
+PRIM("%make-vector", "make-vector", rt_make_vector, 2, "fa", 'v', PF_ALLOC | PF_FAIL)
+PRIM("%vector-length", "vector-length", rt_vector_length, 1, "v", 'f', PF_FAIL)
+PRIM("%vector-ref", "vector-ref", rt_vector_ref, 2, "vf", 'a', PF_FAIL)
+PRIM("%vector-set!", "vector-set!", rt_vector_set, 3, "vfa", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%vector->list", "vector->list", rt_vector_to_list, 3, "vff", 'l', PF_ALLOC | PF_FAIL)
+PRIM("%list->vector", "list->vector", rt_list_to_vector, 1, "l", 'v', PF_ALLOC | PF_FAIL)
+
+/* bytevectors */
+PRIM("%bytevector?", "bytevector?", rt_bytevector_p, 1, "a", 'b', PF_PURE)
+PRIM("%make-bytevector", "make-bytevector", rt_make_bytevector, 2, "ff", 'u', PF_ALLOC | PF_FAIL)
+PRIM("%bytevector-length", "bytevector-length", rt_bytevector_length, 1, "u", 'f', PF_FAIL)
+PRIM("%bytevector-u8-ref", "bytevector-u8-ref", rt_bytevector_u8_ref, 2, "uf", 'f', PF_FAIL)
+PRIM("%bytevector-u8-set!", "bytevector-u8-set!", rt_bytevector_u8_set, 3, "uff", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%bytevector-copy", "bytevector-copy", rt_bytevector_copy, 3, "uff", 'u', PF_ALLOC | PF_FAIL)
+
+/* boxes (assigned captured variables) */
+PRIM("%make-box", "make-box", rt_make_box, 1, "a", 'a', PF_ALLOC)
+PRIM("%box-ref", "box-ref", rt_box_ref, 1, "a", 'a', PF_FAIL)
+PRIM("%box-set!", "box-set!", rt_box_set, 2, "aa", 'a', PF_FAIL | PF_EFFECT)
+
+/* records */
+PRIM("%make-rtd", "make-record-type", rt_make_rtd, 2, "yv", 'a', PF_ALLOC | PF_FAIL)
+PRIM("%make-record", "make-record", rt_make_record, 1, "a", 'r', PF_ALLOC | PF_FAIL)
+PRIM("%record?", "record?", rt_record_p, 2, "aa", 'b', PF_PURE)
+PRIM("%record-ref", "record-ref", rt_record_ref, 3, "raf", 'a', PF_FAIL)
+PRIM("%record-set!", "record-set!", rt_record_set, 4, "rafa", 'a', PF_FAIL | PF_EFFECT)
+
+/* error objects: kind 0 general, 1 file error, 2 read error */
+PRIM("%make-error-object", "make-error-object", rt_make_error_object, 3, "fal", 'a', PF_ALLOC | PF_FAIL)
+PRIM("%error-object?", "error-object?", rt_error_object_p, 1, "a", 'b', PF_PURE)
+PRIM("%error-object-message", "error-object-message", rt_error_object_message, 1, "a", 'a', PF_FAIL)
+PRIM("%error-object-irritants", "error-object-irritants", rt_error_object_irritants, 1, "a", 'l', PF_FAIL)
+PRIM("%file-error?", "file-error?", rt_file_error_p, 1, "a", 'b', PF_PURE)
+PRIM("%read-error?", "read-error?", rt_read_error_p, 1, "a", 'b', PF_PURE)
+
+/* multiple-values object (values flowing to an unknown receiver) */
+PRIM("%make-values", "values", rt_make_values, 1, "l", 'a', PF_ALLOC | PF_FAIL)
+PRIM("%values?", "values?", rt_values_p, 1, "a", 'b', PF_PURE)
+PRIM("%values->list", "values->list", rt_values_to_list, 1, "a", 'l', PF_ALLOC | PF_FAIL)
+
+/* numbers (binary; the library folds the variadic forms) */
+PRIM("%number?", "number?", rt_number_p, 1, "a", 'b', PF_PURE)
+PRIM("%integer?", "integer?", rt_integer_p, 1, "a", 'b', PF_PURE)
+PRIM("%exact?", "exact?", rt_exact_p, 1, "n", 'b', PF_FAIL)
+PRIM("%inexact?", "inexact?", rt_inexact_p, 1, "n", 'b', PF_FAIL)
+PRIM("%exact-integer?", "exact-integer?", rt_exact_integer_p, 1, "a", 'b', PF_PURE)
+PRIM("%nan?", "nan?", rt_nan_p, 1, "n", 'b', PF_FAIL)
+PRIM("%infinite?", "infinite?", rt_infinite_p, 1, "n", 'b', PF_FAIL)
+PRIM("%finite?", "finite?", rt_finite_p, 1, "n", 'b', PF_FAIL)
+PRIM("%+", "+", rt_add, 2, "nn", 'n', PF_ALLOC | PF_FAIL)
+PRIM("%-", "-", rt_sub, 2, "nn", 'n', PF_ALLOC | PF_FAIL)
+PRIM("%*", "*", rt_mul, 2, "nn", 'n', PF_ALLOC | PF_FAIL)
+PRIM("%/", "/", rt_div, 2, "nn", 'n', PF_ALLOC | PF_FAIL)
+PRIM("%=", "=", rt_num_eq, 2, "nn", 'b', PF_FAIL)
+PRIM("%<", "<", rt_lt, 2, "nn", 'b', PF_FAIL)
+PRIM("%>", ">", rt_gt, 2, "nn", 'b', PF_FAIL)
+PRIM("%<=", "<=", rt_num_le, 2, "nn", 'b', PF_FAIL)
+PRIM("%>=", ">=", rt_num_ge, 2, "nn", 'b', PF_FAIL)
+PRIM("%quotient", "quotient", rt_quotient, 2, "nn", 'n', PF_ALLOC | PF_FAIL)
+PRIM("%remainder", "remainder", rt_remainder, 2, "nn", 'n', PF_ALLOC | PF_FAIL)
+PRIM("%modulo", "modulo", rt_modulo, 2, "nn", 'n', PF_ALLOC | PF_FAIL)
+PRIM("%floor-quotient", "floor-quotient", rt_floor_quotient, 2, "nn", 'n', PF_ALLOC | PF_FAIL)
+PRIM("%exact", "exact", rt_exact, 1, "n", 'f', PF_FAIL)
+PRIM("%inexact", "inexact", rt_inexact, 1, "n", 'd', PF_ALLOC | PF_FAIL)
+PRIM("%floor", "floor", rt_floor, 1, "n", 'n', PF_ALLOC | PF_FAIL)
+PRIM("%ceiling", "ceiling", rt_ceiling, 1, "n", 'n', PF_ALLOC | PF_FAIL)
+PRIM("%round", "round", rt_round, 1, "n", 'n', PF_ALLOC | PF_FAIL)
+PRIM("%truncate", "truncate", rt_truncate, 1, "n", 'n', PF_ALLOC | PF_FAIL)
+PRIM("%number->string", "number->string", rt_number_to_string, 2, "nf", 's', PF_ALLOC | PF_FAIL)
+PRIM("%string->number", "string->number", rt_string_to_number, 2, "sf", 'a', PF_ALLOC | PF_FAIL)
+
+/* ports and I/O */
+PRIM("%stdin-port", "current-input-port", rt_stdin_port, 0, "", 'a', PF_PURE)
+PRIM("%stdout-port", "current-output-port", rt_stdout_port, 0, "", 'a', PF_PURE)
+PRIM("%stderr-port", "current-error-port", rt_stderr_port, 0, "", 'a', PF_PURE)
+PRIM("%port?", "port?", rt_port_p, 1, "a", 'b', PF_PURE)
+PRIM("%input-port?", "input-port?", rt_input_port_p, 1, "a", 'b', PF_PURE)
+PRIM("%output-port?", "output-port?", rt_output_port_p, 1, "a", 'b', PF_PURE)
+PRIM("%open-input-string", "open-input-string", rt_open_input_string, 1, "s", 'a', PF_ALLOC | PF_FAIL)
+PRIM("%open-output-string", "open-output-string", rt_open_output_string, 0, "", 'a', PF_ALLOC)
+PRIM("%get-output-string", "get-output-string", rt_get_output_string, 1, "a", 's', PF_ALLOC | PF_FAIL)
+PRIM("%open-input-file", "open-input-file", rt_open_input_file, 1, "s", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)
+PRIM("%open-output-file", "open-output-file", rt_open_output_file, 1, "s", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)
+PRIM("%close-port", "close-port", rt_close_port, 1, "a", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%read-char", "read-char", rt_read_char, 1, "a", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%peek-char", "peek-char", rt_peek_char, 1, "a", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%read-line", "read-line", rt_read_line, 1, "a", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)
+PRIM("%read", "read", rt_read, 1, "a", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)
+PRIM("%write-char", "write-char", rt_write_char, 2, "ca", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%write-string", "write-string", rt_write_string, 2, "sa", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%write", "write", rt_write, 2, "aa", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%display", "display", rt_display, 2, "aa", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%newline", "newline", rt_newline, 1, "a", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%flush-output-port", "flush-output-port", rt_flush_output_port, 1, "a", 'a', PF_FAIL | PF_EFFECT)
+PRIM("%eof-object", "eof-object", rt_eof_object, 0, "", 'a', PF_PURE)
+PRIM("%eof-object?", "eof-object?", rt_eof_object_p, 1, "a", 'b', PF_PURE)
+PRIM("%exit", "exit", rt_exit_o, 1, "a", 'a', PF_EFFECT)
