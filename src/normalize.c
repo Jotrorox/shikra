@@ -95,7 +95,10 @@ static int prim_index(obj head) {
 }
 static int is_lambda_form(obj x) { return rt_is_pair(x) && (RT_CAR(x) == S_lambda || RT_CAR(x) == S_case_lambda); }
 
-/* ---- 1. tree shaking ---- */
+/* ---- 1. tree shaking ----
+ * Roots: every form of the program and of user libraries (so the middle end's diagnostics
+ * cover all user code), and every top-level form of a built-in library whose right-hand
+ * side may have an effect. A definition is kept when its global is reachable from a root. */
 typedef struct { obj form; global *g; library *lib; int root, keep; } topform;
 static topform *tops;
 static int ntops;
@@ -144,12 +147,13 @@ static void shake(library *order) {
             topform *t = &tops[ntops];
             t->form = RT_CAR(f);
             t->lib = l;
+            if (strncmp(l->path, "<builtin>", 9) != 0) t->root = 1; /* user code: always compiled */
             if (rt_is_pair(t->form) && RT_CAR(t->form) == S_define) {
                 obj prev;
                 t->g = front_global(CADR(t->form));
                 prev = (obj)pm_get(&defs, t->g);
                 pm_put(&defs, t->g, (void *)rt_cons(RT_FIX(ntops), prev ? prev : RT_NIL));
-                t->root = !pure_rhs(CADDR(t->form));
+                t->root |= !pure_rhs(CADDR(t->form));
             } else t->root = 1;
             ntops++;
         }
@@ -750,6 +754,8 @@ static void name_lambdas(void) {
 }
 
 /* ---- def/use counts ---- */
+static ir_node **jumpv;
+static int njumpv, jumpv_cap;
 static void count_node(ir_node *n) {
     int i;
     if (!n) return;
@@ -776,9 +782,15 @@ static void count_node(ir_node *n) {
         return;
     }
     case IR_LETJ: count_node(n->u.letj.j->body); count_node(n->u.letj.body); return;
-    case IR_JUMP:
+    case IR_JUMP: /* arguments are counted later, only for parameters that are used */
         n->u.jump.j->njumps++;
-        for (i = 0; i < n->u.jump.n; i++) count_node(n->u.jump.args[i]);
+        if (njumpv == jumpv_cap) {
+            ir_node **nj = NEWN(ir_node *, jumpv_cap * 2 + 64);
+            if (jumpv) memcpy(nj, jumpv, sizeof(ir_node *) * (size_t)njumpv);
+            jumpv = nj;
+            jumpv_cap = jumpv_cap * 2 + 64;
+        }
+        jumpv[njumpv++] = n;
         return;
     case IR_IF: count_node(n->u.if_.test); count_node(n->u.if_.then); count_node(n->u.if_.els); return;
     case IR_RET: count_node(n->u.ret); return;
@@ -803,7 +815,27 @@ void ir_count(ir_program *p) {
         if (L->entry) L->entry->njumps = 0;
         reset_joins(L->body);
     }
+    njumpv = 0;
     for (L = p->lambdas; L; L = L->next) count_node(L->body);
+    {   /* a jump argument is a use only if the join parameter is used: fixpoint */
+        char changed = 1;
+        int k, *base = NEWN(int, njumpv + 1), total = 0;
+        char *argdone;
+        for (k = 0; k < njumpv; k++) { base[k] = total; total += jumpv[k]->u.jump.n; }
+        argdone = NEWN(char, total);
+        while (changed) {
+            changed = 0;
+            for (k = 0; k < njumpv; k++) {
+                ir_node *j = jumpv[k];
+                for (i = 0; i < j->u.jump.n; i++)
+                    if (!argdone[base[k] + i] && j->u.jump.j->params[i]->nrefs > 0) {
+                        argdone[base[k] + i] = 1;
+                        count_node(j->u.jump.args[i]);
+                        changed = 1;
+                    }
+            }
+        }
+    }
 }
 
 /* ---- driver ---- */

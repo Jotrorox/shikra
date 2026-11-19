@@ -193,10 +193,10 @@ static int memq_(obj x, obj l) {
     for (; rt_is_pair(l); l = RT_CDR(l)) if (RT_CAR(l) == x) return 1;
     return 0;
 }
-static int is_ellipsis(macro *m, obj x) {
-    if (!is_ident(x)) return 0;
+static int is_ellipsis(macro *m, obj x) { /* a literal has priority (R7RS 4.3.2) */
+    if (!is_ident(x) || memq_(x, m->literals)) return 0;
     if (m->ellipsis) return x == m->ellipsis;
-    return !memq_(x, m->literals) && is_kw(m->env, x, K_ELLIPSIS);
+    return is_kw(m->env, x, K_ELLIPSIS);
 }
 static int is_underscore(macro *m, obj x) { return !memq_(x, m->literals) && is_kw(m->env, x, K_UNDERSCORE); }
 
