@@ -3050,7 +3050,14 @@ executables built by GCC 14 on arm64 (native) and x86-64 (qemu).
 
 **Benchmarks** (r7rs-benchmarks, bench/run.sh series `shikra-bignum`, which enables `pi` and
 `chudnovsky`; they stay `unsupported` in the default series; `compiler` stays unsupported for its
-complex numbers): BENCH_PLACEHOLDER
+complex numbers): `pi` 0.39 s
+(Chez 0.45 s, Gambit 0.62 s from the committed reference CSVs), `chudnovsky` 0.14 s (Chez 0.18 s,
+Gambit 0.25 s); results in bench/results/shikra-bignum-*.csv. The cost of `--bignum` on the other 53
+benchmarks that run, measured interleaved on the same machine (each benchmark's default and `--bignum`
+binaries alternately, best of 3; a busy machine made whole-series comparisons unreliable): geometric
+mean 1.09x, median 1.03x; most within +-5 %, the worst are loops whose counter ends on `=` or comes
+from unbounded arithmetic, so it is "fixnum or bignum" and runs generic code: `mazefun` 1.51x, `maze`
+1.51x, `simplex` 1.47x, `triangl` 1.44x, `fibfp` 1.36x, `ack` 1.34x, `fib` 1.27x.
 
 **Known gaps**
 - No subquadratic division or radix conversion: decimal printing and reading of a 10^6-digit number

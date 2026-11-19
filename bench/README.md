@@ -37,6 +37,7 @@ bench/run.sh gambit-unsafe
 SHIKRA=/path/to/shikra bench/run.sh shikra          # ~3 min
 SHIKRA=/path/to/shikra bench/run.sh shikra-unsafe
 SHIKRA=/path/to/shikra bench/run.sh shikra-interp   # optional, bytecode interpreter
+SHIKRA=/path/to/shikra bench/run.sh shikra-bignum   # --bignum: pi and chudnovsky run too
 
 sh bench/report.sh                                  # -> bench/RESULTS.md
 ```
