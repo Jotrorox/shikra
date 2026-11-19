@@ -487,7 +487,7 @@ static aval prim(ir_node *p, env *e, env **out, env *s, ir_var *dst) {
         if (ok && letters[i] != 'l' && rec) p->spec |= S_OK(i);
         if (!ok) *out = refine(*out, s++, x[i], mask(m));
     }
-    for (i = 0; i < n; i++) if (leaks(op, i)) escape(a[i]);
+    for (i = 0; i < n; i++) if (leaks(op, i)) escape(i < 6 ? a[i] : av_of(x[i], e));
     if (rec) /* the primitives that make a flonum out of no flonum (spec §9.1: float printer) */
         switch (op) {
         case PI_rt_div: case PI_rt_expt: case PI_rt_inexact: case PI_rt_exp: case PI_rt_log: case PI_rt_sin: case PI_rt_cos:

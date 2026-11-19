@@ -702,7 +702,12 @@ static obj rw_define_c(obj x, obj *name) {
     obj l, params = RT_NIL, types = RT_NIL, call;
     if (list_len(x) != 5 || !is_ident(CADR(x)) || !rt_is_string(CADDR(x)) || list_len(CADDDR(x)) < 0)
         cerror(x, "malformed define-c: (define-c name \"c-name\" (arg-type ...) result-type)");
-    if (RT_STR(CADDR(x))->bytes == 0) cerror(x, "define-c: empty C function name");
+    {
+        const char *c = RT_STR(CADDR(x))->buf;
+        int i, ok = c[0] && !(c[0] >= '0' && c[0] <= '9');
+        for (i = 0; c[i]; i++) ok &= c[i] == '_' || (c[i] >= '0' && c[i] <= '9') || ((c[i] | 32) >= 'a' && (c[i] | 32) <= 'z');
+        if (!ok) cerror(x, "define-c: \"%s\" is not a C identifier", c);
+    }
     for (l = CADDDR(x); l != RT_NIL; l = RT_CDR(l)) {
         int t = ffi_type(RT_CAR(l));
         if (t < 0) cerror(x, "define-c: unknown argument type %s (int long double float bool char string pointer)", dstr(RT_CAR(l)));

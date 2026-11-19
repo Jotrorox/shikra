@@ -730,7 +730,11 @@ static void emit_prim(ir_node *r, const char *dest, int drep, int ind) {
     if (r->u.prim.op == PI_CCALL) { need_ext = 1; assign(dest, drep, ccall(r, &erep), erep, ind, 0); return; }
     if (r->u.prim.op >= PI_rt_fx_add && r->u.prim.op < NPRIMS) {
         need_ext = 1;
-        if (r->u.prim.op == PI_rt_assume_failed && unsafe_) { out(ind, "RT_UNREACHABLE();"); return; } /* trusted (spec §10) */
+        if (r->u.prim.op == PI_rt_assume_failed && unsafe_) { /* trusted (spec §10) */
+            if (r->u.prim.args[0]->kind == IR_REF) out(ind, "(void)%s;", atom_as(r->u.prim.args[0], R_OBJ));
+            out(ind, "RT_UNREACHABLE();");
+            return;
+        }
         if (!(e = ext_special(r, &erep))) { e = prim_call(r); erep = R_OBJ; }
         assign(dest, drep, e, erep, ind, (p->flags & PF_PURE) != 0);
         return;
@@ -900,7 +904,13 @@ static void decl_term(ir_node *n) {
 static const char *proc_comment(ir_lambda *L) {
     obj name = L->name;
     const char *lib = L->lib ? L->lib->id : "main";
-    return fmt("/* %s: %s%s */", lib, cname_str(name), L->dispatch ? " (case-lambda clause)" : "");
+    const char *n = cname_str(name), *c;
+    if ((c = strstr(n, "*/"))) { /* a name containing star-slash (fx*|carry) must not end it */
+        char *d = arena_strdup(&compiler_arena, n), *q;
+        for (q = d; (q = strstr(q, "*/")); ) q[1] = '|';
+        n = d;
+    }
+    return fmt("/* %s: %s%s */", lib, n, L->dispatch ? " (case-lambda clause)" : "");
 }
 
 /* "obj v_x_1, obj v_y_2" (names) or "obj, obj" (prototype); "void" without parameters. */

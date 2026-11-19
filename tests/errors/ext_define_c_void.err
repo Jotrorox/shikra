@@ -1,0 +1,1 @@
+ext_define_c_void.scm:2:1: error: define-c: void is only allowed as the result type

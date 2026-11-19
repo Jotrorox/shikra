@@ -64,7 +64,7 @@ RT_FN obj rt_open_input_bytevector(obj bv) {
 }
 RT_FN obj rt_open_output_string(void) { return io_make(RT_PF_OUT | RT_PF_STRING, -1, 64, RT_FALSE); }
 RT_FN obj rt_open_output_bytevector(void) { return io_make(RT_PF_OUT | RT_PF_STRING | RT_PF_BINARY, -1, 64, RT_FALSE); }
-static int io_is(obj port, int flags) {
+static RT_UNUSED int io_is(obj port, int flags) {
     return rt_is_port(port) && (RT_HFLAGS(port) & (RT_PF_OUT | RT_PF_STRING | RT_PF_BINARY)) == flags;
 }
 RT_FN obj rt_get_output_string(obj port) {

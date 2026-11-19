@@ -386,7 +386,7 @@ static void comp_prim(cfun *f, obj x, int p, int tail) {
 static obj literal(obj x) {
     obj y = x;
     for (; rt_is_pair(y); y = RT_CDR(y)) literal(RT_CAR(y));
-    if (rt_is_string(y) || rt_is_vector(y) || rt_is_bytevector(y)) {
+    if (rt_is_string(y) || rt_is_vector(y) || rt_is_bytevector(y) || rt_is_type(y, RT_T_F64VECTOR)) {
         RT_SETFLAGS(y, RT_HFLAGS(y) | RT_F_RO);
         if (rt_is_vector(y)) {
             intptr_t i;

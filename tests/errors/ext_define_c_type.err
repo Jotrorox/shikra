@@ -1,0 +1,1 @@
+ext_define_c_type.scm:2:1: error: define-c: unknown argument type integer (int long double float bool char string pointer)

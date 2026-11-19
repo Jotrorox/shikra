@@ -1,0 +1,21 @@
+shikra> (import (shikra ffi) (shikra flonum) (shikra fixnum) (shikra f64vector) (shikra assume))
+shikra> (define-c c-hypot "hypot" (double double) double)
+shikra> (c-hypot 3.0 4.0)
+5.0
+shikra> (fl+ (c-hypot 5.0 12.0) 0.5)
+13.5
+shikra> (define-c c-sqrtf "sqrtf" (float) float)
+error: define-c: signature of c-sqrtf not supported in the interpreter (at most 6 integer, character, string or pointer arguments and 8 double arguments, no float); use shikra build
+shikra> (define-c c-nope "shikra_no_such_function" (int) int)
+error: define-c: C function shikra_no_such_function is not available in the interpreter (only functions of the running process, such as the C library's, are); use shikra build
+shikra> (define-c c-seven "fmax" (double double double double double double double double double) double)
+error: define-c: signature of c-seven not supported in the interpreter (at most 6 integer, character, string or pointer arguments and 8 double arguments, no float); use shikra build
+shikra> (fx+ fx-greatest 1)
+Error: fx+: fixnum overflow 4611686018427387903 1
+shikra> (assume (fx<? 2 1) "not so")
+Error: assume: assumption violated "not so"
+shikra> #f64(1 2 3)
+#f64(1.0 2.0 3.0)
+shikra> (f64vector-ref (f64vector 1.5) 0)
+1.5
+shikra> 

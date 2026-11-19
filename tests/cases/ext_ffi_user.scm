@@ -1,0 +1,18 @@
+;; define-c with a user C file (ext_ffi_user.flags: --link tests/cases/inc/ffi_user.c): every type,
+;; float, void, NULL strings, mixed argument orders, values flowing into flonum code unboxed.
+(import (scheme base) (scheme write) (shikra ffi) (shikra flonum))
+(define-c poly "user_poly" (double double double double) double)
+(define-c sum "user_sum" (int long char bool) long)
+(define-c halve "user_halve" (float) float)
+(define-c even? "user_even" (long) bool)
+(define-c greet "user_greet" (string) string)
+(define-c null "user_null" () string)
+(define-c next "user_next" (char) char)
+(define-c store! "user_store" (int) void)
+(define-c load "user_load" () int)
+(define-c many "user_many" (double int double int double int double) double)
+(write (list (poly 2.0 1.0 2.0 3.0) (sum 1 2 #\A #t) (halve 3.0) (even? 10) (even? 7) (greet "world") (null) (next #\a)))
+(newline)
+(store! 65)
+(write (list (load) (many 1.0 2 3.0 4 5.0 6 7.0) (fl+ (poly 1.0 1.0 1.0 1.0) 0.5)))
+(newline)

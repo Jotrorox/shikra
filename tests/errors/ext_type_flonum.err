@@ -1,0 +1,1 @@
+ext_type_flonum.scm:2:1: error: fl+: expected a flonum, but the argument is always a fixnum

@@ -16,7 +16,7 @@
 
 /* ---- fixnums: tagged words (n << 1) in intptr_t ---- */
 RT_INLINE void rt_fxchk(obj x, const char *who) { RT_SAFE(if (RT_UNLIKELY(!rt_is_fix(x))) rt_type_error(who, "fixnum", x);) (void)x; (void)who; }
-static RT_NORETURN void ext_ovf1(const char *who, intptr_t a) { rt_error(who, "fixnum overflow", rt_cons(RT_O(a), RT_NIL)); }
+static RT_UNUSED RT_NORETURN void ext_ovf1(const char *who, intptr_t a) { rt_error(who, "fixnum overflow", rt_cons(RT_O(a), RT_NIL)); }
 #ifdef RT_UNSAFE
 #define EXT_OVF(c, call) ((void)(c))
 #else
@@ -29,6 +29,7 @@ RT_INLINE RT_ALWAYS intptr_t rt_fxmulw(intptr_t a, intptr_t b, const char *w) { 
 RT_INLINE intptr_t rt_fxnegw(intptr_t a, const char *w) { EXT_OVF(a == EXT_FXMIN, ext_ovf1(w, a)); (void)w; return (intptr_t)(0 - (uintptr_t)a); }
 RT_INLINE intptr_t rt_fxabsw(intptr_t a, const char *w) { return a < 0 ? rt_fxnegw(a, w) : a; }
 RT_INLINE intptr_t rt_fxquow(intptr_t a, intptr_t b, const char *w) {
+    (void)w;
     RT_SAFE(if (RT_UNLIKELY(b == 0)) rt_error(w, "division by zero", rt_cons(RT_O(a), rt_cons(RT_O(b), RT_NIL)));)
     EXT_OVF(a == EXT_FXMIN && b == (intptr_t)RT_FIX(-1), rt_fx_overflow(w, RT_O(a), RT_O(b)));
     return (intptr_t)RT_FIX(RT_FIXVAL(a) / RT_FIXVAL(b));
@@ -418,8 +419,8 @@ RT_FN obj rt_fl_fast_fma(void) {
 }
 
 /* ---- f64vectors ---- */
-RT_INLINE void rt_f64chk(obj v, const char *who) { RT_CHECK(rt_is_type(v, RT_T_F64VECTOR), who, "f64vector", v); }
-RT_INLINE double rt_f64num(obj x, const char *who) { RT_CHECK(rt_is_num(x), who, "number", x); return rt_num_dbl(x); }
+RT_INLINE void rt_f64chk(obj v, const char *who) { RT_CHECK(rt_is_type(v, RT_T_F64VECTOR), who, "f64vector", v); (void)v; (void)who; }
+RT_INLINE double rt_f64num(obj x, const char *who) { RT_CHECK(rt_is_num(x), who, "number", x); (void)who; return rt_num_dbl(x); }
 RT_INLINE double rt_f64ref(obj v, intptr_t k) { /* proven f64vector and fixnum index (tagged) */
     RT_INDEX((uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v) >> 3, "f64vector-ref", RT_O(k));
     return RT_F64(v)[RT_FIXVAL(k)];
@@ -479,21 +480,22 @@ RT_FN obj rt_list_to_f64vector(obj l) {
 RT_FN obj rt_assume_failed(obj messages) { rt_error("assume", "assumption violated", messages); }
 
 /* ---- define-c (shikra ffi): argument and result conversions, checked unless --unsafe ---- */
-static RT_NORETURN void ext_range(const char *who, const char *what, obj x) { rt_error(who, what, rt_cons(x, RT_NIL)); }
+static RT_UNUSED RT_NORETURN void ext_range(const char *who, const char *what, obj x) { rt_error(who, what, rt_cons(x, RT_NIL)); }
 RT_FN long rt_ffi_long(obj x, const char *who) { rt_fxchk(x, who); return (long)RT_FIXVAL(x); }
 RT_FN int rt_ffi_int(obj x, const char *who) {
     rt_fxchk(x, who);
     RT_SAFE(if (RT_FIXVAL(x) < -2147483647 - 1 || RT_FIXVAL(x) > 2147483647) ext_range(who, "argument out of range for int", x);)
     return (int)RT_FIXVAL(x);
 }
-RT_FN double rt_ffi_dbl(obj x, const char *who) { RT_CHECK(rt_is_num(x), who, "number", x); return rt_num_dbl(x); }
+RT_FN double rt_ffi_dbl(obj x, const char *who) { RT_CHECK(rt_is_num(x), who, "number", x); (void)who; return rt_num_dbl(x); }
 RT_FN char rt_ffi_char(obj x, const char *who) {
     RT_CHECK(rt_is_char(x), who, "character", x);
+    (void)who;
     RT_SAFE(if (RT_CHARVAL(x) > 255) ext_range(who, "argument out of range for char", x);)
     return (char)RT_CHARVAL(x);
 }
-RT_FN int rt_ffi_bool(obj x, const char *who) { RT_CHECK(x == RT_TRUE || x == RT_FALSE, who, "boolean", x); return x == RT_TRUE; }
-RT_FN const char *rt_ffi_str(obj x, const char *who) { RT_CHECK(rt_is_string(x), who, "string", x); return RT_STR(x)->buf; }
+RT_FN int rt_ffi_bool(obj x, const char *who) { RT_CHECK(x == RT_TRUE || x == RT_FALSE, who, "boolean", x); (void)who; return x == RT_TRUE; }
+RT_FN const char *rt_ffi_str(obj x, const char *who) { RT_CHECK(rt_is_string(x), who, "string", x); (void)who; return RT_STR(x)->buf; }
 RT_FN void *rt_ffi_ptr(obj x, const char *who) {
     rt_fxchk(x, who);
     RT_SAFE(if (RT_FIXVAL(x) < 0) ext_range(who, "argument out of range for pointer", x);)
