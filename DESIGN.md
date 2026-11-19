@@ -187,7 +187,8 @@ text; they import the hidden library of %primitives.
   complex), boxes for variables that are both captured and assigned, → IR.
 - **Analyze / Optimize** (M4): one monovariant whole-program flow analysis
   (procedures per call site, types per variable; lattice in spec §5.2), then
-  the optimizations of spec §5 pass 6.
+  the optimizations of spec §5 pass 6. M4-1 built the structural passes (opt.c; "M4-1 as
+  built"): the analysis of M4-2 plugs in after them, before `ir_finish`.
 - **Emit**: one C file (see §3), then `cc`. Until M4 the backend is naive:
   every procedure has the uniform signature and every primitive is checked.
 - Closed world: a top-level definition never `set!` is a constant; `set!` on an
@@ -240,14 +241,11 @@ engines and the outputs must be identical.
   pairs sit in one array and `set-car!`/`set-cdr!` raise "expected mutable pair" for them.
   In the interpreter (M3) quoted pairs are immortal heap pairs, and `RT_LITPAIR` in tool mode
   asks the collector whether a pair is immortal, so mutation is detected there too.)
-- *Tree shaking spares user code* (§9 "anything unreachable ... is never emitted"):
-  every form of the program and of user libraries is compiled so that the middle end's
-  diagnostics (arity of known calls) cover all user code; only built-in library code is
-  shaken. The C compiler and linker still drop unreferenced static functions. M4's
-  shaker may drop unused user definitions after diagnostics.
-- *No trampoline fallback yet* (§8.1): without `musttail` (`RT_MUSTTAIL` empty) tail
-  calls rely on the C compiler's sibling-call optimisation, which `-O2` performs for these
-  same-signature calls but `-O0` does not. TODO(M4).
+- (Resolved in M4-1: tree shaking covers user code. All user code is still normalized, so the
+  middle end's diagnostics cover it, and the optimizer then drops what nothing reachable uses;
+  unused user definitions and imports are warnings.)
+- (Resolved in M4-1: the trampoline fallback exists, `RT_TAIL`/`RT_NT` in rt.h, forced with the
+  hidden `--no-musttail`.)
 - *The receiver of a tier-2 `call/cc` is not called in tail position* (R7RS 3.5 requires
   it; M1 part A): `rt_call_cc`'s C frame holds the jump target while the receiver runs, so a
   loop that recurses through `call/cc` grows the C stack. Tier-1 sites in tail position are
@@ -649,7 +647,7 @@ procedure.
 **Known gaps / next steps**
 - (M1 items done in parts A and B.) `command-line` and the other optional libraries
   (`(scheme char)` ...) are M5.
-- M4 (performance): every variable is a C local of type `obj`, every primitive is the
+- (M4-1 removed most of the following; see "M4-1 as built".) M4 (performance): every variable is a C local of type `obj`, every primitive is the
   checked runtime call, named-let loops are separate C functions entered by a direct
   call (not contified), closures for local procedures with free variables are
   allocated, `values` to an unknown receiver boxes (literal receivers: M1 part A).
@@ -806,7 +804,8 @@ procedure, `(string->number "#x4000000000000001/3e1")`, or the R7RS 6.10 re-entr
 **Known gaps**
 - (Done in M2: the 10^6 raise/catch loop of exceptions.scm peaks at 2.6 MB RSS instead of
   130 MB under bump.)
-- Tier 2 capture costs an `rt_call_cc` frame, two closures, and a rest list per invocation.
+- (M4-1: a tier-2 capture now costs the `rt_call_cc` frame on the C stack and a 3-word `k`; a
+  literal receiver lives on the C stack. See "M4-1 as built", continuations.)
 - An after thunk that escapes during `travel-to!` abandons the rest of the original jump
   (the winders list is consistent at every step; R7RS leaves this unspecified).
 - (Done in M1 part B: flushing open ports at exit, `call-with-port`, binary/bytevector ports.)
@@ -1516,3 +1515,238 @@ data forever (known gap, fixed). (4) Writing symbols like `+i`, `-i`, `+NaN.0abc
 - `char-ready?`, `read-line` etc. on file ports are unchanged from M1; there is no `O_EXCL`,
   append mode, or directory listing (not R7RS).
 - Tier-3 continuations remain (the pinned failure in tests/r7rs/expected/base.compiled).
+
+### M4-1 (the structural optimizer)
+
+**File map** (compiler 4,770 → ~6,700 lines: `opt.c` 1,600 new; normalize.c +160, emit.c +100,
+front end +80, ir.h +45; runtime +45; library +25)
+
+```
+src/opt.c         the passes over the IR: census, recursion SCCs, simplify (propagation,
+                  folding, dead code, join points, inlining), contify, unbox, merging of
+                  top-level mutual tail recursion, tier-1 verification, ir_finish (escapes,
+                  tail-call graph, direct signatures, lambda lifting, closure layout)
+src/normalize.c   optimistic tier-1 sites, first top-level forms (undefined checks), unused-
+                  definition warnings, the rounds driver ir_build, shared constructors
+src/emit.c        direct signatures, parallel jumps, RT_TAIL/RT_DTAIL/RT_NT, stack receivers
+src/rt.h, rt_core.c  trampoline, tier-2 k walks the winders (rt_engine_travel), RT_ALWAYS
+src/library.c, expand.c, front.h   unused-import tracking, cwarning, global.nowarn
+tests/shape/      structural checks of the emitted C;  tests/warnings/  expected warnings
+tests/fuzz.sh, tests/fuzz/gen.scm  randomized differential tester (not in make test)
+```
+
+**Pipeline** (`ir_build`): rewrite_aliases, tree shaking on core forms (roots unchanged: all
+user code, impure built-in forms, raise), first top-level forms, unused-definition warnings;
+then rounds of { normalize → `ir_optimize` → `ir_tier1_failures` }: a round whose optimistic
+tier-1 sites failed rebuilds the IR from the core forms with those sites demoted to tier 2
+(each round demotes at least one; in practice at most one extra round). Then `ir_finish`, C
+names, def/use counts. **M4-2's analysis plugs in after `ir_optimize` (or as one more pass
+inside its round loop) and before `ir_finish`**; `ir_finish` must stay last (it changes
+signatures and removes closure creations).
+
+`ir_optimize` runs rounds (3 at -O0, 6 at -Os, 8 at -O2) of
+1. **census**: liveness by a worklist from the roots (main, `keep` procedures: raise, travel-to!,
+   `--keep`), through creation nodes, known calls and references to known procedures; resets
+   and recomputes `nrefs`, `nsets`, `ncalls` (references that are the callee of a known
+   call), `njumps`, the `owner` of every binder and join point, the `parent` of procedures; a
+   let-bound lambda in an unassigned temporary becomes a known procedure. Procedures are never
+   unlinked during optimization (dead = not reached, or `dead` set); `ir_finish` filters.
+2. **recursion**: Tarjan SCCs over known calls, references to known procedures and creation
+   (a procedure "contains" the procedures it creates); `rec` = can reach itself. Copies
+   inherit `rec`.
+3. **global constants**: a top-level definition never `set!` whose value is a constant or a
+   known top-level procedure: unchecked references read it (`subst`); the store disappears
+   when nothing reads the global.
+4. **simplify** (one walk per procedure, nested lambdas at their creation, so a binding is seen
+   before its uses): substitution through `ir_var.subst` (never for checked reads); calls whose
+   callee became a known procedure get `known` (only with a matching argument count: a wrong
+   count stays the run-time arity error); folding of pure primitives of constants (fixnum
+   `+ - *` without overflow, comparisons, `eq?`, `eqv?` except flonums, `car`/`cdr` of a
+   constant pair, type predicates, `char->integer`) -- never an application that would raise;
+   `if` on a constant; dead bindings (atoms, lambdas, primitives without PF_FAIL/PF_EFFECT,
+   stores to unread globals); unused FIX members; join points without jumps; **a join point
+   with one jump** (not an optimistic tier-1 continuation) moves to the jump, its parameters
+   becoming lets; **inlining** (below).
+5. **contify** (below), 6. **unbox**: a box whose every use is `%box-ref`/`%box-set!` in the
+   procedure that binds it becomes an assigned C local (`V_ASSIGNED`).
+Then once: **merging** of top-level mutual tail recursion (below), census.
+
+Counts may be stale within a round but never too low: every constructor that adds a
+reference or a jump increments (`mk_ref`, `mk_jump`), so "unused" and "one jump" are safe.
+
+**Inlining.** A known call (plain procedure or case-lambda clause, `ctl` none) is inlined when
+the callee is live, not `rec` (nor its dispatcher), not the procedure being simplified, and
+either its size (nodes, nested procedures included) is at most `lim_small` (-O0 6, -Os 12, -O2
+40) and the growth budget allows (-O2: total program size + 20,000 nodes; -Os: 1/4 + 2,000;
+-O0: 1/8 + 500), or it is the only reference to the procedure (size up to 4,000; not at -O0).
+The copy (`cp_*`: fresh variables, join points and procedures, procedures of one FIX in two
+steps so they can call each other) is entered through a join point holding the parameters
+(the callee's loop, if it has one); in value position the callee's returns jump to a join
+point whose parameter is the call's variable and whose body is the rest of the caller, and its
+tail calls become calls followed by that jump. Rest parameters are consed at the call. The
+copy is simplified at once (so wrappers of wrappers dissolve in one round). This dissolves the
+library: `(car x)` is `%car`, `(+ a b c)` nested `%+` (explicit 3/4-argument clauses), cxr
+chains, `(display x)` the clause applying `%display` to `(current-output-port)`, record
+procedures the record primitives, and `for-each`/`map`/`vector-for-each`/`assoc` with a lambda
+become loops calling the lambda's inlined body. **-O0** inlines only procedures of at most 6
+nodes (wrappers), does not inline the only call of large procedures, and runs 3 rounds;
+everything else (contification, constants, direct signatures, tree shaking) runs at every level.
+
+**Contification** (spec §8.1). Groups: the candidate members of one FIX, a let-bound procedure,
+or a top-level procedure. Candidate: live plain procedure (no rest, not a clause, not kept)
+whose every reference is a known call and every call site was found. The group is contified
+into procedure Q when every call from inside the group is a tail call (in the member's own
+body, not a nested procedure) and every call from outside is in Q, Q not inside the group, and
+either all those calls are tail calls (the members' entries become join points of Q, placed
+where the group was bound if that is in Q, else at Q's entry) or there is exactly one (then
+the join points go to that site; for a non-tail site the members' returns and tail calls
+continue at a new join point holding the rest of Q). Member bodies move (they are not copied);
+internal calls become jumps; the binding disappears. Sites moved by an earlier contification in
+the same pass are retried next round (`s->in->dead`, slot validity checks). This turns named
+let, do, local `define` loops and state machines (`even?`/`odd?`, lexers) into labels of one C
+function, and helpers called from one place into its code.
+
+**Merging of top-level mutual tail recursion.** Top-level known procedures that never escape
+(every reference a known call) and form a cycle of tail calls among themselves (Tarjan on that
+graph) become one procedure `<first>-group (which a...)`: its body is the members' entries as
+join points, preceded by a dispatch on `which`; tail calls inside the group jump; every other
+call passes the member's selector and pads the arguments with `#f`. What still uses `musttail`:
+tail calls to unknown procedures, to escaping or case-lambda procedures, and cycles that pass
+through them (`apply`, continuation-passing closures, procedures stored in data).
+
+**Calling conventions** (the rule that keeps tail calls proper). After optimization `ir_finish`
+computes `escapes` (the closure may reach unknown code: kept, or a reference that is not the
+callee of a known call, or a case-lambda dispatcher that does) and the **tail-call graph**:
+known tail calls are edges to the callee; unknown tail calls (and `%apply`/`%call-with-values`
+in tail position) are edges to a node *unknown* with edges to every escaping procedure;
+dispatchers have edges to their clauses (`rt_call_cc` calls from C: no edge). A procedure is
+**direct** -- C signature `obj f(params...)`, no self, no argc, no arity check -- when it does not
+escape, is not a case-lambda dispatcher or clause, has at most 64 parameters and is on **no cycle
+of that graph**. Calls into and out of a direct procedure are plain C calls (`RT_DTAIL`): since
+no cycle passes through it, a chain of tail calls traverses those plain calls a bounded number
+of times, so the C stack stays bounded. Everything else keeps the uniform signature and
+`RT_TAIL` (`musttail`). fib, tak, ack and local non-tail recursive procedures are direct;
+tests/cases/tail_calls.scm, control_tail.scm and lazy_space.scm (10^6-10^7 iterations; the
+last under a 256 KB stack) check that tail calls stay proper, also under the trampoline.
+Direct procedures drop unused parameters (unless they loop), take a rest list built by the
+caller, and get their free variables as extra parameters (**lambda lifting**: free variables to
+a fixpoint through calls of other direct procedures, renamed innermost first; callers pass
+them, nested closures capture them as needed); their closure creations disappear. Uniform
+procedures check `argc` only when they escape. A known call to a static non-escaping uniform
+procedure passes `#f` as `self` (`ir_call_self`).
+
+**Tier 1, widened** (spec §8.2). A `(call/cc (lambda (k) body))` site of base's `call/cc` where
+`k` is only called (never a value, never `set!`) is *exact* (as before) when no call of `k` is
+inside a lambda, *optimistic* otherwise: it is normalized as tier 1 with a join point for `k`
+(`ir_join.site`), and calls of `k` inside lambdas become jumps to that join point from another
+procedure. After optimization `ir_tier1_failures` requires every jump to such a join point to
+be in the C function that declares it and no `%set-winders!`/`%set-handlers!` in the region
+(inlined dynamic-wind, parameterize, with-exception-handler would be skipped by the jump);
+failing sites are rebuilt as tier 2 (the whole IR is rebuilt from the core forms). So a `k`
+called from a lambda given to an inlined `for-each`, or from a contified loop, costs nothing.
+Any other jump to a join point from another procedure is an internal error.
+
+**Tier 2, cheaper.** A compiled continuation now walks the winders itself (core_cont_code calls
+the generated `rt_engine_travel`, the library's `travel-to!`, when the winders differ, then
+re-checks that it is still live), so every non-tier-1 call of base's `call/cc` in compiled code is
+`%call/cc` directly: no escape procedure, no rest list, no `apply`. A capture is the
+`rt_call_cc` frame on the C stack (jump buffer, saved lists) plus a 3-word `k`; a literal
+receiver used only by that `%call/cc` is a closure on the C stack (`stack_closure` in emit.c).
+ctak 2.76 s → 1.35 s, fibc 1.62 → 0.77 (baseline → M4-1). The interpreter keeps the library's
+escape procedure. The dead-continuation error message is unchanged.
+
+**Undefined checks and constants.** `first_forms` walks the top-level forms in order: a known
+procedure first becomes reachable at the first form that references it (transitively through
+procedures); its reads of globals whose definition comes earlier are unchecked. Together with
+global constants this removes `rt_chkdef` from nearly all global reads (record type
+descriptors, top-level vectors).
+
+**Tree shaking and warnings** (spec §9, §11.3). User code is normalized whole (diagnostics), then
+the census keeps only what the roots reach; procedures inlined everywhere or contified vanish.
+Warnings (`file:line:col: warning: ...` on stderr, never failing a command, silenced by `-w`):
+`unused definition NAME` for a definition of the program or of a user library not reachable from
+expressions, impure right-hand sides and user-library exports (record procedures and hygienically
+renamed names are exempt: `global.nowarn`); `unused import SPEC` for an import set of the program
+or a user library none of whose bindings was ever looked up (expand.c's `lookup_in` notes uses).
+The REPL's `,c NAME` runs `emit-c -w --keep NAME`: the definition is a root, kept as its own
+(uniform) function and shown, even if every call to it is inlined.
+
+**Trampoline** (spec §8.1). Without `__attribute__((musttail))`, or with `SHIKRA_NO_MUSTTAIL`
+(hidden `--no-musttail`), `RT_TAIL(f, ...)` stores the callee and its arguments in globals and
+returns `RT_TRAMP` (0x707, not a Scheme value); every non-tail call is `RT_NT(call)`, which calls
+pending callees until a real value returns; `rt_call_cc`, `rt_program_main` and
+`rt_engine_raise` use it too. Arguments beyond a3 stay in `rt_args` meanwhile. Direct
+procedures may return `RT_TRAMP` from their tail calls; their callers' `RT_NT` runs it.
+
+**IR changes.** `IR_LETJ` declares a chain of join points (`ir_join.next`, mutually recursive);
+`ir_join.site` (optimistic tier-1), `state`; `ir_var.ncalls`, `subst`, `mark`; `ir_lambda.dead`,
+`keep`, `escapes`, `direct`, scratch fields; `ir_program.travel`, `opt`; `ir_build` takes
+`ir_opts` (level, warnings, `--keep` names). Invariants kept by every rewrite: unique binders,
+ANF, join points jumped to only from their own procedure (after `ir_tier1_failures`),
+`call.known` is a live procedure whose arity matches, `ir_var.type` copied with its variable.
+
+**What M4-2 can rely on.** After `ir_optimize`: wrappers are gone (primitives appear directly,
+with their prims.def type letters and PF flags), loops are join points (their parameters are
+the loop variables), every call site of a non-escaping procedure is known and listed by
+`collect_sites`, `ir_var.known`/`call.known` are exact, `type` is 0 everywhere and is copied by
+inlining. Census gives owners and counts. Direct signatures and lifting happen later, so the
+analysis sees closures and their free variables as written; private conventions (unboxed
+arguments, results in registers) extend `direct` in `ir_finish`/emit.c.
+
+**Debugging aids** (environment of the `shikra` tool): `SHIKRA_TRACE=1` prints every inlining,
+contification and merge; `SHIKRA_CHECK=1` verifies after each pass that every term chain ends
+in a tail; `SHIKRA_ROUNDS=n` limits rounds; `SHIKRA_NOINLINE`, `SHIKRA_NOCONTIFY`,
+`SHIKRA_NOUNBOX`, `SHIKRA_NODIRECT` switch passes off; `SHIKRA_CMAX=n` stops after n
+contifications (bisecting).
+
+**Tests.** tests/run.sh: compiled cases and the compiled r7rs runs at -O2, -O0 (64 MB stack) and
+-Os; `tramp` (every case and compiled r7rs file at -O0 with `--no-musttail`); `shape` (8 programs,
+directives on the emitted C: spec §12 `sum-to` loop in one function with no call and no closure,
+`for-each` with an assigning lambda (no closure, no box, no unknown call), record accessor,
+nested named lets, local and top-level mutual recursion, tier-1 escape from a `for-each`, cxr /
+variadic arithmetic / comparisons / `vector-fill!`); tests/warnings (expected stderr, and `-w`);
+tests/cases/optimizer.scm; `gcc` mode (not in `all`). tests/fuzz.sh N SEED: random programs
+(top-level procedures over integers with named lets, closures with `set!`, `for-each`/`map`/
+`apply` with lambdas, call/cc escapes from loops and lambdas, letrec state machines,
+case-lambda, vectors, printing inside expressions, non-tail local recursion) compared between
+the interpreter and -O0, -O2, -Os and the trampoline.
+
+**Numbers** (Apple M5, macOS 27.3, Apple clang; r7rs-benchmarks as in bench/README.md).
+- Benchmarks, safe, 53 runnable, all `ok` at -O2 and with `--unsafe` (CSV `m4-1-20261119-0955`,
+  `m4-1-unsafe-20261119-0957`; RESULTS.md). Geometric mean of Shikra/Chez **0.91** (baseline
+  1.36; the M5 tree without the optimizer, `m4-0` on a quiet machine, 1.05), Shikra/Gambit
+  **0.83** (baseline 1.24, m4-0 0.96); unsafe/Chez-unsafe 0.98 (baseline 1.47). Against m4-0,
+  M4-1 is 0.87x in geometric mean: graphs 0.28x, conform 0.47x, peval 0.53x, matrix 0.56x,
+  lattice 0.56x, earley 0.57x, ctak/fibc ~0.66x; slower on tiny recursive benchmarks where clang
+  generates different code for the same work (tak 1.33x, fibfp 1.22x, cpstak 1.22x, takl 1.18x;
+  timings on this machine vary by ±15%: fib is 1.46-1.84 s depending on whether clang inlines
+  the slow path, rt.h `RT_ALWAYS`). equal is 2.4x slower than the baseline already in m4-0 (the M5
+  `equal?` with cycle detection), unchanged by M4-1.
+- Binary sizes (bytes, -O2 / -Os): hello world 69,920 / 70,416 (before: 70,400 / 70,880); fib
+  70,224 / 70,576 (70,832 / 71,504); nucleic, the largest benchmark, 494,144 / 482,448
+  (539,480 at -O2 before).
+- Compile time of tests/r7rs/base.scm (6,000 lines with its libraries): `emit-c` 0.08 s → 0.12 s;
+  `build -O2` 1.7 s → 2.1 s (cc dominates); `build -O0` 0.67 s.
+
+**Known gaps / weaker than specified**
+- Tier-1 verification failures rebuild the whole IR (one extra round, rarely two).
+- Contification needs all outside calls in tail position or a single call site; a procedure
+  called non-tail from two sites with the same continuation (both branches of an `if` in value
+  position) stays a procedure (direct, so a plain C call).
+- No jump threading through a join point whose body tests its parameter (`(if (not x) ...)`
+  materialises a boolean; the C compiler threads it). FIX members referenced only by each other
+  but unreachable are kept until nothing references them at all.
+- Parameter objects (`current-output-port`) are closures stored in globals: `(display x)` still
+  makes an unknown call to read the port (M4-2: the analysis knows the global's value).
+- Hello world still links the collector (the library's `make-parameter` allocates) and generic
+  `display` (M4-2/M4-3, type-directed specialisation and pay-for-use).
+- Mutual recursion through procedures that escape (stored, passed as values) still uses
+  `musttail`; so do cycles through case-lambda clauses.
+- `vector-map` on one vector collects into a list before building the vector (re-entry safety);
+  `string-for-each`/`string-map` still go through `string->list` (UTF-8 indexing is O(n)).
+- Optimistic tier-1 sites are rebuilt if the region holds an inlined winders/handlers change even
+  when the jump does not cross it (conservative).
+
+**Deviations recorded**: none new. Two entries of §10 are resolved (tree shaking spares user
+code; no trampoline). The front end now notes every identifier lookup in user libraries for
+the unused-import warning (`front_note_use`), which the REPL ignores.

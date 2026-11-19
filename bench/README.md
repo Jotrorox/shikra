@@ -46,7 +46,10 @@ default 600), `-l LABEL` series name (env `LABEL`, default the implementation
 name). `SHIKRA_FLAGS="--gc=bump"` adds flags to `shikra build`.
 
 The pre-optimizer baseline is recorded under the labels `shikra-baseline` and
-`shikra-baseline-unsafe` (`-l shikra-baseline`). `report.sh` uses the newest
+`shikra-baseline-unsafe` (`-l shikra-baseline`). Later series: `m4-0` (commit 7e377f7, the
+M5 libraries without the optimizer, run on a quiet machine: the reference for what M4-1
+changed) and `m4-1` / `m4-1-unsafe` (the structural optimizer, DESIGN.md "M4-1 as built");
+RESULTS.md is generated with `SHIKRA_LABEL=m4-1 SHIKRA_UNSAFE_LABEL=m4-1-unsafe sh bench/report.sh`. `report.sh` uses the newest
 `shikra`/`shikra-unsafe` CSVs for the Shikra columns and, once those exist, adds
 the baseline as an extra column with a current/baseline ratio.
 
