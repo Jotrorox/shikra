@@ -15,7 +15,7 @@ static RT_UNUSED obj core_argbuf[RT_ARGBUF];
 static RT_UNUSED intptr_t core_argcap = RT_ARGBUF;
 RT_VAR obj *rt_args = core_argbuf;
 RT_VAR obj rt_winders = RT_NIL, rt_handlers = RT_NIL;
-static RT_UNUSED obj core_symtab; /* vector, open addressing; #f = empty slot */
+static RT_UNUSED obj *core_symtab, *core_symend; /* open addressing; 0 = empty slot */
 static RT_UNUSED intptr_t core_symcount;
 
 RT_FN void rt_init(int argc, char **argv, void *stack_base) {
@@ -25,7 +25,7 @@ RT_FN void rt_init(int argc, char **argv, void *stack_base) {
      * on first use), so a program that never allocates links no collector (spec §9.1).
      * Every runtime global that holds an obj is a root range: */
     rt_gc_init(stack_base);
-    rt_gc_add_roots(&core_symtab, &core_symtab + 1);
+    rt_gc_add_dynamic_roots(&core_symtab, &core_symend);
     rt_gc_add_roots(core_argbuf, core_argbuf + RT_ARGBUF);
     rt_gc_add_roots(&rt_winders, &rt_winders + 1);
     rt_gc_add_roots(&rt_handlers, &rt_handlers + 1);
@@ -265,43 +265,49 @@ RT_FN obj rt_make_symbol(obj name) {
     s->name = name;
     return RT_TAGPTR(s);
 }
+/* The table lives in OS memory, registered as a dynamic root range [core_symtab, core_symend):
+ * it must not be a heap object, because it may grow while the REPL front end allocates in
+ * unscanned immortal mode, and then the mortal symbols in it would not be marked. */
 static void core_symadd(obj sym);
 static obj *core_symslot(const char *s, size_t n) {
     intptr_t mask, i;
     if (!core_symtab) { /* first use: create the table and enter the program's static symbols */
-        core_symtab = rt_vector_n(256, RT_FALSE);
+        if (!(core_symtab = (obj *)rt_sys_mem(256 * sizeof(obj)))) rt_error(0, "out of memory", RT_NIL);
+        core_symend = core_symtab + 256;
 #if defined(SHIKRA_PROGRAM) && RT_NSTATIC_SYMS > 0
         for (mask = 0; mask < RT_NSTATIC_SYMS; mask++) core_symadd(rt_static_syms[mask]);
 #endif
     }
-    mask = RT_HLEN(core_symtab) - 1, i = (intptr_t)(core_hash(s, n) & (uintptr_t)mask);
+    mask = core_symend - core_symtab - 1, i = (intptr_t)(core_hash(s, n) & (uintptr_t)mask);
     for (;; i = (i + 1) & mask) {
-        obj *slot = &RT_VEC(core_symtab)[i], name;
-        if (*slot == RT_FALSE) return slot;
+        obj *slot = &core_symtab[i], name;
+        if (!*slot) return slot;
         name = RT_PTR(*slot, rt_symbol)->name;
         if ((size_t)RT_STR(name)->bytes == n && rt_memcmp(RT_STR(name)->buf, s, n) == 0) return slot;
     }
 }
 static void core_symadd(obj sym) {
     obj name = RT_PTR(sym, rt_symbol)->name;
-    if (2 * (core_symcount + 1) > RT_HLEN(core_symtab)) { /* grow and rehash */
-        obj old = core_symtab;
+    intptr_t cap = core_symend - core_symtab;
+    if (2 * (core_symcount + 1) > cap) { /* grow and rehash */
+        obj *old = core_symtab, *t;
         intptr_t i;
-        core_symtab = rt_vector_n(2 * RT_HLEN(old), RT_FALSE);
-        for (i = 0; i < RT_HLEN(old); i++) {
-            obj s = RT_VEC(old)[i];
-            if (s != RT_FALSE) {
-                obj nm = RT_PTR(s, rt_symbol)->name;
-                *core_symslot(RT_STR(nm)->buf, (size_t)RT_STR(nm)->bytes) = s;
+        if (!(t = (obj *)rt_sys_mem(2 * (size_t)cap * sizeof(obj)))) rt_error(0, "out of memory", RT_NIL);
+        core_symtab = t;
+        core_symend = t + 2 * cap;
+        for (i = 0; i < cap; i++)
+            if (old[i]) {
+                obj nm = RT_PTR(old[i], rt_symbol)->name;
+                *core_symslot(RT_STR(nm)->buf, (size_t)RT_STR(nm)->bytes) = old[i];
             }
-        }
+        rt_sys_free(old, (size_t)cap * sizeof(obj));
     }
     *core_symslot(RT_STR(name)->buf, (size_t)RT_STR(name)->bytes) = sym;
     core_symcount++;
 }
 RT_FN obj rt_intern(const char *s, size_t n) {
     obj *slot = core_symslot(s, n), name, sym;
-    if (*slot != RT_FALSE) return *slot;
+    if (*slot) return *slot;
     name = rt_make_string_n(s, n);
     RT_SETFLAGS(name, RT_HFLAGS(name) | RT_F_RO);
     sym = rt_make_symbol(name);

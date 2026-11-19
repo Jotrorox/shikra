@@ -105,7 +105,8 @@ static obj vm_make_env(library *lib) {
 }
 /* (import (scheme base) ...): the REPL's default environment (DESIGN.md §11 M3). */
 obj vm_default_import_form(void) {
-    static const char *const defaults[] = {"base", "case-lambda", "cxr", "write", "process-context", "eval", "load", "repl", 0};
+    static const char *const defaults[] = {"base", "case-lambda", "char", "cxr", "file", "inexact", "lazy", "process-context",
+                                           "read", "time", "write", "eval", "load", "repl", 0};
     obj form = RT_NIL;
     int i;
     for (i = 0; defaults[i]; i++) form = rt_cons(L2(sym("scheme"), sym(defaults[i])), form);

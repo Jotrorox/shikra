@@ -106,9 +106,10 @@ static void load_cb(void *p) {
     run_unit(RT_NIL, 0);
 }
 static void default_cb(void *p) {
-    obj form = vm_default_import_form();
+    obj form;
     (void)p;
-    rt_gc_set_immortal(IMM_PURE);
+    rt_gc_set_immortal(IMM_PURE); /* first: the recorded (unscanned) list points to the form */
+    form = vm_default_import_form();
     top = front_repl_new();
     vm_interaction = top;
     front_repl_import(top, form);
