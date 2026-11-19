@@ -1,5 +1,5 @@
 #!/bin/sh
-# tests/run.sh [all|reader|unit|amalg|expand|compiled|interp|stress]   (DESIGN.md §9)
+# tests/run.sh [all|reader|unit|amalg|expand|compiled|r7rs|interp|stress]   (DESIGN.md §9)
 #   reader    tests/reader/NAME.scm: `shikra debug-read` output must equal NAME.out and
 #             read back to itself; or, with NAME.err, fail with stderr containing it;
 #             plus: every tests/r7rs/*.scm and chibi/*.sld must read without error
@@ -7,14 +7,19 @@
 #   amalg     program-mode self-check: rt.h + stand-in program + rt_*.c as ONE TU with
 #             SHIKRA_PROGRAM, -Wall -Wextra -Werror; output must match
 #   compiled  tests/cases/NAME.scm built with `shikra build`, stdout == NAME.out,
-#             exit status == NAME.exit (default 0), stderr contains NAME.err if present;
+#             exit status == NAME.exit (default 0), stderr contains NAME.err if present,
+#             stdin is NAME.in if present (else /dev/null);
 #             the generated C must compile with -Wall -Wextra -Werror;
 #             tests/errors/NAME.scm: `shikra check` must fail with stderr containing NAME.err
 #   expand    tests/expand/NAME.scm: the program's core forms as `shikra debug-expand`
 #             prints them (renaming stripped, as the REPL's ,expand) must equal NAME.out
+#   r7rs      the adapted R7RS suite (tests/r7rs/README.md): each FILE.scm listed in
+#             r7rs_files below, under each engine in r7rs_engines; the summary line and the
+#             list of failing tests must equal tests/r7rs/expected/FILE.ENGINE (so known
+#             failures are pinned and an unexpected pass is flagged too)
 #   interp    tests/cases under the REPL interpreter (M3; skeleton)
 #   stress    tests/cases built with --gc-stress, run with SHIKRA_GC_STRESS=1 (M2; skeleton)
-# `all` runs reader, unit, amalg and compiled; interp (M3) and stress (M2) are reported as
+# `all` runs reader, unit, amalg, expand, compiled and r7rs; interp (M3) and stress (M2) are reported as
 # skipped until their milestones. Exit status is non-zero if anything failed.
 set -u
 cd "$(dirname "$0")/.." || exit 2
@@ -85,11 +90,13 @@ run_cases() {
         base=${f%.scm}
         want_exit=0
         [ -f "$base.exit" ] && want_exit=$(cat "$base.exit")
+        in=/dev/null
+        [ -f "$base.in" ] && in=$base.in
         case $mode in
-        compiled) $SHIKRA build "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
+        compiled) $SHIKRA build "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
         stress) $SHIKRA build --gc-stress "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 &&
-            SHIKRA_GC_STRESS=1 "$TMP/prog" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
-        interp) $SHIKRA repl "$f" < /dev/null > "$TMP/c.out" 2> "$TMP/c.err" ;;
+            SHIKRA_GC_STRESS=1 "$TMP/prog" < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
+        interp) $SHIKRA repl "$f" < "$in" > "$TMP/c.out" 2> "$TMP/c.err" ;;
         esac
         st=$?
         if [ "$st" = "$want_exit" ] && cmp -s "$TMP/c.out" "$base.out" &&
@@ -111,6 +118,39 @@ run_cases() {
     fi
 }
 
+# The R7RS suite (tests/r7rs). Later milestones extend these lists: M3 adds the interp
+# engine, M5 the other library files (see tests/r7rs/README.md for which file gates what).
+r7rs_files="base"
+r7rs_engines="compiled"
+# r7rs_summary OUT: the final summary line, then each failing test's report (the
+# "FAIL: ..." / "ERROR: ..." line and its "expected" / "but got" lines), indentation stripped.
+r7rs_summary() {
+    tail -n 1 "$1"
+    grep -A 2 -E '^ *(FAIL|ERROR): ' "$1" | grep -v '^--$' | sed 's/^ *//'
+}
+run_r7rs() {
+    for name in $r7rs_files; do
+        f=tests/r7rs/$name.scm
+        for engine in $r7rs_engines; do
+            exp=tests/r7rs/expected/$name.$engine
+            case $engine in
+            compiled) $SHIKRA build "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
+                "$TMP/r7rs" < /dev/null > "$TMP/r7.out" 2>> "$TMP/r7.err" ;;
+            interp) $SHIKRA repl "$f" < /dev/null > "$TMP/r7.out" 2> "$TMP/r7.err" ;;
+            esac
+            r7rs_summary "$TMP/r7.out" > "$TMP/r7.sum"
+            if [ ! -f "$exp" ]; then bad "$f [$engine] (no expected results file $exp)"
+            elif cmp -s "$TMP/r7.sum" "$exp"; then ok
+            else bad "$f [$engine]"; head -5 "$TMP/r7.err"; diff "$exp" "$TMP/r7.sum" | head -20; fi
+            if [ "$engine" = compiled ]; then
+                if $SHIKRA emit-c "$f" > "$TMP/r7.c" 2> /dev/null &&
+                    $CC -std=c99 -Wall -Wextra -Werror -fsyntax-only "$TMP/r7.c" 2> "$TMP/cc.err"; then ok
+                else bad "$f (generated C is not warning-free)"; head -5 "$TMP/cc.err"; fi
+            fi
+        done
+    done
+}
+
 mode=${1:-all}
 case $mode in
 reader) run_reader ;;
@@ -118,10 +158,11 @@ unit) run_unit ;;
 amalg) run_amalg ;;
 expand) run_expand ;;
 compiled | interp | stress) run_cases "$mode" ;;
-all) run_reader; run_unit; run_amalg; run_expand; run_cases compiled
+r7rs) run_r7rs ;;
+all) run_reader; run_unit; run_amalg; run_expand; run_cases compiled; run_r7rs
     echo "interp: skipped (REPL interpreter arrives in M3)"
     echo "stress: skipped (collector arrives in M2)" ;;
-*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|interp|stress]"; exit 2 ;;
+*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|r7rs|interp|stress]"; exit 2 ;;
 esac
 echo "tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
