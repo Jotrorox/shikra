@@ -3009,6 +3009,12 @@ static const char *const e35[] = {
 "RT_INLINE RT_ALWAYS obj rt_fxaddb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_add_ovf(a, b, &r)) ? RT_O(r) : rt_add2(RT_O(a), RT_O(b)); }\n"
 "RT_INLINE RT_ALWAYS obj rt_fxsubb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_sub_ovf(a, b, &r)) ? RT_O(r) : rt_sub2(RT_O(a), RT_O(b)); }\n"
 "RT_INLINE RT_ALWAYS obj rt_fxmulb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_mul_ovf(RT_FIXVAL(a), b, &r)) ? RT_O(r) : rt_mul2(RT_O(a), RT_O(b)); }\n",
+"/* quotient of proven fixnums: fixnum-least / -1 promotes, with --unsafe too (semantics, not a check) */\n"
+"RT_INLINE RT_ALWAYS obj rt_fxquob(intptr_t a, intptr_t b) {\n"
+"    if (RT_UNLIKELY(b == (intptr_t)RT_FIX(-1) && a == (intptr_t)RT_FIX(RT_FIX_MIN))) return rt_quotient(RT_O(a), RT_O(b));\n"
+"    RT_SAFE(if (RT_UNLIKELY(b == 0)) return rt_quotient(RT_O(a), RT_O(b));)\n"
+"    return RT_O(RT_FIX(RT_FIXVAL(a) / RT_FIXVAL(b)));\n"
+"}\n"
 "/* A proven number as a double; flonum abs (sign bit, as rt_abs). */\n"
 "RT_INLINE double rt_num_dbl(obj x) { return rt_is_fix(x) ? (double)RT_FIXVAL(x) : rt_is_big(x) ? rt_big_to_double(x) : RT_FLO(x); }\n"
 "#else\n"
@@ -3054,7 +3060,7 @@ static const char *const e35[] = {
 "#define RT_PRINT_WRITE 1  /* rt_print modes: external representation (else display) */\n"
 "#define RT_PRINT_SHARED 2 /* datum labels for all shared pairs and vectors (else for cycles only) */\n"
 "#define RT_PRINT_SIMPLE 4 /* no datum labels */\n"
-"RT_FN void rt_print(obj x, obj port, int mode);\n"
+"RT_FN void rt_print(obj x, obj port, int mode);\n",
 "RT_FN obj rt_input_port_p(obj x);\n"
 "RT_FN obj rt_output_port_p(obj x);\n"
 "RT_FN obj rt_textual_port_p(obj x);\n"
@@ -3065,7 +3071,7 @@ static const char *const e35[] = {
 "RT_FN obj rt_peek_char(obj port);\n"
 "RT_FN obj rt_read_line(obj port);\n"
 "RT_FN obj rt_read_string(obj k, obj port);\n"
-"RT_FN obj rt_char_ready_p(obj port);\n",
+"RT_FN obj rt_char_ready_p(obj port);\n"
 "RT_FN obj rt_read_u8(obj port);\n"
 "RT_FN obj rt_peek_u8(obj port);\n"
 "RT_FN obj rt_u8_ready_p(obj port);\n"
@@ -3118,12 +3124,12 @@ static const char *const e35[] = {
 "RT_INLINE obj rt_null_p(obj x) { return RT_BOOL(x == RT_NIL); }\n"
 "RT_INLINE obj rt_eq_p(obj a, obj b) { return RT_BOOL(a == b); }\n"
 "RT_INLINE obj rt_boolean_p(obj x) { return RT_BOOL(x == RT_TRUE || x == RT_FALSE); }\n"
-"RT_INLINE obj rt_symbol_p(obj x) { return RT_BOOL(rt_is_symbol(x)); }\n"
+"RT_INLINE obj rt_symbol_p(obj x) { return RT_BOOL(rt_is_symbol(x)); }\n",
 "RT_INLINE obj rt_procedure_p(obj x) { return RT_BOOL(rt_is_proc(x)); }\n"
 "RT_INLINE obj rt_char_p(obj x) { return RT_BOOL(rt_is_char(x)); }\n"
 "RT_INLINE obj rt_char_to_integer(obj c) { RT_CHECK(rt_is_char(c), \"char->integer\", \"char\", c); return RT_FIX(RT_CHARVAL(c)); }\n"
 "RT_INLINE obj rt_string_p(obj x) { return RT_BOOL(rt_is_string(x)); }\n"
-"RT_INLINE obj rt_string_length(obj s) { RT_CHECK(rt_is_string(s), \"string-length\", \"string\", s); return RT_FIX(RT_STR(s)->chars); }\n",
+"RT_INLINE obj rt_string_length(obj s) { RT_CHECK(rt_is_string(s), \"string-length\", \"string\", s); return RT_FIX(RT_STR(s)->chars); }\n"
 "RT_INLINE obj rt_vector_p(obj x) { return RT_BOOL(rt_is_vector(x)); }\n"
 "RT_INLINE obj rt_vector_length(obj v) { RT_CHECK(rt_is_vector(v), \"vector-length\", \"vector\", v); return RT_FIX(RT_HLEN(v)); }\n"
 "#define RT_INDEX(c, who, k) do { RT_SAFE(if (RT_UNLIKELY(c)) rt_range_error(who, k);) } while (0)\n"
@@ -3166,14 +3172,14 @@ static const char *const e35[] = {
 "    return RT_FIX(RT_PTR(v, rt_bytevector)->b[RT_FIXVAL(k)]);\n"
 "}\n"
 "RT_INLINE obj rt_bytevector_u8_set(obj v, obj k, obj b) {\n"
-"    RT_CHECK(rt_is_bytevector(v) && !(RT_HFLAGS(v) & RT_F_RO), \"bytevector-u8-set!\", \"mutable bytevector\", v);\n"
+"    RT_CHECK(rt_is_bytevector(v) && !(RT_HFLAGS(v) & RT_F_RO), \"bytevector-u8-set!\", \"mutable bytevector\", v);\n",
 "    RT_INDEX(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), \"bytevector-u8-set!\", k);\n"
 "    RT_CHECK(rt_is_fix(b) && (uintptr_t)RT_FIXVAL(b) <= 255, \"bytevector-u8-set!\", \"byte\", b);\n"
 "    RT_PTR(v, rt_bytevector)->b[RT_FIXVAL(k)] = (unsigned char)RT_FIXVAL(b);\n"
 "    return RT_UNSPEC;\n"
 "}\n"
 "RT_INLINE obj rt_box_ref(obj b) { RT_CHECK(rt_is_type(b, RT_T_BOX), \"box-ref\", \"box\", b); return RT_VEC(b)[0]; }\n"
-"RT_INLINE obj rt_box_set(obj b, obj v) { RT_CHECK(rt_is_type(b, RT_T_BOX), \"box-set!\", \"box\", b); RT_VEC(b)[0] = v; return RT_UNSPEC; }\n",
+"RT_INLINE obj rt_box_set(obj b, obj v) { RT_CHECK(rt_is_type(b, RT_T_BOX), \"box-set!\", \"box\", b); RT_VEC(b)[0] = v; return RT_UNSPEC; }\n"
 "RT_INLINE obj rt_record_ref(obj r, obj rtd, obj k) {\n"
 "    RT_SAFE(if (RT_UNLIKELY(!rt_is_type(r, RT_T_RECORD) || RT_VEC(r)[0] != rtd)) rt_record_error(r, rtd);)\n"
 "    (void)rtd;\n"
@@ -3214,11 +3220,11 @@ static const char *const e35[] = {
 "RT_FN obj rt_fx_add(obj, obj); RT_FN obj rt_fx_sub(obj, obj); RT_FN obj rt_fx_mul(obj, obj); RT_FN obj rt_fx_neg(obj);\n"
 "RT_FN obj rt_fx_abs(obj); RT_FN obj rt_fx_square(obj); RT_FN obj rt_fx_quotient(obj, obj); RT_FN obj rt_fx_remainder(obj, obj);\n"
 "RT_FN obj rt_fx_max(obj, obj); RT_FN obj rt_fx_min(obj, obj); RT_FN obj rt_fx_eq(obj, obj); RT_FN obj rt_fx_lt(obj, obj);\n"
-"RT_FN obj rt_fx_gt(obj, obj); RT_FN obj rt_fx_le(obj, obj); RT_FN obj rt_fx_ge(obj, obj); RT_FN obj rt_fx_zero_p(obj);\n"
+"RT_FN obj rt_fx_gt(obj, obj); RT_FN obj rt_fx_le(obj, obj); RT_FN obj rt_fx_ge(obj, obj); RT_FN obj rt_fx_zero_p(obj);\n",
 "RT_FN obj rt_fx_positive_p(obj); RT_FN obj rt_fx_negative_p(obj); RT_FN obj rt_fx_odd_p(obj); RT_FN obj rt_fx_even_p(obj);\n"
 "RT_FN obj rt_fx_not(obj); RT_FN obj rt_fx_and(obj, obj); RT_FN obj rt_fx_ior(obj, obj); RT_FN obj rt_fx_xor(obj, obj);\n"
 "RT_FN obj rt_fx_ash(obj, obj); RT_FN obj rt_fx_ashl(obj, obj); RT_FN obj rt_fx_ashr(obj, obj); RT_FN obj rt_fx_if(obj, obj, obj);\n"
-"RT_FN obj rt_fx_bit_set_p(obj, obj); RT_FN obj rt_fx_bit_count(obj); RT_FN obj rt_fx_length(obj); RT_FN obj rt_fx_first_set_bit(obj);\n",
+"RT_FN obj rt_fx_bit_set_p(obj, obj); RT_FN obj rt_fx_bit_count(obj); RT_FN obj rt_fx_length(obj); RT_FN obj rt_fx_first_set_bit(obj);\n"
 "RT_FN obj rt_fx_copy_bit(obj, obj, obj); RT_FN obj rt_fx_bit_field(obj, obj, obj); RT_FN obj rt_fx_bit_field_rotate(obj, obj, obj, obj);\n"
 "RT_FN obj rt_fx_bit_field_reverse(obj, obj, obj); RT_FN obj rt_fx_add_carry(obj, obj, obj, obj);\n"
 "RT_FN obj rt_fx_sub_carry(obj, obj, obj, obj); RT_FN obj rt_fx_mul_carry(obj, obj, obj, obj);\n"

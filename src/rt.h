@@ -721,6 +721,12 @@ RT_INLINE intptr_t rt_fxmod(intptr_t a, intptr_t b) {
 RT_INLINE RT_ALWAYS obj rt_fxaddb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_add_ovf(a, b, &r)) ? RT_O(r) : rt_add2(RT_O(a), RT_O(b)); }
 RT_INLINE RT_ALWAYS obj rt_fxsubb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_sub_ovf(a, b, &r)) ? RT_O(r) : rt_sub2(RT_O(a), RT_O(b)); }
 RT_INLINE RT_ALWAYS obj rt_fxmulb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_mul_ovf(RT_FIXVAL(a), b, &r)) ? RT_O(r) : rt_mul2(RT_O(a), RT_O(b)); }
+/* quotient of proven fixnums: fixnum-least / -1 promotes, with --unsafe too (semantics, not a check) */
+RT_INLINE RT_ALWAYS obj rt_fxquob(intptr_t a, intptr_t b) {
+    if (RT_UNLIKELY(b == (intptr_t)RT_FIX(-1) && a == (intptr_t)RT_FIX(RT_FIX_MIN))) return rt_quotient(RT_O(a), RT_O(b));
+    RT_SAFE(if (RT_UNLIKELY(b == 0)) return rt_quotient(RT_O(a), RT_O(b));)
+    return RT_O(RT_FIX(RT_FIXVAL(a) / RT_FIXVAL(b)));
+}
 /* A proven number as a double; flonum abs (sign bit, as rt_abs). */
 RT_INLINE double rt_num_dbl(obj x) { return rt_is_fix(x) ? (double)RT_FIXVAL(x) : rt_is_big(x) ? rt_big_to_double(x) : RT_FLO(x); }
 #else

@@ -222,6 +222,7 @@ def unsafe():
     acc = 1
     for i in range(1, 31): acc *= i
     show(o, "fact", acc, sum(range(0, 10**6 + 1)) * 2**40)
+    show(o, "quotient", 2**62, -2**61, 2**62, 2**62, 2**62)
     write("big_unsafe.out", o)
 
 

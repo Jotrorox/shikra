@@ -650,8 +650,8 @@ static const char *special(ir_node *r, int *erep) {
         if (!ff) return NULL;
         *erep = R_FIX;
         if (big_ && op == PI_rt_quotient && !(a[1]->kind == IR_CONST && a[1]->u.value != RT_FIX(-1))) {
-            *erep = R_OBJ; /* fixnum-least / -1: rt_quotient's bignum comes back through the intptr_t */
-            return fmt("RT_O(rt_fxquo(%s, %s))", atom_as(a[0], R_FIX), atom_as(a[1], R_FIX));
+            *erep = R_OBJ; /* fixnum-least / -1 gives a bignum */
+            return fmt("rt_fxquob(%s, %s)", atom_as(a[0], R_FIX), atom_as(a[1], R_FIX));
         }
         return fmt("rt_fx%s(%s, %s)", op == PI_rt_quotient ? "quo" : op == PI_rt_remainder ? "rem" : "mod", atom_as(a[0], R_FIX), atom_as(a[1], R_FIX));
     case PI_rt_neg: if (only(t0, T_FLO)) { *erep = R_DBL; return fmt("-%s", as_dbl(a[0])); } return NULL;

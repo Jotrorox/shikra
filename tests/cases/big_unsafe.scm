@@ -9,3 +9,7 @@
   (let loop ((i 0) (acc 0)) (if (> i n) acc (loop (+ i 1) (+ acc i)))))
 (show 'sum (+ 4611686018427387903 1) (- -4611686018427387904 1) (* 4611686018427387903 4611686018427387903) (sum-cubes 2000000))
 (show 'fact (let loop ((i 1) (acc 1)) (if (> i 30) acc (loop (+ i 1) (* acc i)))) (* (sum-to 1000000) 1099511627776))
+(define (quo-neg a b) (if (and (fixnum-ish? a) (fixnum-ish? b)) (quotient a b) 0))
+(define (fixnum-ish? x) (and (exact-integer? x) (< -4611686018427387905 x 4611686018427387904)))
+(show 'quotient (quo-neg -4611686018427387904 -1) (quo-neg -4611686018427387904 2) (quotient -4611686018427387904 -1)
+      (- -4611686018427387904) (abs -4611686018427387904))
