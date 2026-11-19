@@ -4377,7 +4377,7 @@ static const char *const e32[] = {
 "    double rh, rl, s, sl, c, cl;\n"
 "    int n;\n"
 "    if (MT_ABSU(x) >= 0x7ff0000000000000u) return x - x; /* inf or NaN: NaN */\n"
-"    if (MT_ABSU(x) < 0x3e50000000000000u) return which == 1 ? 1.0 : x; /* |x| < 2^-26 */\n"
+"    if (MT_ABSU(x) < 0x3e50000000000000u) return which == 1 ? 1.0 - 0.5 * x * x : x; /* |x| < 2^-26 */\n"
 "    n = mt_reduce(x, &rh, &rl);\n"
 "    if (which == 2) {\n"
 "        s = mt_ksin(rh, rl, &sl), c = mt_kcos(rh, rl, &cl);\n"
