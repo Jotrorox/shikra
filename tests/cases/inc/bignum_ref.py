@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tests/cases/inc/bignum_ref.py -- writes the expected outputs of the --bignum cases
-# tests/cases/big_{arith,text,float,random,fixnum,unsafe}.out, computed independently with Python's
+# tests/cases/big_{arith,text,float,random,kmul,fixnum,unsafe}.out, computed independently with Python's
 # unbounded integers and IEEE doubles (int -> float conversion and int / int are correctly rounded
 # in Python, comparisons of int with float are exact). Run from anywhere; the outputs are committed:
 #     python3 tests/cases/inc/bignum_ref.py
@@ -226,9 +226,35 @@ def unsafe():
     write("big_unsafe.out", o)
 
 
+# ---- big_kmul ----
+def kmul():
+    st = [777]
+
+    def rnd():
+        st[0] = st[0] * 48271 % 2147483647
+        return st[0]
+
+    def rbits(k):
+        r, b = 0, 0
+        while b < k:
+            r, b = r * 2147483648 + rnd(), b + 31
+        return r
+    o = []
+    for i in range(120):
+        a = rbits(1200 + rnd() % 29000)
+        b = rbits(1200 + rnd() % (29000 if i % 2 == 0 else 4000))
+        if i % 3 == 0: a = -a
+        c = rbits(1 + rnd() % 1000)
+        p = a * b
+        q, r = tq(p + c, b), tr(p + c, b)
+        o.append("%d %d %d %d %d #t" % (i, p % M, a * a % M, q % M, r % M))
+    write("big_kmul.out", o)
+
+
 arith()
 text()
 flo()
 corpus(4000)
+kmul()
 fixnum()
 unsafe()

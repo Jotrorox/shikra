@@ -5,8 +5,8 @@
  * length = 4 * limbs. Invariant: every result that fits in a fixnum is a fixnum (big_fin), so a
  * bignum is never equal to a fixnum and eqv?/= on fixnums stay pointer comparisons. Plain C99 with
  * 64-bit intermediates only (no 128-bit type, no libc). Algorithms (n = limbs): schoolbook add and
- * subtract O(n), multiply O(n*m), Knuth's algorithm D for division O(n*m) with a one-limb fast
- * path, decimal printing by repeated division by 10^9 and parsing by multiply-add in chunks (both
+ * subtract O(n), multiply O(n*m) below 40 limbs and Karatsuba O(n^1.585) above, Knuth's algorithm
+ * D for division O(n*m) with a one-limb fast path, decimal printing by repeated division by 10^9 and parsing by multiply-add in chunks (both
  * O(n^2)), integer square root by Dickinson's recursive-precision Newton (about two full divisions), conversion
  * to double rounded to nearest even from the leading 64 bits plus a sticky bit. */
 #ifndef SHIKRA_RT_H
@@ -92,6 +92,44 @@ static void mag_mul(big_l *r, const big_l *a, intptr_t na, const big_l *b, intpt
         for (j = 0; j < nb; j++) { c += ai * b[j] + r[i + j]; r[i + j] = (big_l)c; c >>= 32; }
         r[i + nb] = (big_l)c;
     }
+}
+static void mag_acc(big_l *r, intptr_t rn, const big_l *x, intptr_t xn, int sub) { /* r[0..rn) += or -= x */
+    uint64_t c = 0, t;
+    intptr_t i;
+    for (i = 0; i < rn && (i < xn || c); i++) {
+        t = sub ? (uint64_t)r[i] - (i < xn ? x[i] : 0) - c : (uint64_t)r[i] + (i < xn ? x[i] : 0) + c;
+        r[i] = (big_l)t;
+        c = sub ? (t >> 32) & 1 : t >> 32;
+    }
+}
+static big_l *mag_tmp(intptr_t n) { big_l *t = (big_l *)rt_alloc_raw(4 * (size_t)n); rt_memset(t, 0, 4 * (size_t)n); return t; }
+/* Karatsuba above 40 limbs (O(n^1.585)), schoolbook below; na >= nb, r zeroed: na + nb. Unbalanced
+ * operands go in nb-limb slices of a. Temporaries are raw heap buffers (kept by the stack scan). */
+static void mag_kmul(big_l *r, const big_l *a, intptr_t na, const big_l *b, intptr_t nb) {
+    intptr_t h, i, m;
+    big_l *s, *p;
+    if (nb < 40) { mag_mul(r, a, na, b, nb); return; }
+    if (na >= 2 * nb) {
+        for (i = 0; i < na; i += nb) {
+            m = na - i < nb ? na - i : nb;
+            p = mag_tmp(m + nb);
+            if (m == nb) mag_kmul(p, a + i, m, b, nb); else mag_kmul(p, b, nb, a + i, m);
+            mag_acc(r + i, na + nb - i, p, m + nb, 0);
+        }
+        return;
+    }
+    h = (na + 1) / 2; /* nb >= h */
+    s = mag_tmp(4 * h + 4), p = s + 2 * h + 2;
+    rt_memcpy(s, a, 4 * (size_t)h);
+    mag_acc(s, h + 1, a + h, na - h, 0);              /* a0 + a1 */
+    rt_memcpy(s + h + 1, b, 4 * (size_t)h);
+    mag_acc(s + h + 1, h + 1, b + h, nb - h, 0);      /* b0 + b1 */
+    mag_kmul(p, s, h + 1, s + h + 1, h + 1);
+    mag_kmul(r, a, h, b, h);                          /* z0 */
+    if (nb > h) mag_kmul(r + 2 * h, a + h, na - h, b + h, nb - h); /* z2 */
+    mag_acc(p, 2 * h + 2, r, 2 * h, 1);
+    mag_acc(p, 2 * h + 2, r + 2 * h, na + nb - 2 * h, 1);
+    mag_acc(r + h, na + nb - h, p, 2 * h + 2, 0);     /* + z1 * B^h */
 }
 static big_l mag_div1(big_l *q, const big_l *a, intptr_t n, big_l d) { /* q = a / d (q may be a); the remainder */
     uint64_t r = 0;
@@ -191,7 +229,7 @@ RT_FN obj rt_big_mul(obj a, obj b) {
     big_view(b, &y);
     if (!x.n || !y.n) return RT_FIX(0);
     r = big_new(x.n + y.n);
-    mag_mul(r->d, x.d, x.n, y.d, y.n);
+    if (x.n >= y.n) mag_kmul(r->d, x.d, x.n, y.d, y.n); else mag_kmul(r->d, y.d, y.n, x.d, x.n);
     return big_fin(r, x.n + y.n, x.neg != y.neg);
 }
 RT_FN obj rt_big_neg(obj x) { return big_addsub(RT_FIX(0), x, 1); }
