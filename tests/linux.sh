@@ -12,7 +12,7 @@
 #          reduced stress set used there
 # The podman machine is started if it is not running, and stopped again afterwards.
 # Environment: LINUX_CCS, LINUX_IMAGE (default localhost/shikra-linux-test:ARCH), and
-# LINUX_ENV (extra "NAME=value ..." passed to tests/run.sh).
+# LINUX_ENV (extra "NAME=value ..." passed to tests/run.sh, e.g. STRESS_SCALE=20 for amd64).
 set -u
 arch=${1:-arm64}
 [ $# -gt 0 ] && shift
@@ -23,6 +23,9 @@ command -v podman > /dev/null 2>&1 || { echo "linux.sh: podman not found"; exit 
 started=
 if ! podman info > /dev/null 2>&1; then podman machine start || exit 2; started=1; fi
 img=${LINUX_IMAGE:-localhost/shikra-linux-test:$arch}
+# qemu-user gives the guest a fixed 8 MB stack and ignores `ulimit -s` (run.sh raises it to 64 MB
+# for -O0, where callcc.scm recurses 10^5 deep); QEMU_STACK_SIZE is what it honours.
+case $arch-$(uname -m) in amd64-x86_64) ;; amd64-*) LINUX_ENV="QEMU_STACK_SIZE=67108864 ${LINUX_ENV:-}" ;; esac
 if ! podman image exists "$img"; then
     ctx=$(mktemp -d) || exit 2
     printf '%s\n' 'FROM docker.io/library/debian:trixie-slim' \

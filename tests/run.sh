@@ -49,6 +49,9 @@ CC=${CC:-cc}
 # On Linux x86-64/arm64 compiled programs are static and use no libc (M6): the warning check of
 # the generated C then compiles that variant (DESIGN.md "M6 Linux as built").
 CHECK_FLAGS=
+# STRESS_SCALE=N multiplies every stress interval (default 1: a collection at every allocation);
+# only for slow emulated runs (tests/linux.sh amd64 on arm64, DESIGN.md "M6 Linux as built").
+STRESS_SCALE=${STRESS_SCALE:-1}
 case "$(uname -s)-$(uname -m)" in
 Linux-x86_64 | Linux-aarch64) CHECK_FLAGS="-DSHIKRA_NOLIBC=1 -ffreestanding" ;;
 esac
@@ -144,11 +147,13 @@ run_cases() {
         gcctramp) $SHIKRA build -O${opt:-0} --no-musttail --cc "$GCC" $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" $args < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
         stress) every=1
             [ -f "$base.stress-interval" ] && every=$(cat "$base.stress-interval")
+            every=$((every * STRESS_SCALE))
             $SHIKRA build -O$opt --gc-stress $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 &&
             SHIKRA_GC_STRESS=$every "$TMP/prog" $args < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
         interp) $SHIKRA interp $flags "$f" $args < "$in" > "$TMP/c.out" 2> "$TMP/c.err" ;;
         interp-stress) every=1
             [ -f "$base.interp-stress-interval" ] && every=$(cat "$base.interp-stress-interval")
+            every=$((every * STRESS_SCALE))
             SHIKRA_GC_STRESS=$every $SHIKRA interp $flags "$f" $args < "$in" > "$TMP/c.out" 2> "$TMP/c.err" ;;
         esac
         st=$?
@@ -225,12 +230,12 @@ run_r7rs() {
         interp) $SHIKRA interp $flag "$f" < /dev/null > "$TMP/r7.out" 2> "$TMP/r7.err" ;;
         stress) exp=tests/r7rs/expected/$name.compiled
             $SHIKRA build -O$opt --gc-stress $flag "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
-            SHIKRA_GC_STRESS=1 "$TMP/r7rs" < /dev/null > "$TMP/r7.out" 2>> "$TMP/r7.err" ;;
+            SHIKRA_GC_STRESS=$STRESS_SCALE "$TMP/r7rs" < /dev/null > "$TMP/r7.out" 2>> "$TMP/r7.err" ;;
         tramp) exp=tests/r7rs/expected/$name.compiled
             $SHIKRA build -O${opt:-0} --no-musttail $flag "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
             "$TMP/r7rs" < /dev/null > "$TMP/r7.out" 2>> "$TMP/r7.err" ;;
         interp-stress) exp=tests/r7rs/expected/$name.interp
-            SHIKRA_GC_STRESS=1 $SHIKRA interp $flag "$f" < /dev/null > "$TMP/r7.out" 2> "$TMP/r7.err" ;;
+            SHIKRA_GC_STRESS=$STRESS_SCALE $SHIKRA interp $flag "$f" < /dev/null > "$TMP/r7.out" 2> "$TMP/r7.err" ;;
         esac
         r7rs_summary "$TMP/r7.out" > "$TMP/r7.sum"
         if [ ! -f "$exp" ]; then bad "$f [$engine] (no expected results file $exp)"
