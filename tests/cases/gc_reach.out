@@ -1,0 +1,11 @@
+(closure #(closure 1 2) "closure!")
+(box #(box 1 2) "box!")
+(record #(record 1 2) "record!")
+(param #(param 1 2) "param!")
+(bound #(bound 1 2) "bound!")
+(raised (handler #(handler 1 2) "handler!"))
+(body (after #(after 1 2) "after!"))
+(escaped #(escaped 1 2) "escaped!")
+((values #(values 1 2) "values!") values)
+((irritant #(irritant 1 2) "irritant!"))
+"start:010203040"

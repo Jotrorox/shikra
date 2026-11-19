@@ -1,0 +1,26 @@
+;; Literal constants are read-only static data (spec 3.2, 6.1): mutating a quoted pair,
+;; string, vector or bytevector raises a catchable error; copies are mutable; symbols in
+;; source are static and eq? to the symbols string->symbol finds.
+(import (scheme base) (scheme write) (util check))
+
+(define l '(1 2 3))
+(check-error "set-car!" (set-car! l 9))
+(check-error "set-cdr!" (set-cdr! (cdr l) '()))
+(check l '(1 2 3))
+(define nested '#((a . b) "str" #u8(1 2)))
+(check-error "set-cdr!" (set-cdr! (vector-ref nested 0) 'c))
+(check-error "string-set!" (string-set! (vector-ref nested 1) 0 #\x))
+(check-error "bytevector-u8-set!" (bytevector-u8-set! (vector-ref nested 2) 0 7))
+(check-error "vector-set!" (vector-set! nested 0 #f))
+(check-error "string-fill!" (string-fill! "abc" #\z))
+(check-error "set-car!" (set-car! (car '((x) y)) 'z))
+(check (let ((c (list-copy l))) (set-car! c 9) c) '(9 2 3))
+(check (let ((p (cons 1 2))) (set-cdr! p 3) p) '(1 . 3))
+(check (let ((v (vector-copy '#(1 2)))) (vector-set! v 0 'x) v) '#(x 2))
+(check (let ((s (string-copy "ab"))) (string-set! s 1 #\λ) s) "aλ")
+(check (eq? 'hello (string->symbol "hello")) #t)
+(check (eq? (string->symbol (string-append "hel" "lo")) 'hello) #t)
+(check (symbol->string 'world) "world")
+(check (eq? (string->symbol "fresh-symbol-1") (string->symbol "fresh-symbol-1")) #t)
+(check (eq? (car '(shared)) (cadr '(x shared))) #t)
+(check-done)

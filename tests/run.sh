@@ -18,9 +18,16 @@
 #             list of failing tests must equal tests/r7rs/expected/FILE.ENGINE (so known
 #             failures are pinned and an unexpected pass is flagged too)
 #   interp    tests/cases under the REPL interpreter (M3; skeleton)
-#   stress    tests/cases built with --gc-stress, run with SHIKRA_GC_STRESS=1 (M2; skeleton)
-# `all` runs reader, unit, amalg, expand, compiled and r7rs; interp (M3) and stress (M2) are reported as
-# skipped until their milestones. Exit status is non-zero if anything failed.
+#   stress    the collector's done-when test (spec §13 M2): tests/cases and the r7rs files
+#             built with --gc-stress at -O2 and at -O0 and run with SHIKRA_GC_STRESS=1, i.e.
+#             a full collection at every allocation; outputs must equal the normal run's
+#             (same NAME.out / tests/r7rs/expected/FILE.compiled). NAME.stress-interval
+#             (a number N) makes that case collect at every N-th allocation instead; each
+#             use is explained in tests/cases/README-stress. The -O0 pass runs with a 64 MB
+#             C stack (ulimit -s): -O0 frames are larger than 8 MB / 10^5 (callcc.scm recurses
+#             10^5 deep), independent of the collector.
+# `all` runs reader, unit, amalg, expand, compiled, r7rs and stress; interp (M3) is reported
+# as skipped until its milestone. Exit status is non-zero if anything failed.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 SHIKRA=./shikra
@@ -96,14 +103,16 @@ run_cases() {
         [ -f "$base.in" ] && in=$base.in
         case $mode in
         compiled) $SHIKRA build "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
-        stress) $SHIKRA build --gc-stress "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 &&
-            SHIKRA_GC_STRESS=1 "$TMP/prog" < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
+        stress) every=1
+            [ -f "$base.stress-interval" ] && every=$(cat "$base.stress-interval")
+            $SHIKRA build -O$opt --gc-stress "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 &&
+            SHIKRA_GC_STRESS=$every "$TMP/prog" < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
         interp) $SHIKRA repl "$f" < "$in" > "$TMP/c.out" 2> "$TMP/c.err" ;;
         esac
         st=$?
         if [ "$st" = "$want_exit" ] && cmp -s "$TMP/c.out" "$base.out" &&
             { [ ! -f "$base.err" ] || grep -qF -- "$(cat "$base.err")" "$TMP/c.err"; }; then ok
-        else bad "$f [$mode] (exit $st)"; head -5 "$TMP/c.err"; diff "$base.out" "$TMP/c.out" | head -10; fi
+        else bad "$f [$mode${opt:+ -O$opt}] (exit $st)"; head -5 "$TMP/c.err"; diff "$base.out" "$TMP/c.out" | head -10; fi
         if [ "$mode" = compiled ]; then
             if $SHIKRA emit-c "$f" > "$TMP/c.c" 2> /dev/null &&
                 $CC -std=c99 -Wall -Wextra -Werror -fsyntax-only "$TMP/c.c" 2> "$TMP/cc.err"; then ok
@@ -139,11 +148,14 @@ run_r7rs() {
             compiled) $SHIKRA build "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
                 "$TMP/r7rs" < /dev/null > "$TMP/r7.out" 2>> "$TMP/r7.err" ;;
             interp) $SHIKRA repl "$f" < /dev/null > "$TMP/r7.out" 2> "$TMP/r7.err" ;;
+            stress) exp=tests/r7rs/expected/$name.compiled
+                $SHIKRA build -O$opt --gc-stress "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
+                SHIKRA_GC_STRESS=1 "$TMP/r7rs" < /dev/null > "$TMP/r7.out" 2>> "$TMP/r7.err" ;;
             esac
             r7rs_summary "$TMP/r7.out" > "$TMP/r7.sum"
             if [ ! -f "$exp" ]; then bad "$f [$engine] (no expected results file $exp)"
             elif cmp -s "$TMP/r7.sum" "$exp"; then ok
-            else bad "$f [$engine]"; head -5 "$TMP/r7.err"; diff "$exp" "$TMP/r7.sum" | head -20; fi
+            else bad "$f [$engine${opt:+ -O$opt}]"; head -5 "$TMP/r7.err"; diff "$exp" "$TMP/r7.sum" | head -20; fi
             if [ "$engine" = compiled ]; then
                 if $SHIKRA emit-c "$f" > "$TMP/r7.c" 2> /dev/null &&
                     $CC -std=c99 -Wall -Wextra -Werror -fsyntax-only "$TMP/r7.c" 2> "$TMP/cc.err"; then ok
@@ -153,17 +165,31 @@ run_r7rs() {
     done
 }
 
+# run_stress: cases and r7rs files with a collection at every allocation, at -O2 and -O0.
+run_stress() {
+    for opt in 2 0; do
+        (   [ $opt = 0 ] && ulimit -s 65520 2> /dev/null
+            run_cases stress
+            r7rs_engines=stress run_r7rs
+            echo "$pass $fail" > "$TMP/stress.count" )
+        set -- $(cat "$TMP/stress.count")
+        pass=$1 fail=$2
+    done
+    opt=
+}
+
+opt=
 mode=${1:-all}
 case $mode in
 reader) run_reader ;;
 unit) run_unit ;;
 amalg) run_amalg ;;
 expand) run_expand ;;
-compiled | interp | stress) run_cases "$mode" ;;
+compiled | interp) run_cases "$mode" ;;
+stress) run_stress ;;
 r7rs) run_r7rs ;;
-all) run_reader; run_unit; run_amalg; run_expand; run_cases compiled; run_r7rs
-    echo "interp: skipped (REPL interpreter arrives in M3)"
-    echo "stress: skipped (collector arrives in M2)" ;;
+all) run_reader; run_unit; run_amalg; run_expand; run_cases compiled; run_r7rs; run_stress
+    echo "interp: skipped (REPL interpreter arrives in M3)" ;;
 *) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|r7rs|interp|stress]"; exit 2 ;;
 esac
 echo "tests: $pass passed, $fail failed"

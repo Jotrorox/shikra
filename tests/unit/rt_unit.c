@@ -4,6 +4,7 @@
 #include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/resource.h>
 
 static int fails, checks;
 static jmp_buf catch_buf;
@@ -26,6 +27,65 @@ static int wr_is(obj x, const char *expect) {
     rt_write(x, p);
     return strcmp(RT_STR(rt_get_output_string(p))->buf, expect) == 0;
 }
+/* ---- collector helpers: values are hidden in volatile integers and built in separate,
+ * non-inlined frames, so that only the collector's roots can keep them alive ---- */
+#define HIDE ((uintptr_t)0x5a5a5a5a00000000u)
+static volatile uintptr_t hidden1;
+#if defined(__GNUC__) || defined(__clang__)
+#define NOINLINE __attribute__((noinline))
+#else
+#define NOINLINE
+#endif
+static long maxrss_mb(void) {
+    struct rusage u;
+    getrusage(RUSAGE_SELF, &u);
+#ifdef __APPLE__
+    return (long)(u.ru_maxrss >> 20);
+#else
+    return (long)(u.ru_maxrss >> 10);
+#endif
+}
+static NOINLINE obj iota_list(intptr_t n) {
+    obj l = RT_NIL;
+    while (n > 0) l = rt_cons(RT_FIX(--n), l);
+    return l;
+}
+static NOINLINE intptr_t list_sum(obj l) {
+    intptr_t s = 0;
+    for (; rt_is_pair(l); l = RT_CDR(l)) s += RT_FIXVAL(RT_CAR(l));
+    return s;
+}
+static NOINLINE void churn(long n) { /* garbage of every stream: pairs, small and large objects */
+    long i;
+    for (i = 0; i < n; i++) {
+        (void)rt_cons(RT_FIX(i), RT_NIL);
+        if (i % 16 == 0) (void)rt_make_string_n("garbage string", 14);
+        if (i % 50000 == 0) (void)rt_make_bytevector(RT_FIX(100000), RT_FIX(1));
+    }
+}
+static NOINLINE void make_immortal(void) {
+    obj l, v;
+    rt_gc_set_immortal(1);
+    l = iota_list(1000);
+    v = rt_vector_n(3, RT_FALSE);
+    RT_VEC(v)[0] = l;
+    RT_VEC(v)[1] = rt_cstring("immortal");
+    RT_VEC(v)[2] = rt_make_bytevector(RT_FIX(20000), RT_FIX(7)); /* large, immortal */
+    rt_gc_set_immortal(0);
+    RT_CAR(l) = iota_list(10);      /* mortal list reachable only from an immortal pair */
+    hidden1 = (uintptr_t)v ^ HIDE;
+}
+static NOINLINE int check_immortal(void) {
+    obj v = (obj)(hidden1 ^ HIDE), l = RT_VEC(v)[0];
+    return list_sum(RT_CDR(l)) == 999 * 1000 / 2 && list_sum(RT_CAR(l)) == 45 &&
+           strcmp(RT_STR(RT_VEC(v)[1])->buf, "immortal") == 0 && RT_HLEN(RT_VEC(v)[2]) == 20000 &&
+           RT_PTR(RT_VEC(v)[2], rt_bytevector)->b[19999] == 7;
+}
+static NOINLINE const char *interior_only(void) { /* a string buffer kept alive by an interior pointer only */
+    obj s = rt_make_string_n("0123456789abcdef", 16);
+    return RT_STR(s)->buf + 5;
+}
+
 static int num_is(obj x, const char *expect) { return strcmp(RT_STR(rt_number_to_string(x, RT_FIX(10)))->buf, expect) == 0; }
 
 int main(int argc, char **argv) {
@@ -198,6 +258,26 @@ int main(int argc, char **argv) {
     y = RT_CDR(RT_CDR(y));                  /* (1) */
     CHECK(rt_srcloc_lookup(y, &file, &line, &col) && line == 3 && col == 8);
     CHECK(rt_read(port) == RT_EOF);
+
+    /* the collector (tool mode enables it explicitly; compile commands never do) */
+    {
+        long base;
+        const char *volatile tail;
+        rt_gc_enable(1);
+        x = iota_list(100000);
+        tail = interior_only();
+        base = maxrss_mb();
+        churn(10000000);                 /* ~200 MB of pairs, 60 MB of strings, 20 MB large */
+        rt_gc_collect();
+        CHECK(list_sum(x) == 99999L * 100000 / 2);
+        CHECK(memcmp(tail, "56789abcdef", 12) == 0);
+        CHECK(maxrss_mb() - base < 48);
+        make_immortal();
+        churn(2000000);
+        rt_gc_collect();
+        CHECK(check_immortal());
+        rt_gc_enable(0);
+    }
 
     /* open file output ports are flushed by rt_exit (run.sh checks the file afterwards);
      * closing one takes it off the list */
