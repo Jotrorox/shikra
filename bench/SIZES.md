@@ -128,5 +128,5 @@ every clang build on Linux) and does not split cold code by default (0 `.cold` s
 tables), and `-fno-reorder-blocks-and-partition` leaves scheme, dynamic and slatex byte-identical.
 So the flag is now passed only to Apple clang, and the Linux build line is unchanged. The literal
 sharing (one `rt_lits` struct) applies on every platform. A program that uses `define-c` is a
-hosted build (glibc, dynamic): hello world built with `--libc` is 72 KB on arm64 (GNU ld's 64 KB
+hosted build (glibc, dynamic): hello world built with `--libc` is 17 KB on x86-64 and 72 KB on arm64 (GNU ld's 64 KB
 page alignment of the separate segments) -- the static sizes above are for programs without FFI.

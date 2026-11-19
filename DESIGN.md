@@ -2978,8 +2978,8 @@ linked; `shikra_start` present means static without libc; Mach-O: libSystem). An
 binding is shaken out and leaves the program static. macOS is hosted in every mode, as before.
 Evidence (arm64 and x86-64 containers, GCC and clang): ext_ffi built is `dynamically linked,
 interpreter /lib/ld-linux-*.so` (`ldd`: libm, libc), hello world is `statically linked` (4.7 / 7.6 KB
-arm64); hello world with `--libc` is a 72 KB dynamic PIE on arm64 (GNU ld's 64 KB segment
-alignment); ext_ffi_user with `--link` passes; the interpreter's `define-c` (one function-pointer type,
+arm64); hello world with `--libc` is a dynamic PIE of 17 KB on x86-64 and 72 KB on arm64 (GNU ld's 64 KB
+segment alignment); ext_ffi is 98 / 109 KB (x86-64, GCC / clang) and 155 / 152 KB (arm64); ext_ffi_user with `--link` passes; the interpreter's `define-c` (one function-pointer type,
 register-file convention) passes ext_ffi and mixed integer/double signatures (`ldexp`, `fma`,
 `strtol`) on both architectures. run.sh's driver mode checks the emit-c comment everywhere and, on
 Linux, `shikra size`'s mode line for a static, a `--libc` and a `define-c` build; the warning check
@@ -2995,7 +2995,7 @@ of generated C compiles hosted programs without `SHIKRA_NOLIBC`.
   shares main's frame above the stack base). Cost: one call; macOS hello world unchanged at 50,888.
 - *A `define-c` result converted with an unset representation* (emit.c): `assign(dest, drep,
   ccall(r, &erep), erep, ...)` read `erep` in the same argument list in which `ccall` sets it --
-  unspecified order in C, and GCC evaluates it first. Now sequenced.
+  unspecified order in C (a compiler may read `erep` before the call sets it). Now sequenced.
 - *`zig cc` builds at -O0 failed to link*: zig enables UBSan in debug builds and a static program has
   no UBSan runtime; the driver passes `-fno-sanitize=undefined` to `zig cc`.
 - *Interpreter `define-c` of libm functions failed on Linux* ("not available in the interpreter"): the
