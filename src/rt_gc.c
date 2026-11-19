@@ -97,7 +97,7 @@ enum { GC_FREE = 0, GC_HDR = 1, GC_PAIR = 2, GC_IMM = 4, GC_PURE = 8 }; /* block
 enum { L_FREE = 0, L_LIVE = 1, L_NEW = 2, L_RUN = 3, L_MARK = 4 }; /* line states (+ mark bit) */
 enum { S_HDR, S_PAIR, S_OVF, S_IHDR, S_IPAIR, S_PHDR, S_PPAIR, S_N }; /* spaces */
 
-typedef struct { unsigned char kind, line[GC_NLINES]; uintptr_t start[GC_NWORDS], mark[GC_NWORDS]; } gc_block;
+typedef struct { unsigned char kind, walked, line[GC_NLINES]; uintptr_t start[GC_NWORDS], mark[GC_NWORDS]; } gc_block;
 typedef struct { char *base; size_t n; gc_block *b; } gc_chunk;
 typedef struct { char *cur, *end; int ci, kind; intptr_t bi; } gc_space; /* bi -1: no current block */
 typedef struct { size_t size, bytes; int mark, imm; } gc_large;          /* size: mapping, bytes: object */
@@ -137,7 +137,10 @@ static int gc_hibit(uintptr_t w) {
 #endif
 }
 
+static unsigned char *gc_map;
+static size_t gc_nmap;
 static void gc_add_chunk(size_t n) {
+    int i;
     char *m = 0;
     gc_block *b = 0;
     if (gc_nchunks == GC_MAXCHUNKS || !(m = (char *)rt_sys_mem(n * GC_BLOCK + GC_BLOCK)) ||
@@ -150,6 +153,13 @@ static void gc_add_chunk(size_t n) {
     gc_nblocks += n;
     if ((uintptr_t)m < gc_lo) gc_lo = (uintptr_t)m;
     if ((uintptr_t)m + n * GC_BLOCK > gc_hi) gc_hi = (uintptr_t)m + n * GC_BLOCK;
+    /* the block map: chunk number + 1 of every block between gc_lo and gc_hi (when that span
+     * is at most 2^26 blocks; otherwise gc_find searches the chunks) */
+    if (gc_map) rt_sys_free(gc_map, gc_nmap);
+    gc_nmap = (gc_hi - gc_lo) / GC_BLOCK;
+    if (gc_nmap > ((size_t)1 << 26) || !(gc_map = (unsigned char *)rt_sys_mem(gc_nmap))) gc_map = 0;
+    for (i = 0; gc_map && i < gc_nchunks; i++)
+        rt_memset(gc_map + ((uintptr_t)gc_chunks[i].base - gc_lo) / GC_BLOCK, i + 1, gc_chunks[i].n);
 }
 
 static void gc_setup(void) {
@@ -230,17 +240,39 @@ static void gc_mark_obj(gc_block *b, char *base, char *p, int pair) {
     for (l = off / GC_LINE; l <= last; l++) b->line[l] |= L_MARK;
     gc_scan(p, pair);
 }
-static gc_block *gc_find(uintptr_t p, char **base) {
-    int i;
-    if (p < gc_lo || p >= gc_hi) return 0;
-    for (i = 0; i < gc_nchunks; i++) {
-        uintptr_t off = p - (uintptr_t)gc_chunks[i].base;
-        if (off < gc_chunks[i].n * GC_BLOCK) {
-            *base = gc_chunks[i].base + (off & ~(uintptr_t)(GC_BLOCK - 1));
-            return &gc_chunks[i].b[off / GC_BLOCK];
+/* The object starts of everything allocated in a headered block since the last collection:
+ * each new run is walked by header sizes. Done when marking first reaches the block (never
+ * outside a collection), so blocks that hold only garbage are never walked. */
+static void gc_walk(gc_block *b, char *base) {
+    size_t l, m, k;
+    b->walked = 1;
+    for (l = 0; l < GC_NLINES; l = m) {
+        char *a = base + l * GC_LINE, *end;
+        for (m = l + 1; m < GC_NLINES && b->line[m] == L_NEW; m++) {}
+        if (b->line[l] != L_RUN) continue;
+        for (end = base + m * GC_LINE; a < end && *(uintptr_t *)a; a += gc_size(a)) {
+            k = (size_t)(a - base) >> 3;
+            b->start[k >> 6] |= (uintptr_t)1 << (k & 63);
         }
     }
-    return 0;
+}
+static gc_block *gc_find(uintptr_t p, char **base) {
+    int i;
+    gc_block *b = 0;
+    if (p < gc_lo || p >= gc_hi) return 0;
+    if (gc_map) {
+        if (!(i = gc_map[(p - gc_lo) / GC_BLOCK])) return 0;
+        *base = (char *)(p & ~(uintptr_t)(GC_BLOCK - 1));
+        b = &gc_chunks[i - 1].b[(size_t)(*base - gc_chunks[i - 1].base) / GC_BLOCK];
+    } else
+        for (i = 0; i < gc_nchunks && !b; i++) {
+            uintptr_t off = p - (uintptr_t)gc_chunks[i].base;
+            if (off < gc_chunks[i].n * GC_BLOCK) {
+                *base = gc_chunks[i].base + (off & ~(uintptr_t)(GC_BLOCK - 1));
+                b = &gc_chunks[i].b[off / GC_BLOCK];
+            }
+        }
+    return b;
 }
 /* Large objects: binary search of the sorted table; interior: a may point into the object. */
 static void gc_large_mark(uintptr_t a, int interior) {
@@ -274,6 +306,7 @@ static void gc_mark(obj x) {
     default: return;
     }
     if (!(b = gc_find(p, &base))) { gc_large_mark(p, 0); return; }
+    if (b->kind == GC_HDR && !b->walked) gc_walk(b, base);
     g = (p - (uintptr_t)base) >> 3;
     if (b->kind == GC_PAIR) {
         if ((w & 7) == 1 && !(p & 15) && b->line[(p - (uintptr_t)base) / GC_LINE]) gc_mark_obj(b, base, (char *)p, 1);
@@ -293,6 +326,7 @@ static void gc_mark_any(uintptr_t a) {
         return;
     }
     if (b->kind != GC_HDR) return; /* free or immortal */
+    if (!b->walked) gc_walk(b, base);
     g = off >> 3;
     i = g >> 6;
     w = b->start[i] & (~(uintptr_t)0 >> (63 - (g & 63))); /* starts at or below g */
@@ -336,26 +370,11 @@ static void gc_rescan(void) {
 /* ---- collection ---- */
 static void gc_run(void *arg) {
     uintptr_t here = 0, *sp, *top;
-    size_t total = 0, nfree = 0, j, k, l, m, live_large = 0;
+    size_t total = 0, nfree = 0, j, k, l, live_large = 0;
     int c;
     (void)arg;
     for (c = 0; c < S_N; c++) /* leave every run walkable */
         if (!(gc_sp[c].kind & GC_PAIR) && gc_sp[c].cur && gc_sp[c].cur < gc_sp[c].end) *(uintptr_t *)gc_sp[c].cur = 0;
-    for (c = 0; c < gc_nchunks; c++) /* object starts of everything allocated since the last collection */
-        for (j = 0; j < gc_chunks[c].n; j++) {
-            gc_block *b = &gc_chunks[c].b[j];
-            char *base = gc_chunks[c].base + j * GC_BLOCK;
-            if (b->kind != GC_HDR) continue;
-            for (l = 0; l < GC_NLINES; l = m) {
-                char *a = base + l * GC_LINE, *end;
-                for (m = l + 1; m < GC_NLINES && b->line[m] == L_NEW; m++) {}
-                if (b->line[l] != L_RUN) continue;
-                for (end = base + m * GC_LINE; a < end && *(uintptr_t *)a; a += gc_size(a)) {
-                    k = (size_t)(a - base) >> 3;
-                    b->start[k >> 6] |= (uintptr_t)1 << (k & 63);
-                }
-            }
-        }
     /* roots: registered ranges, immortal objects, then the stack and the registers that
      * rt_sys_catch saved in its frame above this one */
     for (c = 0; c < gc_nroots; c++) {
@@ -388,6 +407,7 @@ static void gc_run(void *arg) {
             gc_block *b = &gc_chunks[c].b[j];
             size_t n = 0;
             total += GC_NLINES;
+            b->walked = 0;
             if (b->kind == GC_FREE) { nfree += GC_NLINES; continue; }
             if (b->kind & GC_IMM) continue;
             for (l = 0; l < GC_NLINES; l++) {
