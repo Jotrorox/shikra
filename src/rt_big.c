@@ -131,7 +131,7 @@ static void mag_divn(big_l *q, big_l *u, intptr_t nu, const big_l *v, intptr_t n
         q[j] = (big_l)qh;
     }
 }
-/* Truncating division of views: *q and *r as finished values (either may be NULL). */
+/* Truncating division of views: *q and *r as finished values (either may be null). */
 static void big_divmod(const big_v *a, const big_v *b, obj *q, obj *r) {
     intptr_t n = b->n, m = a->n;
     rt_bignum *qq, *u, *v;
@@ -320,7 +320,7 @@ RT_FN obj rt_big_idiv(obj a, obj b, int op, const char *who) {
     big_view(ab[0], &x);
     big_view(ab[1], &y);
     if (!y.n) rt_error(who, "division by zero", rt_cons(a, rt_cons(b, RT_NIL)));
-    big_divmod(&x, &y, op == 1 || op == 2 ? NULL : &q, op == 0 ? NULL : &r);
+    big_divmod(&x, &y, op == 1 || op == 2 ? (obj *)0 : &q, op == 0 ? (obj *)0 : &r);
     if (op >= 2 && r != RT_FIX(0) && (rt_big_cmp(r, RT_FIX(0)) < 0) != y.neg) { /* floor: toward -inf */
         if (op == 2) r = rt_add(r, ab[1]);
         else q = rt_sub(q, RT_FIX(1));
