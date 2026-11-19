@@ -134,7 +134,7 @@
     (cond ((if (%fl=? x x) #f #t) x)
           ((%fl=? x +inf.0) x)
           ((%fl=? x 0.0) (%fl/ 1.0 x))
-          ((if (%fl<=? x 23.0) (%fl=? x (%flfloor x)) #f) ; exact factorials
+          ((if (%fl>=? x 1.0) (if (%fl<=? x 23.0) (%fl=? x (%flfloor x)) #f) #f) ; exact factorials
            (let loop ((k 2.0) (p 1.0)) (if (%fl<? k x) (loop (%fl+ k 1.0) (%fl* p k)) p)))
           ((%fl>=? x 0.5) (if (%fl>? x 171.7) +inf.0 (fl-gamma+ x)))
           ((%fl=? x (%flfloor x)) +nan.0)
@@ -168,7 +168,8 @@
   (define (flloggamma x)
     (cond ((if (%fl=? x x) #f #t) (%values x 1.0))
           ((%fl=? (%flabs x) +inf.0) (%values +inf.0 1.0))
-          ((%fl>? x 0.0) (%values (if (%fl<? x 1e-300) (%fl- 0.0 (%fllog x)) (fl-lgamma+ x)) 1.0))
+          ((%fl<? (%flabs x) 1e-300) (%values (%fl- 0.0 (%fllog (%flabs x))) (if (%fl<? x 0.0) -1.0 1.0)))
+          ((%fl>? x 0.0) (%values (fl-lgamma+ x) 1.0))
           ((%fl=? x (%flfloor x)) (%values +inf.0 1.0))
           (else
            (let ((s (fl-sinpi x)))
@@ -201,10 +202,18 @@
                 (loop (%- k 1)
                       (%fl- (%fl+ b (%fl* 4.0 (%inexact (%- k 1))))
                             (%fl/ (%inexact (%* (%- (%* 2 k) 1) (%* 2 k))) f))))))))
+  ;; erf(a), 0 <= a < 1: the Maclaurin series a sum c_n a^2n, c_n = 2/sqrt(pi) (-1)^n / (n! (2n+1))
+  ;; (coefficients correctly rounded), by Horner's rule from the smallest term
+  (define fl-erf-c
+    '#(1.1283791670955126 -0.37612638903183754 0.11283791670955126 -0.026866170645131252 0.005223977625442188 -0.0008548327023450853 0.00012055332981789664 -1.492565035840625e-05 1.6462114365889248e-06 -1.6365844691234924e-07 1.4807192815879218e-08 -1.2290555301717928e-09 9.422759064650411e-11 -6.7113668551641105e-12 4.4632242632864775e-13 -2.7835162072109215e-14 1.6342614095367152e-15 -9.063970842808673e-17 4.763348040515068e-18 -2.3784598852774293e-19 1.131218725924631e-20 -5.136209054585811e-22))
+  (define (fl-erf-taylor a)
+    (let ((z (%fl* a a)))
+      (let loop ((k 20) (s (%vector-ref fl-erf-c 21)))
+        (if (%< k 0) (%fl* a s) (loop (%- k 1) (%fl+* s z (%vector-ref fl-erf-c k)))))))
   (define (flerf x)
     (let ((a (%flabs x)))
       (%flcopysign
-       (cond ((%fl<? a 2.5) (fl-erf-series a))
+       (cond ((%fl<? a 1.0) (fl-erf-taylor a))
              ((%fl<? a 6.0) (%fl- 1.0 (fl-erfc-cf a)))
              ((%fl=? a a) 1.0)
              (else a))
@@ -213,7 +222,7 @@
     (let ((a (%flabs x)))
       (cond ((if (%fl=? x x) #f #t) x)
             ((%fl<? x 0.0) (%fl+ 1.0 (if (%fl<? a 2.5) (fl-erf-series a) (%fl- 1.0 (fl-erfc-cf a)))))
-            ((%fl<? a 0.5) (%fl- 1.0 (fl-erf-series a)))
+            ((%fl<? a 0.5) (%fl- 1.0 (fl-erf-taylor a)))
             ((%fl<? a 2.0) (fl-erfc-mid a))
             (else (fl-erfc-cf a)))))
   ;; erfc on [1/2, 2): 1 - erf loses up to 8 bits there, so the continued fraction is used too, with
