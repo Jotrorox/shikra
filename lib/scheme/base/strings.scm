@@ -28,21 +28,14 @@
       ((s start end) (%substring s start end))))
   (define string-copy!
     (case-lambda
-      ((to at from) (string-copy! to at from 0 (%string-length from)))
-      ((to at from start) (string-copy! to at from start (%string-length from)))
-      ((to at from start end)
-       (let ((tmp (%substring from start end)))
-         (let loop ((i 0) (n (%- end start)))
-           (if (%< i n)
-               (begin (%string-set! to (%+ at i) (%string-ref tmp i))
-                      (loop (%+ i 1) n))))))))
+      ((to at from) (%string-copy! to at from 0 (%string-length from)))
+      ((to at from start) (%string-copy! to at from start (%string-length from)))
+      ((to at from start end) (%string-copy! to at from start end))))
   (define string-fill!
     (case-lambda
-      ((s c) (string-fill! s c 0 (%string-length s)))
-      ((s c start) (string-fill! s c start (%string-length s)))
-      ((s c start end)
-       (let loop ((i start))
-         (if (%< i end) (begin (%string-set! s i c) (loop (%+ i 1))))))))
+      ((s c) (%string-fill! s c 0 (%string-length s)))
+      ((s c start) (%string-fill! s c start (%string-length s)))
+      ((s c start end) (%string-fill! s c start end))))
   (define string->list
     (case-lambda
       ((s) (%string->list s 0 (%string-length s)))

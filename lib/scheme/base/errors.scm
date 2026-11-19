@@ -32,6 +32,13 @@
   (define (type-error who what obj)
     (raise (%make-error-object 0 (%string-append who (%string-append ": expected " what))
                                (%cons obj '()))))
+  ;; library-internal: "who: index out of range" like the runtime's range errors
+  (define (range-error who obj)
+    (raise (%make-error-object 0 (%string-append who ": index out of range") (%cons obj '()))))
+  ;; library-internal: 0 <= start <= end <= len, all exact integers
+  (define (check-range who len start end)
+    (if (if (%exact-integer? start) (if (%>= start 0) (%<= start len) #f) #f) #f (range-error who start))
+    (if (if (%exact-integer? end) (if (%>= end start) (%<= end len) #f) #f) #f (range-error who end)))
   (define (error-object? x) (%error-object? x))
   (define (error-object-message e) (%error-object-message e))
   (define (error-object-irritants e) (%error-object-irritants e))

@@ -4,8 +4,8 @@
         = < > <= >= zero? positive? negative? odd? even? max min + * - / abs
         quotient remainder modulo floor-quotient floor-remainder floor/
         truncate-quotient truncate-remainder truncate/ gcd lcm
-        floor ceiling round truncate exact inexact square exact-integer-sqrt
-        number->string string->number)
+        floor ceiling round truncate exact inexact square exact-integer-sqrt expt
+        numerator denominator rationalize number->string string->number)
 (begin
   (define (number? x) (%number? x))
   (define (complex? x) (%number? x))
@@ -62,7 +62,7 @@
   (define-inverse / %/ 1)
   (define -
     (case-lambda
-      ((a) (%* -1 a))
+      ((a) (%negate a))
       ((a b) (%- a b))
       ((a b . rest)
        (let loop ((acc (%- a b)) (rest rest))
@@ -71,17 +71,22 @@
   (define (zero? x) (%= x 0))
   (define (positive? x) (%> x 0))
   (define (negative? x) (%< x 0))
-  (define (odd? n) (if (%= (%remainder n 2) 0) #f #t))
-  (define (even? n) (%= (%remainder n 2) 0))
-  (define (extremum a rest pick?)
-    (let loop ((m a) (rest rest) (inexact (%inexact? a)))
+  (define (odd? n)
+    (if (%integer? n) (if (%= (%remainder n 2) 0) #f #t) (type-error "odd?" "integer" n)))
+  (define (even? n)
+    (if (%integer? n) (%= (%remainder n 2) 0) (type-error "even?" "integer" n)))
+  (define (extremum who a rest pick?)
+    (let loop ((m a) (rest rest) (inexact #f))
+      (if (%number? m) #f (type-error who "number" m))
       (if (%null? rest)
-          (if inexact (%inexact m) m)
+          (if (if inexact #t (%inexact? m)) (%inexact m) m)
           (let ((x (%car rest)))
-            (loop (if (pick? x m) x m) (%cdr rest) (if (%inexact? x) #t inexact))))))
-  (define (max a . rest) (extremum a rest (lambda (x m) (%> x m))))
-  (define (min a . rest) (extremum a rest (lambda (x m) (%< x m))))
-  (define (abs x) (if (%< x 0) (%* -1 x) x))
+            (if (%number? x) #f (type-error who "number" x))
+            (loop (if (pick? x m) x m) (%cdr rest)
+                  (if inexact #t (if (%inexact? x) #t (%inexact? m))))))))
+  (define (max a . rest) (extremum "max" a rest (lambda (x m) (%> x m))))
+  (define (min a . rest) (extremum "min" a rest (lambda (x m) (%< x m))))
+  (define (abs x) (%abs x))
 
   (define (quotient a b) (%quotient a b))
   (define (remainder a b) (%remainder a b))
@@ -92,7 +97,7 @@
   (define (truncate-quotient a b) (%quotient a b))
   (define (truncate-remainder a b) (%remainder a b))
   (define (truncate/ a b) (%values (%quotient a b) (%remainder a b)))
-  (define (gcd2 a b) (if (%= b 0) (abs a) (gcd2 b (%remainder a b))))
+  (define (gcd2 a b) (if (%= b 0) (%abs a) (gcd2 b (%remainder a b))))
   (define (gcd . ns)
     (let loop ((acc 0) (ns ns))
       (if (%null? ns) acc (loop (gcd2 acc (%car ns)) (%cdr ns)))))
@@ -103,7 +108,7 @@
           (let ((n (%car ns)))
             (loop (if (if (%= acc 0) #t (%= n 0))
                       (%* acc 0)
-                      (abs (%quotient (%* acc n) (gcd2 acc n))))
+                      (%abs (%* (%quotient acc (gcd2 acc n)) n)))
                   (%cdr ns))))))
 
   (define (floor x) (%floor x))
@@ -123,6 +128,32 @@
             (if (%>= y x)
                 (%values x (%- k (%* x x)))
                 (loop y))))))
+
+  (define (expt z1 z2) (%expt z1 z2))
+  ;; No exact rationals (spec 3.2): an exact integer is its own numerator; a finite flonum
+  ;; q is n/d with d the smallest power of two that makes d*q integral (R7RS 6.2.6).
+  (define (flonum-denominator who q)
+    (if (if (%number? q) (%finite? q) #f)
+        (let loop ((d 1.0)) (if (%integer? (%* d q)) d (loop (%* d 2.0))))
+        (type-error who "rational number" q)))
+  (define (numerator q)
+    (if (%exact-integer? q) q (%* q (flonum-denominator "numerator" q))))
+  (define (denominator q)
+    (if (%exact-integer? q) 1 (flonum-denominator "denominator" q)))
+  ;; The simplest rational within y of x (R7RS 6.2.6), computed in the arguments'
+  ;; exactness: exact integers give an exact integer, otherwise a flonum.
+  (define (rationalize x y)
+    (let* ((y (%abs y)) (lo (%- x y)) (hi (%+ x y)))
+      (cond ((if (%nan? lo) #t (%nan? hi)) (%+ lo hi))
+            ((%> lo 0) (simplest-rational lo hi))
+            ((%< hi 0) (%negate (simplest-rational (%negate hi) (%negate lo))))
+            ((if (%exact? lo) (%exact? hi) #f) 0)
+            (else 0.0))))
+  (define (simplest-rational lo hi)     ; 0 < lo <= hi
+    (let ((fl (%floor lo)))
+      (cond ((%= fl lo) fl)
+            ((%< fl (%floor hi)) (%+ fl 1))
+            (else (%+ fl (%/ 1 (simplest-rational (%/ 1 (%- hi fl)) (%/ 1 (%- lo fl)))))))))
 
   (define number->string
     (case-lambda

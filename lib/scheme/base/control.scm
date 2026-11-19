@@ -4,7 +4,7 @@
 ;; (see (shikra dynamic)), continuations rewind it before they jump.
 (export procedure? apply map for-each string-map string-for-each vector-map vector-for-each
         values call-with-values call-with-current-continuation call/cc dynamic-wind
-        make-parameter parameterize)
+        make-parameter parameterize features)
 (begin
   (define (dynamic-wind before thunk after)
     (before)
@@ -67,6 +67,8 @@
               (loop (%cdr ps) (%cdr vs)
                     (%cons (%cons cell (if conv (conv (%car vs)) (%car vs))) acc)))))))
   (define (procedure? x) (%procedure? x))
+  ;; R7RS 6.14: the cond-expand feature identifiers (spec 3.4), fixed at compile time.
+  (define (features) (list-copy (%features)))
   (define (apply-args x rest)            ; (a b ... lst) -> (a b ... . lst)
     (if (%null? rest) x (%cons x (apply-args (%car rest) (%cdr rest)))))
   (define apply

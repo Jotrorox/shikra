@@ -22,14 +22,9 @@
       ((bv start end) (%bytevector-copy bv start end))))
   (define bytevector-copy!
     (case-lambda
-      ((to at from) (bytevector-copy! to at from 0 (%bytevector-length from)))
-      ((to at from start) (bytevector-copy! to at from start (%bytevector-length from)))
-      ((to at from start end)
-       (let ((tmp (%bytevector-copy from start end)))
-         (let loop ((i 0) (n (%- end start)))
-           (if (%< i n)
-               (begin (%bytevector-u8-set! to (%+ at i) (%bytevector-u8-ref tmp i))
-                      (loop (%+ i 1) n))))))))
+      ((to at from) (%bytevector-copy! to at from 0 (%bytevector-length from)))
+      ((to at from start) (%bytevector-copy! to at from start (%bytevector-length from)))
+      ((to at from start end) (%bytevector-copy! to at from start end))))
   (define (bytevector-append . bvs)
     (let ((out (%make-bytevector
                 (let count ((l bvs) (n 0))
@@ -39,7 +34,7 @@
         (if (%null? l)
             out
             (let ((bv (%car l)))
-              (bytevector-copy! out at bv)
+              (%bytevector-copy! out at bv 0 (%bytevector-length bv))
               (loop (%cdr l) (%+ at (%bytevector-length bv))))))))
   (define utf8->string
     (case-lambda
