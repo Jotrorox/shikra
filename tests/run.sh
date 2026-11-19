@@ -550,7 +550,7 @@ run_driver() {
     if (cd "$D" && ../../../$SHIKRA build -w -I one -I two --cc "$CC -DSHIKRA_TEST_FLAG=1" main.scm) && [ -x "$D/main" ]; then ok
     else bad "build: default output name, -I, --cc with arguments"; fi
     if $SHIKRA --version | grep -q '^shikra 0'; then ok; else bad "--version"; fi
-    if $SHIKRA --help > "$TMP/help" && for w in build run repl check emit-c size -O0 --unsafe --gc --unicode -I --cc --target -g; do
+    if $SHIKRA --help > "$TMP/help" && for w in build run repl check emit-c size -O0 --unsafe --gc --unicode --bignum -I --cc --target -g; do
            grep -q -- " $w" "$TMP/help" || exit 1; done; then ok; else bad "--help does not list every command and flag"; fi
     if ! $SHIKRA build --no-such-flag tests/cases/hello.scm 2> "$TMP/flag.err" && grep -q 'unknown flag' "$TMP/flag.err"; then ok; else bad "unknown flag"; fi
 }

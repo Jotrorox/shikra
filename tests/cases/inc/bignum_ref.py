@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tests/cases/inc/bignum_ref.py -- writes the expected outputs of the --bignum cases
-# tests/cases/big_{arith,text,float,random,kmul,fixnum,unsafe}.out, computed independently with Python's
+# tests/cases/big_{arith,text,float,random,kmul,fold,fixnum,unsafe}.out, computed independently with Python's
 # unbounded integers and IEEE doubles (int -> float conversion and int / int are correctly rounded
 # in Python, comparisons of int with float are exact). Run from anywhere; the outputs are committed:
 #     python3 tests/cases/inc/bignum_ref.py
@@ -251,10 +251,17 @@ def kmul():
     write("big_kmul.out", o)
 
 
+# ---- big_fold ----
+def fold():
+    v = [HI * 4, HI + 1, LO - 1, -LO, -LO, -LO, 2**100, True, True, True, "%.1f" % float(10**20), 10**20, HI * HI, 0]
+    write("big_fold.out", ["(" + " ".join(w(x) for x in v) + ")"])
+
+
 arith()
 text()
 flo()
 corpus(4000)
 kmul()
+fold()
 fixnum()
 unsafe()
