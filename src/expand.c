@@ -788,8 +788,11 @@ static obj expand_core(int k, obj x, frame *env) {
         cerror(x, "%s is only allowed at the top level or at the beginning of a body", keyword_names[k]);
     case K_SYNTAX_RULES: cerror(x, "syntax-rules is only valid as a macro transformer");
     case K_FEATURES: need(x, 1, 1, "%features"); return setloc(L2(S_quote, rt_reverse(front_features())), x);
-    case K_DELAY: case K_DELAY_FORCE:
-        cerror(x, "%s is not implemented yet (milestone M5)", keyword_names[k]);
+    case K_DELAY: case K_DELAY_FORCE: /* (scheme lazy), R7RS 4.2.5 and its reference implementation:
+         * (delay-force e) = (%make-promise #f (lambda () e)), (delay e) = (delay-force (%make-promise #t e)) */
+        need(x, 2, 2, keyword_names[k]);
+        return expand(setloc(L3(kp(PI_rt_make_promise), RT_FALSE,
+                                thunk(k == K_DELAY ? L3(kp(PI_rt_make_promise), RT_TRUE, CADR(x)) : CADR(x))), x), env);
     default: cerror(x, "invalid use of auxiliary syntax %s", keyword_names[k]);
     }
 }

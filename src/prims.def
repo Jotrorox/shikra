@@ -101,6 +101,13 @@ PRIM("%make-box", "make-box", rt_make_box, 1, "a", 'a', PF_ALLOC)
 PRIM("%box-ref", "box-ref", rt_box_ref, 1, "a", 'a', PF_FAIL)
 PRIM("%box-set!", "box-set!", rt_box_set, 2, "aa", 'a', PF_FAIL | PF_EFFECT)
 
+/* promises (scheme lazy): a promise holds a state pair (done? . value-or-thunk) that forcing
+ * may share with another promise (R7RS 4.2.5 reference implementation; force is in lib/) */
+PRIM("%make-promise", "make-promise", rt_make_promise, 2, "aa", 'a', PF_ALLOC)
+PRIM("%promise?", "promise?", rt_promise_p, 1, "a", 'b', PF_PURE)
+PRIM("%promise-state", "force", rt_promise_state, 1, "a", 'p', PF_FAIL)
+PRIM("%promise-set-state!", "force", rt_promise_set_state, 2, "ap", 'a', PF_FAIL | PF_EFFECT)
+
 /* records */
 PRIM("%make-rtd", "make-record-type", rt_make_rtd, 2, "yv", 'a', PF_ALLOC | PF_FAIL)
 PRIM("%make-record", "make-record", rt_make_record, 1, "a", 'r', PF_ALLOC | PF_FAIL)

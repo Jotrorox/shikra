@@ -361,6 +361,21 @@ RT_FN obj rt_make_box(obj x) {
     return RT_TAGPTR(b);
 }
 
+/* ---- promises: [state], state = (done? . value) or (#f . thunk) (R7RS 4.2.5) ---- */
+RT_FN obj rt_make_promise(obj done, obj value) {
+    obj st = rt_cons(done, value);
+    rt_vector *p = (rt_vector *)rt_alloc(RT_HDR(RT_T_PROMISE, 0, 1), 2 * sizeof(obj));
+    p->v[0] = st;
+    return RT_TAGPTR(p);
+}
+RT_FN obj rt_promise_p(obj x) { return RT_BOOL(rt_is_type(x, RT_T_PROMISE)); }
+RT_FN obj rt_promise_state(obj p) { RT_CHECK(rt_is_type(p, RT_T_PROMISE), "force", "promise", p); return RT_VEC(p)[0]; }
+RT_FN obj rt_promise_set_state(obj p, obj st) {
+    RT_CHECK(rt_is_type(p, RT_T_PROMISE), "force", "promise", p);
+    RT_VEC(p)[0] = st;
+    return RT_UNSPEC;
+}
+
 /* ---- records ---- */
 RT_FN obj rt_make_rtd(obj name, obj fields) {
     rt_vector *t;

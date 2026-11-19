@@ -101,7 +101,8 @@ enum {
     RT_T_RTD,                     /* [name symbol][field-name vector] */
     RT_T_BOX, RT_T_VALUES, RT_T_ERROR, /* [message][irritants][loc]; flags = kind */
     RT_T_SYMBOL,                  /* [name string] */
-    RT_T_PROMISE, RT_T_PARAMETER, /* reserved (M1) */
+    RT_T_PROMISE,                 /* [state pair] (scheme lazy) */
+    RT_T_PARAMETER,               /* reserved (parameters are closures, DESIGN.md M1 part A) */
     RT_T_BYTEVECTOR = 16, RT_T_FLONUM, RT_T_RAW, RT_T_F64VECTOR, RT_T_BIGNUM, RT_T_CONT,
     RT_T_STRING = 32,             /* rt_string: only buf is traced (untagged, may be static) */
     RT_T_PORT,                    /* rt_port: buf (untagged) and name are traced */
@@ -335,6 +336,10 @@ RT_FN obj rt_make_bytevector(obj k, obj fill);
 RT_FN obj rt_bytevector_copy(obj bv, obj start, obj end);
 RT_FN obj rt_bytevector_copy_x(obj to, obj at, obj from, obj start, obj end);
 RT_FN obj rt_make_box(obj v);
+RT_FN obj rt_make_promise(obj done, obj value);
+RT_FN obj rt_promise_p(obj x);
+RT_FN obj rt_promise_state(obj p);
+RT_FN obj rt_promise_set_state(obj p, obj state);
 RT_FN obj rt_make_rtd(obj name, obj fields);
 RT_FN obj rt_make_record(obj rtd);
 RT_FN obj rt_record_p(obj x, obj rtd);
