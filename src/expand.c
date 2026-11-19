@@ -832,12 +832,12 @@ static obj expand(obj x, frame *env) {
 }
 
 /* ---- bodies and top level: scan definitions, then expand ---- */
-typedef struct item { int def; obj sym, form, src; struct item *next; } item;
+typedef struct item { int def; obj sym, form, src, ctx; struct item *next; } item;
 typedef struct { item *head, **tail; frame *f; library *top; } scanner;
 
 static void add_item(scanner *s, int def, obj sym_, obj form, obj src) {
     item *it = NEW(item);
-    it->def = def; it->sym = sym_; it->form = form; it->src = src;
+    it->def = def; it->sym = sym_; it->form = form; it->src = src; it->ctx = loc_ctx;
     *s->tail = it;
     s->tail = &it->next;
 }
@@ -913,7 +913,7 @@ done:
 
 static obj expand_item(item *it, frame *env) {
     obj saved = loc_ctx, r;
-    if (has_loc(it->src)) loc_ctx = it->src;
+    loc_ctx = has_loc(it->src) ? it->src : it->ctx;
     r = expand(it->form, env);
     loc_ctx = saved;
     return r;

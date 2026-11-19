@@ -130,7 +130,7 @@ void compile_errors_init(void) { rt_raise_hook = compile_raise; }
 obj read_source(const char *path, int foldcase, obj where) {
     size_t n;
     char *text;
-    obj port, x, l = RT_NIL;
+    obj port, x, l = RT_NIL, last = RT_NIL;
     if (!strncmp(path, "<builtin>/", 10)) {
         sbuf b = {0};
         sb_printf(&b, "lib/%s", path + 10);
@@ -142,8 +142,22 @@ obj read_source(const char *path, int foldcase, obj where) {
     free(text);
     RT_PORT(port)->name = rt_cstring(path);
     if (foldcase) RT_SETFLAGS(port, RT_HFLAGS(port) | RT_PF_FOLDCASE);
-    while ((x = rt_read(port)) != RT_EOF) l = rt_cons(x, l);
-    return rt_reverse(l);
+    for (;;) { /* each list cell gets the position of its datum (top-level atoms too) */
+        intptr_t line, col;
+        int c;
+        obj cell;
+        while ((c = rt_port_peekc(port)) == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == ';')
+            if (rt_port_getc(port) == ';') while ((c = rt_port_getc(port)) >= 0 && c != '\n') {}
+        line = RT_PORT(port)->line;
+        col = RT_PORT(port)->col + 1;
+        if ((x = rt_read(port)) == RT_EOF) break;
+        cell = rt_cons(x, RT_NIL);
+        rt_srcloc_set(cell, RT_PORT(port)->name, line, col);
+        if (l == RT_NIL) l = cell;
+        else RT_CDR(last) = cell;
+        last = cell;
+    }
+    return l;
 }
 
 /* Path of an included file, relative to the file containing `where`. */
