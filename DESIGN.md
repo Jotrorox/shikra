@@ -2954,3 +2954,97 @@ the C. Both fixed.
 - `make test` (at the extensions merge; current totals in "Linux integration as built"): 1,323 checks, 0 failures, 2 skips (ext_ffi_user in the interpreter and its stress run,
   marked compiled-only); `tests/run.sh gcc` (gcc-16): 222 checks, 0 failures. `shikra size` attributes
   rt_ext.c symbols to the component "extensions (shikra ...)".
+
+### Linux integration as built ("Integration": the merged tree on Linux; `--libc`; build modes)
+
+The four parallel branches (M4-3, tier 3, M6 Linux, extensions) were merged on macOS; this step ran
+the merged tree on Linux x86-64 and arm64 for the first time and closed M6's *Done when* ("the suite
+passes on macOS arm64, Linux x86-64 and Linux arm64").
+
+**Build modes.** On Linux x86-64/arm64 a program is one of two kinds, decided by the emitter:
+- *static without libc* (spec §9.2; "M6 Linux as built"): the default.
+- *hosted* (deviation, §10): the program's IR still contains a `%c-call` after tree shaking (a used
+  `define-c` binding: `ffi_protos` is non-empty), or `--link`, `-l` or the new `--libc` was given.
+  The driver then omits `-DSHIKRA_NOLIBC` and the static/no-libc flags, links like an ordinary C
+  program (glibc, dynamically, PIE by the compiler's default) and appends `-lm` (glibc keeps
+  `hypot`, `ldexp`, `fmin`, ... in libm). The runtime is rt_sys.c's libc branch with rt_math.c's
+  math (as in the `shikra` tool on Linux), so results are identical to the static build. A
+  cross build for Linux in hosted mode passes `--target=ARCH-linux-gnu` (zig cc brings glibc;
+  plain clang needs a sysroot), the static one `ARCH-linux-musl` as before.
+`emit_c` returns the mode and writes it as a comment (`/* build mode: hosted ... */`, with an
+`#error` if such a file is compiled with `SHIKRA_NOLIBC`, or `/* build mode: static without libc
+... */`); `shikra size` prints it on its first line (ELF: a `PT_INTERP` segment means dynamically
+linked; `shikra_start` present means static without libc; Mach-O: libSystem). An unused `define-c`
+binding is shaken out and leaves the program static. macOS is hosted in every mode, as before.
+Evidence (arm64 and x86-64 containers, GCC and clang): ext_ffi built is `dynamically linked,
+interpreter /lib/ld-linux-*.so` (`ldd`: libm, libc), hello world is `statically linked` (4.7 / 7.6 KB
+arm64); hello world with `--libc` is a 72 KB dynamic PIE on arm64 (GNU ld's 64 KB segment
+alignment); ext_ffi_user with `--link` passes; the interpreter's `define-c` (one function-pointer type,
+register-file convention) passes ext_ffi and mixed integer/double signatures (`ldexp`, `fma`,
+`strtol`) on both architectures. run.sh's driver mode checks the emit-c comment everywhere and, on
+Linux, `shikra size`'s mode line for a static, a `--libc` and a `define-c` build; the warning check
+of generated C compiles hosted programs without `SHIKRA_NOLIBC`.
+
+**Bugs found and fixed** (all only visible on Linux or with non-Apple compilers):
+- *Every clang build on Linux failed*: M4-3's driver passed `-Xclang -fno-split-cold-code` to every
+  compiler named `clang*`; upstream clang rejects it. Now only for Apple clang (`cc`/`clang`
+  resolving to /usr/bin, Xcode or the Command Line Tools) and a Darwin target (`apple_clang` in main.c).
+- *`shikra size` found no program body* in static Linux programs built with GCC: GCC inlined the
+  once-called `rt_program_main` into `shikra_start` / `main`. `rt_program_main` is now `RT_NOINLINE`
+  in every program (before: only under `RT_TIER3`, where it is also needed so that no program frame
+  shares main's frame above the stack base). Cost: one call; macOS hello world unchanged at 50,888.
+- *A `define-c` result converted with an unset representation* (emit.c): `assign(dest, drep,
+  ccall(r, &erep), erep, ...)` read `erep` in the same argument list in which `ccall` sets it --
+  unspecified order in C, and GCC evaluates it first. Now sequenced.
+- *`zig cc` builds at -O0 failed to link*: zig enables UBSan in debug builds and a static program has
+  no UBSan runtime; the driver passes `-fno-sanitize=undefined` to `zig cc`.
+- *Interpreter `define-c` of libm functions failed on Linux* ("not available in the interpreter"): the
+  tool does not link libm there (rt_math.c), so `hypot` etc. are not in the process; ffi.c falls back
+  to `dlopen("libm.so.6")`.
+- *flmath accuracy bounds* (tests/unit/flmath.scm) were measured against macOS libm: on Linux the
+  reference is glibc, whose cbrt is up to 3 ulp and tanh up to 2 ulp off; those two bounds are
+  per platform (3 and 4 ulp on Linux; 1 and 3 elsewhere), every other bound is unchanged.
+
+**Platform-specific test expectations** (explicit, in tests/run.sh): the generated-C warning check
+compiles the nolibc variant only for static programs; the Linux-only size pins (hello world under
+30,000 bytes, shape mode) and build-mode checks (driver mode); macOS-only the 52,000-byte hello
+world pin (size mode); the flmath bounds above. Nothing was weakened on all platforms.
+
+**Linux test results** (`tests/linux.sh ARCH all`, one container per architecture × program
+compiler, Debian trixie: GCC 14.2, clang 19.1.7, glibc 2.41; podman machine applehv, kernel 7.2.7;
+arm64 native, amd64 under qemu-user; measured at commit 9af1958, whose code and tests are
+identical to the final commit of this step -- later commits changed documentation only). Every
+mode of `all`: reader unit (rt_unit, math_unit, flmath) amalg expand levels (compiled cases at
+-O2/-O0/-Os + r7rs) shape size cache debug driver interp (+ repl) tramp stress.
+
+RESULTS_TABLE
+
+**Cross-compilation re-check from macOS.** This host has neither `zig` nor `ld.lld` (nor Homebrew
+GCC), so the macOS side was Apple clang 21 through `shikra build --target x86_64-linux|aarch64-linux
+--cc WRAPPER`, where the wrapper ran Apple clang with shikra's exact compile flags plus `-c`
+(`--target=ARCH-linux-musl -std=c99 -O2 -ffunction-sections -fdata-sections -DSHIKRA_NOLIBC=1
+-ffreestanding -fno-stack-protector -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables`,
+no `-fno-split-cold-code`) and recorded the link flags (`-static -nostdlib -fuse-ld=lld
+-Wl,--gc-sections -Wl,--build-id=none -Wl,-z,norelro -Wl,-z,noseparate-code`), which were then
+applied with GNU ld in the container of the target architecture. Executed there: hello, gen_fringe
+(tier 3), ext_fixnum, ext_flonum, ext_f64vector, ext_assume -- 6/6 outputs right on each
+architecture; tests/debug/locations.scm built with `-g` (8/8 error locations, exit 70) and
+handler.scm right on both. `shikra size` on macOS reads all 16 ELF files (`ELF x86-64 (static, no
+libc)`, rows add up to the file size). The full `zig cc` / ld.lld paths were last exercised by M6
+(above) and are not re-run here.
+
+**Sizes**: bench/SIZES.md, "Linux". Hello world 3.0-7.7 KB (under 30 KB). The 60-150 KB range (spec
+§9.3) is met at -Os by all four 1,000-2,500-line programs on x86-64 with both compilers (parsing
+with GCC is below it) and on arm64 with GCC; not by clang's arm64 -Os scheme (169 KB) and dynamic
+(155 KB), nor at -O2 by scheme and dynamic (186-312 KB, both compilers and architectures) and by
+slatex with clang (160-163 KB): the -O2 inlining budget, as on macOS (deviation, §10).
+
+**macOS** (`make test` at the final commit): MAC_RESULT
+
+**Line counts of the merged tree** (`wc -l`): compiler and tool (src/*.c, *.h without the runtime,
+embed.c and rt_unicode.c) 11,822; runtime (rt.h, rt_*.c without rt_unicode.c) 5,315 (incl. rt_math.c 454 and rt_ext.c 515). The
+per-milestone file maps above are snapshots of their time.
+
+**Open.** No hardware shadow-stack check for tier 3 (deviation). Hosted cross builds with plain
+clang need a target sysroot (not tested; zig cc brings glibc). On amd64 the stress passes run at 20×
+intervals only (emulation; see the table).
