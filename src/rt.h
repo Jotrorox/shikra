@@ -202,7 +202,9 @@ RT_FN int rt_sys_close(int fd);
 RT_FN int rt_sys_ready(int fd);                      /* 1 if a read would not block */
 RT_FN double rt_sys_pow(double x, double y);         /* libm pow: (scheme base) expt */
 RT_FN RT_NORETURN void rt_sys_exit(int code);
-RT_FN void *rt_sys_mem(size_t n);                    /* zeroed memory from the OS, never freed; NULL on failure */
+RT_FN void *rt_sys_mem(size_t n);                    /* zeroed memory from the OS; NULL on failure */
+RT_FN void rt_sys_free(void *p, size_t n);           /* return rt_sys_mem(n) memory (collector only) */
+RT_FN const char *rt_sys_getenv(const char *name);   /* NULL if unset (stress builds read SHIKRA_GC_STRESS) */
 /* Non-local exits (tier 2 continuations, spec §8.2): rt_sys_catch runs fn(arg) and returns 0
  * when it returns, 1 when rt_sys_throw(b) left it. __builtin_setjmp where the compiler
  * supports it (GCC; clang on x86 only), else sigsetjmp(b, 0) from <setjmp.h>, included by
@@ -222,17 +224,18 @@ RT_FN void rt_memset(void *d, int c, size_t n);
 RT_FN int rt_memcmp(const void *a, const void *b, size_t n);
 RT_FN size_t rt_strlen(const char *s);
 
-/* ---- memory (rt_gc.c; DESIGN.md §5) ----
- * Two bump streams so that the Immix collector (M2) can keep headerless pairs in
- * pair-only blocks where every 16-byte cell is an object start, and headered objects
- * elsewhere (object-start bitmap written in rt_alloc_slow / the RT_GC_NOTE_START hook).
- * Rule for callers: initialise every field of a fresh object before the next allocation. */
+/* ---- memory (rt_gc.c; spec §7, DESIGN.md §5 and "M2 as built") ----
+ * Two bump streams: headerless pairs live in pair-only blocks (every 16-byte cell is an
+ * object start), headered objects elsewhere. The inline fast paths are add, compare, store;
+ * rt_alloc_slow refills the stream from free lines and may collect first. Collection
+ * happens only inside allocation (or rt_gc_collect), so callers must initialise every field
+ * of a fresh object before the next allocation. Roots: the C stack and registers
+ * (conservative: any word pointing at or into an object), registered ranges, immortal
+ * objects. A program that never allocates never references rt_alloc_slow, so the
+ * collector is dropped by dead-code elimination (spec §9.1). */
 RT_EXTVAR char *rt_hp, *rt_hlim; /* headered-object stream */
 RT_EXTVAR char *rt_pp, *rt_plim; /* pair stream */
 RT_FN void *rt_alloc_slow(size_t bytes, int pair_stream);
-#ifndef RT_GC_NOTE_START
-#define RT_GC_NOTE_START(p) ((void)0) /* bump: nothing to record */
-#endif
 /* Allocate a headered object of `bytes` (header included); writes the header and
  * returns a pointer to it (tag it with RT_TAGPTR, or + 3 + 8 for procedures). */
 RT_INLINE void *rt_alloc(uintptr_t hdr, size_t bytes) {
@@ -240,7 +243,6 @@ RT_INLINE void *rt_alloc(uintptr_t hdr, size_t bytes) {
     bytes = (bytes + 7) & ~(size_t)7;
     if (RT_UNLIKELY((size_t)(rt_hlim - p) < bytes)) p = (char *)rt_alloc_slow(bytes, 0);
     else rt_hp = p + bytes;
-    RT_GC_NOTE_START(p);
     *(uintptr_t *)p = hdr;
     return p;
 }
@@ -253,10 +255,24 @@ RT_INLINE obj rt_cons(obj a, obj d) {
     return RT_O(p + 1);
 }
 RT_FN void *rt_alloc_raw(size_t nbytes);           /* raw (unscanned) buffer; returns its data */
-RT_FN void rt_gc_init(void *stack_base);
+RT_FN void rt_gc_init(void *stack_base);           /* records the stack base only (no allocation) */
 RT_FN void rt_gc_add_roots(obj *start, obj *end);  /* register a range of obj words as roots */
-RT_FN void rt_gc_set_immortal(int on);             /* REPL front end: allocations never reclaimed */
-RT_FN void rt_gc_collect(void);                    /* no-op under bump */
+RT_FN void rt_gc_set_immortal(int on);             /* REPL front end: allocations never reclaimed, scanned as roots */
+RT_FN void rt_gc_enable(int on);                   /* automatic collection; off in tool mode until the REPL enables it */
+RT_FN void rt_gc_collect(void);                    /* collect now (no-op under bump or before the first allocation) */
+
+/* Literal pairs (spec §3.2): the generated code puts every quoted pair in one static const
+ * array, so set-car!/set-cdr! detect a literal with one subtraction and one comparison.
+ * RT_NLITPAIRS and RT_NSTATIC_SYMS are emitted before this header (program mode). */
+#if defined(SHIKRA_PROGRAM) && RT_NLITPAIRS > 0
+static const rt_pair rt_lit_pairs[RT_NLITPAIRS];
+#define RT_LITPAIR(x) ((uintptr_t)((const char *)(x) - 1 - (const char *)rt_lit_pairs) < sizeof rt_lit_pairs)
+#else
+#define RT_LITPAIR(x) 0
+#endif
+#if defined(SHIKRA_PROGRAM) && RT_NSTATIC_SYMS > 0
+static const obj rt_static_syms[RT_NSTATIC_SYMS]; /* entered into the symbol table when it is created */
+#endif
 
 /* ---- initialisation and exit (rt_core.c) ---- */
 RT_FN void rt_init(int argc, char **argv, void *stack_base);
@@ -297,7 +313,6 @@ RT_FN int rt_eqv(obj a, obj b);
 RT_FN int rt_equal(obj a, obj b);
 RT_FN obj rt_intern(const char *s, size_t nbytes);
 RT_FN obj rt_make_symbol(obj name); /* uninterned */
-RT_FN void rt_intern_static(obj sym); /* program mode: enter a static symbol at startup */
 RT_FN obj rt_string_to_symbol(obj s);
 RT_FN obj rt_symbol_to_string(obj s);
 RT_FN obj rt_make_vector(obj k, obj fill);
@@ -520,8 +535,23 @@ RT_FN void rt_srcloc_set(obj pair, obj file, intptr_t line, intptr_t col);
 #define RT_CHECK(c, who, ty, x) do { if (RT_UNLIKELY(!(c))) rt_type_error(who, ty, x); } while (0)
 RT_INLINE obj rt_car(obj x) { RT_CHECK(rt_is_pair(x), "car", "pair", x); return RT_CAR(x); }
 RT_INLINE obj rt_cdr(obj x) { RT_CHECK(rt_is_pair(x), "cdr", "pair", x); return RT_CDR(x); }
-RT_INLINE obj rt_set_car(obj x, obj v) { RT_CHECK(rt_is_pair(x), "set-car!", "pair", x); RT_CAR(x) = v; return RT_UNSPEC; }
-RT_INLINE obj rt_set_cdr(obj x, obj v) { RT_CHECK(rt_is_pair(x), "set-cdr!", "pair", x); RT_CDR(x) = v; return RT_UNSPEC; }
+#ifdef RT_UNSAFE
+#define RT_CHECK_MUTABLE_PAIR(x, who) ((void)0)
+#else
+#define RT_CHECK_MUTABLE_PAIR(x, who) do { if (RT_UNLIKELY(RT_LITPAIR(x))) rt_type_error(who, "mutable pair", x); } while (0)
+#endif
+RT_INLINE obj rt_set_car(obj x, obj v) {
+    RT_CHECK(rt_is_pair(x), "set-car!", "pair", x);
+    RT_CHECK_MUTABLE_PAIR(x, "set-car!");
+    RT_CAR(x) = v;
+    return RT_UNSPEC;
+}
+RT_INLINE obj rt_set_cdr(obj x, obj v) {
+    RT_CHECK(rt_is_pair(x), "set-cdr!", "pair", x);
+    RT_CHECK_MUTABLE_PAIR(x, "set-cdr!");
+    RT_CDR(x) = v;
+    return RT_UNSPEC;
+}
 RT_INLINE obj rt_pair_p(obj x) { return RT_BOOL(rt_is_pair(x)); }
 RT_INLINE obj rt_null_p(obj x) { return RT_BOOL(x == RT_NIL); }
 RT_INLINE obj rt_eq_p(obj a, obj b) { return RT_BOOL(a == b); }

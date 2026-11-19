@@ -10,7 +10,15 @@
 
 #define IO_BUFSZ 4096
 #define IO_ANY 0x100 /* io_check: textual or binary */
-RT_VAR obj rt_stdin, rt_stdout, rt_stderr;
+/* The standard ports are static (not heap objects), so starting a program allocates
+ * nothing; the collector ignores them (their name is #f, their buffers are static). */
+static char io_inbuf[IO_BUFSZ], io_outbuf[IO_BUFSZ], io_errbuf[IO_BUFSZ];
+static rt_port io_std[3] = {
+    {RT_HDR(RT_T_PORT, RT_PF_IN | RT_PF_OPEN, 0), 0, io_inbuf, 0, 0, IO_BUFSZ, 1, 0, RT_FALSE},
+    {RT_HDR(RT_T_PORT, RT_PF_OUT | RT_PF_OPEN, 0), 1, io_outbuf, 0, 0, IO_BUFSZ, 1, 0, RT_FALSE},
+    {RT_HDR(RT_T_PORT, RT_PF_OUT | RT_PF_UNBUF | RT_PF_OPEN, 0), 2, io_errbuf, 0, 0, IO_BUFSZ, 1, 0, RT_FALSE}};
+RT_VAR obj rt_stdin = (obj)((char *)&io_std[0] + 5), rt_stdout = (obj)((char *)&io_std[1] + 5),
+           rt_stderr = (obj)((char *)&io_std[2] + 5);
 RT_VAR obj rt_ports = RT_NIL;
 
 static obj io_make(int flags, intptr_t fd, intptr_t cap, obj name) {

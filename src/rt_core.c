@@ -21,19 +21,18 @@ static RT_UNUSED intptr_t core_symcount;
 RT_FN void rt_init(int argc, char **argv, void *stack_base) {
     rt_argc = argc;
     rt_argv = argv;
+    /* Nothing is allocated here (the standard ports are static, the symbol table is made
+     * on first use), so a program that never allocates links no collector (spec §9.1).
+     * Every runtime global that holds an obj is a root range: */
     rt_gc_init(stack_base);
     rt_gc_add_roots(&core_symtab, &core_symtab + 1);
     rt_gc_add_roots(core_argbuf, core_argbuf + RT_ARGBUF);
     rt_gc_add_roots(&rt_winders, &rt_winders + 1);
     rt_gc_add_roots(&rt_handlers, &rt_handlers + 1);
-    core_symtab = rt_vector_n(256, RT_FALSE);
     rt_gc_add_roots(&rt_stdin, &rt_stdin + 1);
     rt_gc_add_roots(&rt_stdout, &rt_stdout + 1);
     rt_gc_add_roots(&rt_stderr, &rt_stderr + 1);
     rt_gc_add_roots(&rt_ports, &rt_ports + 1);
-    rt_stdin = rt_make_fd_port(0, RT_PF_IN, RT_FALSE);
-    rt_stdout = rt_make_fd_port(1, RT_PF_OUT, RT_FALSE);
-    rt_stderr = rt_make_fd_port(2, RT_PF_OUT | RT_PF_UNBUF, RT_FALSE);
 }
 
 RT_FN void rt_exit(int code) {
@@ -185,8 +184,16 @@ RT_FN obj rt_make_symbol(obj name) {
     s->name = name;
     return RT_TAGPTR(s);
 }
+static void core_symadd(obj sym);
 static obj *core_symslot(const char *s, size_t n) {
-    intptr_t mask = RT_HLEN(core_symtab) - 1, i = (intptr_t)(core_hash(s, n) & (uintptr_t)mask);
+    intptr_t mask, i;
+    if (!core_symtab) { /* first use: create the table and enter the program's static symbols */
+        core_symtab = rt_vector_n(256, RT_FALSE);
+#if defined(SHIKRA_PROGRAM) && RT_NSTATIC_SYMS > 0
+        for (mask = 0; mask < RT_NSTATIC_SYMS; mask++) core_symadd(rt_static_syms[mask]);
+#endif
+    }
+    mask = RT_HLEN(core_symtab) - 1, i = (intptr_t)(core_hash(s, n) & (uintptr_t)mask);
     for (;; i = (i + 1) & mask) {
         obj *slot = &RT_VEC(core_symtab)[i], name;
         if (*slot == RT_FALSE) return slot;
@@ -219,10 +226,6 @@ RT_FN obj rt_intern(const char *s, size_t n) {
     sym = rt_make_symbol(name);
     core_symadd(sym);
     return sym;
-}
-RT_FN void rt_intern_static(obj sym) {
-    obj name = RT_PTR(sym, rt_symbol)->name;
-    if (*core_symslot(RT_STR(name)->buf, (size_t)RT_STR(name)->bytes) == RT_FALSE) core_symadd(sym);
 }
 RT_FN obj rt_string_to_symbol(obj s) {
     RT_CHECK(rt_is_string(s), "string->symbol", "string", s);
@@ -378,9 +381,11 @@ RT_FN obj rt_make_proc(rt_code code, intptr_t nfree) {
 
 /* ---- compiled calling convention ---- */
 RT_FN void rt_args_reserve(intptr_t n) {
-    if (n > core_argcap) { /* TODO(M2): register the grown buffer as a root */
+    if (n > core_argcap) { /* the old buffer stays a root range: clear it */
         obj *b = (obj *)rt_sys_mem(sizeof(obj) * (size_t)(2 * n));
         if (!b) rt_error(0, "out of memory", RT_NIL);
+        rt_gc_add_roots(b, b + 2 * n);
+        rt_memset(rt_args, 0, sizeof(obj) * (size_t)core_argcap);
         rt_args = b;
         core_argcap = 2 * n;
     }

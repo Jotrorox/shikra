@@ -53,6 +53,8 @@ RT_FN void *rt_sys_mem(size_t n) {
     void *p = mmap(0, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     return p == MAP_FAILED ? 0 : p;
 }
+RT_FN void rt_sys_free(void *p, size_t n) { munmap(p, n); }
+RT_FN const char *rt_sys_getenv(const char *name) { return getenv(name); }
 RT_FN int64_t rt_sys_clock_ns(int monotonic) {
     struct timespec ts;
     clock_gettime(monotonic ? CLOCK_MONOTONIC : CLOCK_REALTIME, &ts);

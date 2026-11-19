@@ -1,8 +1,10 @@
 /* emit.c -- the naive C backend (spec §5 pass 7, §8.1; DESIGN.md §3, §7, §11 M0 part B).
  *
  * One translation unit: config #defines, rt.h, the generated code, the runtime sources.
- * Generated code: literals as static data (read-only flag set; symbols interned at
- * startup), the globals array (a GC root range), one C function per procedure with the
+ * Generated code: literals as static const data with no startup code (read-only flag on
+ * strings, vectors, bytevectors; every pair in rt_lit_pairs[] so set-car!/set-cdr! can
+ * detect literals; symbols listed in rt_static_syms[], entered into the symbol table only
+ * when the program creates one), the globals array (a GC root range), one C function per procedure with the
  * uniform signature, a static closure for every procedure without free variables, and
  * rt_program_main / rt_engine_raise (the program-mode contract, DESIGN.md §11 M0 part A).
  * Tail calls: self tail calls are gotos to the entry label; every other tail call is
@@ -14,7 +16,8 @@
 #include <string.h>
 
 static sbuf lits, code;    /* literal definitions; function bodies */
-static int nlits, nsyms;
+static sbuf pairs;         /* initialisers of rt_lit_pairs[] (all literal pairs, spec §3.2) */
+static int nlits, nsyms, npairs;
 static pmap litmap;        /* heap literal datum -> C expression */
 static htab symmap;        /* symbol name -> C expression */
 static sbuf symtab;        /* initialiser list of static symbols */
@@ -74,7 +77,7 @@ static void c_string(sbuf *b, const char *s, size_t n) {
 static const char *lit_string(const char *s, size_t n) {
     int k = nlits++;
     int ascii = rt_utf8_count(s, n) == n;
-    sb_printf(&lits, "static rt_string L%d = {RT_HDR(RT_T_STRING, RT_F_RO%s, 0), %ld, %ld, ", k, ascii ? " | RT_F_ASCII" : "",
+    sb_printf(&lits, "static const rt_string L%d = {RT_HDR(RT_T_STRING, RT_F_RO%s, 0), %ld, %ld, ", k, ascii ? " | RT_F_ASCII" : "",
               (long)rt_utf8_count(s, n), (long)n);
     c_string(&lits, s, n);
     sb_puts(&lits, "};\n");
@@ -101,7 +104,7 @@ static const char *lit(obj x) {
         if ((r = (const char *)ht_get(&symmap, s->buf))) return r;
         r = lit_string(s->buf, (size_t)s->bytes);
         k = nlits++;
-        sb_printf(&lits, "static rt_symbol L%d = {RT_HDR(RT_T_SYMBOL, 0, 1), %s};\n", k, r);
+        sb_printf(&lits, "static const rt_symbol L%d = {RT_HDR(RT_T_SYMBOL, 0, 1), %s};\n", k, r);
         r = fmt("((obj)((char *)&L%d + 5))", k);
         sb_printf(&symtab, "%s%s", nsyms++ ? ", " : "", r);
         ht_put(&symmap, arena_strdup(&compiler_arena, s->buf), (void *)r);
@@ -110,17 +113,17 @@ static const char *lit(obj x) {
     if ((r = (const char *)pm_get(&litmap, x))) return r;
     if (rt_is_pair(x)) {
         const char *a = lit(RT_CAR(x)), *d = lit(RT_CDR(x));
-        int k = nlits++;
-        sb_printf(&lits, "static rt_pair L%d = {%s, %s};\n", k, a, d);
-        r = fmt("((obj)((char *)&L%d + 1))", k);
+        int k = npairs++;
+        sb_printf(&pairs, "%s{%s, %s}", k ? ",\n    " : "", a, d);
+        r = fmt("((obj)((char *)&rt_lit_pairs[%d] + 1))", k);
     } else if (rt_is_string(x)) {
         r = lit_string(RT_STR(x)->buf, (size_t)RT_STR(x)->bytes);
     } else if (rt_is_flo(x)) {
         double d = RT_FLO(x);
         int k = nlits++;
-        if (d != d) sb_printf(&lits, "static rt_flonum L%d = {RT_HDR(RT_T_FLONUM, 0, 8), G_NAN};\n", k);
-        else if (d - d != 0) sb_printf(&lits, "static rt_flonum L%d = {RT_HDR(RT_T_FLONUM, 0, 8), %sG_INF};\n", k, d < 0 ? "-" : "");
-        else sb_printf(&lits, "static rt_flonum L%d = {RT_HDR(RT_T_FLONUM, 0, 8), %a};\n", k, d);
+        if (d != d) sb_printf(&lits, "static const rt_flonum L%d = {RT_HDR(RT_T_FLONUM, 0, 8), G_NAN};\n", k);
+        else if (d - d != 0) sb_printf(&lits, "static const rt_flonum L%d = {RT_HDR(RT_T_FLONUM, 0, 8), %sG_INF};\n", k, d < 0 ? "-" : "");
+        else sb_printf(&lits, "static const rt_flonum L%d = {RT_HDR(RT_T_FLONUM, 0, 8), %a};\n", k, d);
         r = fmt("((obj)((char *)&L%d + 5))", k);
     } else if (rt_is_vector(x)) {
         const char **el;
@@ -129,9 +132,9 @@ static const char *lit(obj x) {
         el = NEWN(const char *, n);
         for (i = 0; i < n; i++) el[i] = lit(RT_VEC(x)[i]);
         k = nlits++;
-        if (n == 0) sb_printf(&lits, "static struct { uintptr_t hdr; } L%d = {RT_HDR(RT_T_VECTOR, RT_F_RO, 0)};\n", k);
+        if (n == 0) sb_printf(&lits, "static const struct { uintptr_t hdr; } L%d = {RT_HDR(RT_T_VECTOR, RT_F_RO, 0)};\n", k);
         else {
-            sb_printf(&lits, "static struct { uintptr_t hdr; obj v[%ld]; } L%d = {RT_HDR(RT_T_VECTOR, RT_F_RO, %ld), {", (long)n, k, (long)n);
+            sb_printf(&lits, "static const struct { uintptr_t hdr; obj v[%ld]; } L%d = {RT_HDR(RT_T_VECTOR, RT_F_RO, %ld), {", (long)n, k, (long)n);
             for (i = 0; i < n; i++) sb_printf(&lits, "%s%s", i ? ", " : "", el[i]);
             sb_puts(&lits, "}};\n");
         }
@@ -139,9 +142,9 @@ static const char *lit(obj x) {
     } else if (rt_is_bytevector(x)) {
         int k = nlits++;
         n = RT_HLEN(x);
-        if (n == 0) sb_printf(&lits, "static struct { uintptr_t hdr; } L%d = {RT_HDR(RT_T_BYTEVECTOR, RT_F_RO, 0)};\n", k);
+        if (n == 0) sb_printf(&lits, "static const struct { uintptr_t hdr; } L%d = {RT_HDR(RT_T_BYTEVECTOR, RT_F_RO, 0)};\n", k);
         else {
-            sb_printf(&lits, "static struct { uintptr_t hdr; unsigned char b[%ld]; } L%d = {RT_HDR(RT_T_BYTEVECTOR, RT_F_RO, %ld), {", (long)n, k, (long)n);
+            sb_printf(&lits, "static const struct { uintptr_t hdr; unsigned char b[%ld]; } L%d = {RT_HDR(RT_T_BYTEVECTOR, RT_F_RO, %ld), {", (long)n, k, (long)n);
             for (i = 0; i < n; i++) sb_printf(&lits, "%s%d", i ? ", " : "", RT_PTR(x, rt_bytevector)->b[i]);
             sb_puts(&lits, "}};\n");
         }
@@ -440,7 +443,7 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     for (L = p->lambdas; L; L = L->next) {
         sb_printf(&protos, "static RT_UNUSED obj %s(obj, intptr_t, obj, obj, obj, obj);\n", L->cname);
         if (L->is_static && L != p->main && !L->dispatch)
-            sb_printf(&closures, "static RT_UNUSED rt_proc %s = {RT_HDR(RT_T_PROC, 0, 0), %s};\n", closure_name(L), L->cname);
+            sb_printf(&closures, "static RT_UNUSED const rt_proc %s = {RT_HDR(RT_T_PROC, 0, 0), %s};\n", closure_name(L), L->cname);
     }
     for (L = p->lambdas; L; L = L->next) emit_function(L, p);
 
@@ -451,13 +454,16 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     if (o->gc_bump) sb_puts(o_, "#define RT_GC_BUMP 1\n");
     if (o->unicode_full) sb_puts(o_, "#define RT_UNICODE_FULL 1\n");
     if (o->gc_stress) sb_puts(o_, "#define RT_GC_STRESS 1\n");
+    sb_printf(o_, "#define RT_NLITPAIRS %d\n#define RT_NSTATIC_SYMS %d\n", npairs, nsyms);
     append_embedded(o_, "src/rt.h");
     sb_puts(o_, "\n/* ==== program ==== */\n");
     sb_puts(o_, "#if defined(__GNUC__) || defined(__clang__)\n#define G_INF __builtin_inf()\n#define G_NAN __builtin_nan(\"\")\n"
                 "#else\n#define G_INF (1e308 * 10.0)\n#define G_NAN (G_INF - G_INF)\n#endif\n");
     if (lits.len) sb_putn(o_, lits.s, lits.len);
+    if (npairs) sb_printf(o_, "static const rt_pair rt_lit_pairs[%d] = {\n    %s};\n", npairs, pairs.s);
     sb_printf(o_, "static obj rt_g[%d]; /* globals: a GC root range */\n", nglob + 1);
-    if (nsyms) sb_printf(o_, "static obj rt_static_syms[%d] = {%s};\n", nsyms, symtab.s);
+    if (nsyms) /* entered into the symbol table only if the program creates it (spec §9.1) */
+        sb_printf(o_, "static const obj rt_static_syms[%d] = {%s};\n", nsyms, symtab.s);
     sb_putn(o_, protos.s, protos.len);
     if (closures.len) sb_putn(o_, closures.s, closures.len);
     sb_putc(o_, '\n');
@@ -465,7 +471,6 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     sb_puts(o_, "static void rt_program_main(void) {\n    int i;\n");
     sb_printf(o_, "    for (i = 0; i < %d; i++) rt_g[i] = RT_UNDEF;\n", nglob + 1);
     sb_printf(o_, "    rt_gc_add_roots(rt_g, rt_g + %d);\n", nglob + 1);
-    if (nsyms) sb_printf(o_, "    for (i = 0; i < %d; i++) rt_intern_static(rt_static_syms[i]);\n", nsyms);
     sb_printf(o_, "    (void)%s(RT_FALSE, 0, 0, 0, 0, 0);\n}\n", p->main->cname);
     if (p->raise) /* runtime errors detected by primitives are raised by (scheme base) raise */
         sb_printf(o_, "static void rt_engine_raise(obj e) {\n    (void)%s(RT_SPROC(%s), 1, e, 0, 0, 0);\n    rt_uncaught(e);\n}\n",
