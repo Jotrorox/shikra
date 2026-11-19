@@ -302,6 +302,14 @@ engines and the outputs must be identical.
   the r7rs gate and 36 of the 41 programs in tests/cases collect at every allocation, at
   -O2 and -O0; five whose live set or allocation count makes a full collection per
   allocation quadratic use a per-case interval (M2 "Stress mode" lists them and why).
+- *The static Linux runtime contains inline assembly* (M6; spec §5.4 says plain C99 plus two
+  builtins): a program without libc must make system calls and be entered by the kernel, which C
+  cannot express. It is confined to `rt_sys.c`'s `SHIKRA_NOLIBC` branch -- the system-call
+  instruction (one function per architecture), `_start` (5 instructions), and setjmp/longjmp for
+  clang on arm64, which lacks `__builtin_setjmp` -- plus the square-root instruction in
+  `rt_math.c` (portable fallback present). That branch also uses GNU C attributes (`used`,
+  `returns_twice`, `optimize` for GCC) and `__builtin_mem*`. Everything else stays C99, and the
+  macOS build contains none of it.
 
 ## 11. As built
 
@@ -1973,3 +1981,129 @@ get only the facts of their declaration.
 `rt_fx*`, flat printers) and the two config macros; `-g` locations can reuse the inlined-code
 locations (N_LIB copies carry the user's call site); the expansion cache is unaffected (the analysis
 runs on IR).
+
+### M6 Linux as built (static Linux without libc, x86-64 and arm64; `--target`, `--cc`)
+
+**Files.** `src/rt_sys.c` gains the `SHIKRA_NOLIBC` branch (≈170 lines: system calls, `_start`,
+mem* symbols, setjmp for clang/arm64); `src/rt_math.c` (new, 454 lines incl. tables and comments)
+is the libm replacement; `src/rt.h` includes no header under `SHIKRA_NOLIBC` (types from the
+compiler's predefined `__SIZE_TYPE__`, `__INTPTR_TYPE__`, ... macros) and defines `RT_SYS_LIBM`
+on macOS only; `src/main.c` parses `--target` and builds the cc command line; `src/emit.c`
+appends `rt_math.c` to the program; `tests/linux.sh` (new), `tests/unit/math_unit.c` (new),
+`tools/mathconst.py` (new, not part of the build). The runtime outside these is unchanged: the
+platform API in rt.h is the same on every OS.
+
+**Variant selection.** A Linux target on x86-64 or arm64 (the host, or `--target`) means the
+driver passes `-DSHIKRA_NOLIBC=1` plus the flags below; the generated C itself is the same for
+every target (`emit-c` output still compiles against libc unless `SHIKRA_NOLIBC` is defined).
+`rt_math.c` is used wherever `RT_SYS_LIBM` is unset, i.e. everywhere but macOS: in static
+programs and in the `shikra` tool on Linux, so the interpreter and compiled programs compute
+bit-identical results there, and the documented one-line build needs no `-lm` on glibc.
+
+**Entry and system calls.** `_start` (top-level `__asm__`, global): x86-64 `xor %ebp,%ebp; mov
+%rsp,%rdi; and $-16,%rsp; call shikra_start; hlt`; arm64 `mov x29,#0; mov x30,#0; mov x0,sp; bl
+shikra_start; brk #0`. `shikra_start(sp)` (C, `used`): argc = sp[0], argv = sp+1, envp after
+argv's NULL; `rt_init(argc, argv, sp)` -- the initial stack pointer is the collector's stack base
+-- then `rt_program_main()` and `rt_exit(0)` (exit_group). One `sys_call(n, a..f)` per
+architecture: `syscall` (rax, rdi, rsi, rdx, r10, r8, r9; clobbers rcx, r11) or `svc 0` (x8,
+x0..x5). Calls used: read, write (loop, EINTR retried), openat (AT_FDCWD; O_WRONLY|O_CREAT|
+O_TRUNC/O_APPEND, 0666), close, ppoll with a zero timeout (`rt_sys_ready`), faccessat F_OK
+(`file-exists?`), unlinkat (`delete-file`), mmap/munmap (anonymous private), clock_gettime
+(REALTIME, MONOTONIC; a system call each, no vDSO), exit_group. Numbers: x86-64 0/1/257/3/271/
+269/263/9/11/228/231, arm64 (generic table) 63/64/56/57/73/48/35/222/215/113/94. `rt_sys_getenv`
+and `get-environment-variables` scan envp; `command-line` is argv, as before.
+
+**No libc, no libgcc.** `memcpy memmove memset memcmp` are defined (global, byte loops; GCC gets
+`optimize("no-tree-loop-distribute-patterns")` so it cannot turn them into calls to themselves)
+for the calls the compiler emits; the runtime's `rt_mem*` use `__builtin_mem*`. Nothing needs
+libgcc on either architecture (64-bit division and float conversions are instructions; no
+`__int128`, no long double arithmetic), and `-nostdlib` would make a stray helper a link error.
+**Non-local exits**: `__builtin_setjmp` with GCC (both architectures) and clang on x86-64, as
+before; clang has no `__builtin_setjmp` on arm64, so `shikra_setjmp/shikra_longjmp` (26
+instructions: x19-x30, sp, d8-d15 into `rt_jmpbuf`; `returns_twice`) replace `sigsetjmp` there.
+The collector's register capture is the same `rt_sys_catch` call, so callee-saved registers land
+in a stack-resident buffer in both cases.
+
+**Link flags** (nolibc only; `cc_argv`): `-ffreestanding` (no hosted headers or builtin
+assumptions), `-fno-stack-protector` (the canary lives in TLS, which nobody sets up),
+`-fno-pie` (no GOT indirection; the static link resolves everything), `-fno-asynchronous-unwind-
+tables -fno-unwind-tables` (no .eh_frame: nothing unwinds), `-ffunction-sections -fdata-sections`
++ `-Wl,--gc-sections` (as everywhere), `-static -nostdlib`, `-Wl,--build-id=none`,
+`-Wl,-z,norelro`, `-Wl,-z,noseparate-code` (GNU ld would otherwise page-align text separately;
+not passed to `zig cc`, whose lld rejects it and does not separate anyway), and `-g0` for `zig cc`
+without `-g` (it adds debug information by default). No `-s`: symbols stay for `shikra size` and
+`nm`-based shape tests.
+
+**`--target` and `--cc`.** The triple's first component gives the architecture, a `linux`,
+`darwin`/`apple`/`macos` substring the OS; anything else is rejected with the supported list.
+
+| `--target` spelling (examples) | runtime | passed to cc | features (`cond-expand`, `(features)`) |
+|---|---|---|---|
+| `x86_64-linux`, `x86_64-linux-gnu`, `x86_64-unknown-linux-musl`, `amd64-linux` | nolibc | `--target=x86_64-linux-musl` | linux gnu-linux unix posix x86-64 little-endian lp64 |
+| `aarch64-linux`, `aarch64-linux-gnu`, `arm64-linux` | nolibc | `--target=aarch64-linux-musl` | linux gnu-linux unix posix arm64 aarch64 little-endian lp64 |
+| `arm64-apple-darwin`, `aarch64-macos` | libSystem | `--target=arm64-apple-darwin` | darwin macos unix posix arm64 aarch64 ... |
+| `x86_64-apple-darwin` | libSystem | `--target=x86_64-apple-darwin` | darwin macos unix posix x86-64 ... |
+
+(`-musl` because both clang and `zig cc` accept it and the C library part means nothing without a
+libc; features come from library.c's existing triple parsing.) `--target` naming the host passes
+no `--target=` (GCC has no such option), so `--target x86_64-linux-gnu` works with GCC on an
+x86-64 Linux host. Default compiler: `--cc`, else `$SHIKRA_CC`, else `cc`; cross-compiling with
+the default tries `cc --target=TRIPLE`, and on macOS adds `-fuse-ld=lld` for Linux targets
+(Apple's ld64 cannot write ELF; Homebrew's `ld.lld` in PATH is enough -- Apple clang itself works
+since rt.h needs no headers). A failed cross build prints the compiler's errors, then "can 'CC'
+build for TRIPLE? Cross-compiling needs a compiler that takes --target, e.g. --cc clang or --cc
+"zig cc"". `shikra run`'s cache key includes the target (running a foreign binary is the
+user's business, e.g. via binfmt).
+
+**Math without libm** (`rt_math.c`; own code, constants from `tools/mathconst.py` by exact
+integer arithmetic: pi by Machin's formula, ln 2 = 2 atanh(1/3), atan(j/8) by series, 1280 bits
+of 2/pi). Double-double throughout the last bits: Dekker's exact product, Knuth's two-sum.
+- `exp`: x = k ln2 + r (ln2 as 32 + 53 bits, so k ln2_hi is exact), |r| <= ln2/2, Taylor to r^14
+  with 1 + r + r^2/2 summed exactly, scaling by 2^k with one rounding (also into subnormals).
+- `log`: x = 2^k m, m in [sqrt(1/2), sqrt 2), log m = 2 atanh(s), s = (m-1)/(m+1) in double-double,
+  (2/3)s^3 in double-double, series to s^27; result as hi + lo (~2^-66 relative) for `pow`.
+- `sin cos tan`: reduction to |r| <= pi/4 as hi + lo: Cody-Waite with pi/2 in 33 + 33 + 53 bits for
+  |x| < 2^20 (falling back when r loses more than 26 bits), Payne-Hanek otherwise (192 bits of 2/pi
+  at the right offset times the 53-bit mantissa in 32-bit limbs; the fraction to ~120 bits): no
+  degradation over the whole double range. Kernels: Taylor to r^19 / r^18 with r - r^3/6 and
+  1 - r^2/2 in double-double; tan = sin/cos (or -cos/sin) as a double-double division.
+- `atan2` (also one-argument `atan` = atan2(x, 1), as the emitter calls it), `asin`, `acos`: atan
+  of a double-double argument: 1/t for t > 1, then atan(c) + atan((t-c)/(1+tc)) with c = j/8 nearest
+  (table of atan(j/8) as hi + lo), series to u^17 for |u| <= 1/16; asin/acos via sqrt(1 - x^2) in
+  double-double (1-x exact for x >= 1/2). Quadrants with pi and pi/2 as hi + lo; exponent gaps
+  over 60 and scaling for huge/tiny operands handled before the division.
+- `pow`: exp(y log|x|) with the double-double log and y*log as an exact product; C99 Annex F
+  special cases (pow(x, ±0) = 1, pow(1, y) = 1, negative base with integer/non-integer y, signed
+  zeros and infinities, |x| = 1 with infinite y).
+- `sqrt`: the instruction (`sqrtsd` / `fsqrt`, inline asm: independent of `-fmath-errno`, which
+  would otherwise make `__builtin_sqrt` call libm for negative arguments); portable Newton fallback
+  for other architectures.
+- clang gets `#pragma STDC FP_CONTRACT OFF` (a fused multiply-add would break the exact-product
+  identities); GCC's default in `-std=c99` is already off.
+
+*Accuracy* (tests/unit/math_unit.c, part of `tests/run.sh unit`: 300,000-500,000 random arguments
+per function in ranges across magnitudes -- all positive doubles for log/sqrt, up to 2^1023 and
+near multiples of pi/2 for trig, both operands over 2^-1074..2^1023 for atan2 and pow -- plus bit
+exact special cases and the identities the suites use). Largest difference from the host libm:
+
+| function | vs macOS libm: max ulp / results differing | vs glibc 2.41 libm (arm64): max / differing |
+|---|---|---|
+| exp | 1 / 0.27% | 1 / 0.17% |
+| log | 1 / 0.008% | 1 / 0.07% |
+| sin | 1 / 2.6% | 1 / 0.27% |
+| cos | 1 / 2.8% | 1 / 0.45% |
+| tan | 3 / 33% | 1 / 0.42% |
+| asin | 1 / 2.3% | 1 / 0.07% |
+| acos | 1 / 15% | 1 / 0.04% |
+| atan2 | 1 / 0.07% | 1 / 0.03% |
+| pow | 1 / 0.38% | 1 / 0.34% |
+| sqrt | 0 / 0 | 0 / 0 |
+
+Most differences are libm's: the arguments where they differ were re-evaluated with exact rational
+arithmetic (`math_unit -dump | python3 tools/mathcheck.py`, 300-bit rationals; results below), e.g. macOS
+`tan(1.0381590199329658)` is 2.48 ulp off (Shikra 0.52), `tan(1.0)` 0.72 ulp (Shikra 0.28, the
+correctly rounded 1.5574077246549023), and macOS acos/asin round the wrong way in ~15% / 2% of these
+ranges. The test's limit is 2 ulp against the host libm (4 for tan, because of macOS's tan).
+Identities that hold exactly: `(exp 1)` = 2.718281828459045, `(* 4 (atan 1))` = pi, `(expt 2. 3)`
+= 8., `(expt 4 .5)` = 2., `(sqrt 16)` = 4, log 8 / log 2 = 3, log 4096 / log 2 = 12, `(log (exp 1))`
+= 1, `(acos -1)` = pi, `(sin 1e22)` = -0.8522008497671888.
