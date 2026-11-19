@@ -3009,6 +3009,13 @@ pure fixnum code; a variable that may hold a bignum is a tagged `obj`, never an 
 (`R_FIX` is chosen only for `T_FIX`-only values); `+ - *` of proven fixnums that may overflow emit
 `rt_fxaddb`/`rt_fxsubb`/`rt_fxmulb` (tagged add + overflow branch to the out-of-line, promoting
 `rt_add2`) instead of the error-raising `rt_fxadd`; unknown operands keep the inline `rt_add` fast path.
+A "fixnum or bignum" compared with a proven fixnum is `RT_BOOL(a == b)` for `=` (normalisation) and
+`rt_is_fix(x) ? <word comparison> : <generic>` for the orderings; `quotient`/`remainder`/`modulo` of
+one by a fixnum constant (not 0, not -1 for `quotient`) is `rt_is_fix(x) ? rt_fxquo(...) : <generic>`.
+The flonum specialisations (`+ - * /` with a flonum operand, `inexact`, `atan`, define-c and f64vector
+double arguments) accept operands that may be bignums (`rt_num_dbl` converts them), in the emitter
+(`NUMT`) and in the analysis's double-representation choice (`float_slot`) alike; `sqrt exp log sin
+...` stay generic for them (`rt_big_log`, `rt_big_sqrt` beyond the double range).
 `eqv?` is a word comparison only if one side cannot be a flonum or bignum; constant folding of `eqv?`
 leaves bignum constants to run time, other folds only fold fixnum constants within range (big
 constants are computed at run time; literals themselves are exact). `--unsafe --bignum` removes type
@@ -3032,7 +3039,7 @@ indices and counts), `big_float` (comparisons around 2^53, 2^63, 1e300 and the i
 `inexact` round trips with halfway cases, contagion, sqrt, log), `big_text` (radix 2/8/10/16 round
 trips, literals, exact decimals, a 10,000-digit number), `big_random` (a differential corpus of 4,000
 operations on operands up to 3,000 bits), `big_kmul` (120 Karatsuba-size products, squares and long
-divisions up to 30,000 bits), `big_fold` (constant expressions), `big_fixnum`, `big_unsafe`; all in
+divisions up to 30,000 bits), `big_fold` (constant expressions), `big_cmp` (the inline comparison and division forms), `big_fixnum`, `big_unsafe`; all in
 both engines, -O2/-O0/-Os, GC stress (compiled and interpreted), trampoline. tests/r7rs/bignum.scm:
 the 7 upstream tests EXCLUSIONS.md excluded because of bignums, verbatim, in every mode (7/7 in both
 engines); the other r7rs files also run with `--bignum` in both engines (r7rs pass at -O2): all pass
