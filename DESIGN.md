@@ -255,7 +255,9 @@ engines and the outputs must be identical.
 - *The receiver of a tier-2 `call/cc` is not called in tail position* (R7RS 3.5 requires
   it; M1 part A): `rt_call_cc`'s C frame holds the jump target while the receiver runs, so a
   loop that recurses through `call/cc` grows the C stack. Tier-1 sites in tail position are
-  proper (the receiver body is inlined). Fixing it needs heap continuations (M5 tier 3).
+  proper (the receiver body is inlined). (M5: tier 3 copies the C stack, so `rt_call_cc3` keeps
+  its frame too; this stays a deviation for tiers 2 and 3. Fixing it needs heap-allocated frames,
+  i.e. CPS conversion, the spec's §15 fallback.)
 - *`guard` clause tests see the raiser's parameter values* (R7RS 4.2.7 says the guard's
   dynamic environment; M1 part A): spec §8.3 evaluates the clauses on top of the raising
   frame, before unwinding; they run with the guard's handler stack, but the winders list
@@ -316,6 +318,15 @@ engines and the outputs must be identical.
   non-moving collector keeps the lines of sparse survivors, and a smaller heap costs more collections
   than the speed goal allows. Every other allocation-heavy benchmark is within 1.3x of Chez except
   earley (1.4-1.8x). "M4-3 as built", Collector.
+- *Tier 3 is not available under hardware shadow stacks* (spec §15 risk; M5): copying the C stack
+  back invalidates the return addresses a shadow stack (Intel CET, Arm GCS) has recorded, so a
+  re-entry would fault. Programs must be built without shadow-stack enforcement; the CPS fallback
+  the spec names is not implemented. Tiers 1 and 2 are unaffected (setjmp/longjmp is supported).
+- *The tier-2 escape analysis ignores run-time error irritants* (M5, "Tier 3 continuations as
+  built"): a continuation can also leave its extent as the irritant of a type error the program
+  commits (`(vector-ref k 0)`, calling a list that holds `k`), caught by a handler that keeps the
+  condition. Those are "it is an error" situations; calling such a `k` later raises the safe-mode
+  error "tier-2 continuation called after its extent (bug)" -- nothing is corrupted.
 
 ## 11. As built
 
@@ -773,9 +784,11 @@ expansion (normalize.c):
   otherwise, e.g. Apple clang arm64). The escape procedure checks `%continuation-live?`
   first (so a dead `k` fails before any winder runs), then `travel-to!`, then
   `(%apply k vals)`.
-- *Tier 3* (M5): a dead `k` raises "re-entrant continuation not supported yet (milestone
-  M5)". The hook is the dead state: M5 keeps a heap copy of the stack segment instead of
-  `#f` and copies it back in `core_cont_code`; tier 2 stays as is.
+- *Tier 3* (M5, done: "Tier 3 continuations as built" at the end): a site whose `k` may
+  outlive its extent calls `rt_call_cc3`, which also copies the stack; invoking its dead `k`
+  re-enters. A dead tier-2 `k` (a classification bug) raises "tier-2 continuation called after
+  its extent (bug)". In compiled code the escape procedure no longer travels
+  (`%continuation-live?` is #f there: compiled continuations walk the winders themselves).
 
 **Multiple values** (spec §8.5). Calls to base's `values`, `call-with-values` (2 args) and
 `apply` (2 args) are rewritten to `%values` / `%call-with-values` / `%apply` before tree
@@ -1912,7 +1925,7 @@ bound to `(%values ...)` fold in the optimizer.
 | Datum reader | linker: `read` |
 | File ports | linker: `(scheme file)` procedures |
 | Cycle detection (datum labels) | linker: `io_scan` from the generic `display`/`write`, linked when one is reachable on a value whose type may be a pair or a non-empty vector, or by the uncaught-error printer (irritants of any type), not by fixnum overflow reports |
-| Stack-copying continuations | not built (tier 3) |
+| Stack-copying continuations | `RT_TIER3` when some `%call/cc` site is tier 3 (escape analysis, "Tier 3 continuations as built"): `rt_call_cc3`, the re-entry code, the conservative scan of stack copies, `rt_program_main` kept out of `main` |
 | Unicode tables | `--unicode=full` |
 
 The port parameters: `current-input-port` etc. are closure-free case-lambdas over static cells
@@ -2206,3 +2219,211 @@ for the same binary); the numbers must be re-recorded on a quiet machine.
   off through `shikra run`.
 - `shikra size` cannot split a procedure's bytes among the procedures inlined into it, and shows user
   library ids mangled.
+### Tier 3 continuations as built (M5)
+
+**File map** (runtime +111 lines → ~4,080 in `rt.h` + `rt_*.c` without the Unicode tables:
+`rt_core.c` +87, `rt_gc.c` +13, `rt.h` +11; compiler +430 → ~8,380: the classifier in `analyze.c`
+~390, normalize.c/opt.c/emit.c/ir.h the rest; library: the escape procedure)
+
+```
+src/analyze.c   ir_classify_callcc: reachability and procedure uses, free variables, the taint
+                analysis (tterm/trhs/tprim/tcall), escapes, CAP (procedures a capture may resume)
+src/normalize.c ir_forcebox (names of assigned variables that must be boxed), the round loop
+src/opt.c       unbox leaves forced boxes alone
+src/emit.c      rt_call_cc3 for N_TIER3 sites, #define RT_TIER3
+src/rt_core.c   core_cont_code's dead path (CORE_DEAD), rt_call_cc3, core_callcc3_run,
+                core_reenter, core_rewind; rt_continuation_live_p is #f for compiled continuations
+src/rt_gc.c     RT_T_CONT objects scanned conservatively (flagged mark-stack ranges)
+src/rt.h        rt_call_cc3; rt_program_main never inlined into main under RT_TIER3
+lib/scheme/base/control.scm   the escape procedure travels only where the engine does not
+tests/cases/{gen_fringe,coroutines,amb,reentry*,tier3_escape}.scm, tests/shape/callcc_tier{2,3},
+tests/fuzz/gen3.scm
+```
+
+**Classification** (spec §8.2). Tier 1 is unchanged (M1 part A, M4-1: optimistic sites verified
+after optimization). Every remaining `%call/cc` site is classified after the final flow analysis
+(normalize.c's round loop: `ir_analyze(prog, 1)` then `ir_classify_callcc`), on the IR that is
+emitted. A site is **tier 2** when its continuation `k` provably cannot be invoked once the
+site's `rt_call_cc` frame is gone from the stack; otherwise **tier 3** (`N_TIER3` on the call
+node, counted in `p->tier3`).
+
+The analysis is a taint propagation over the whole program, 64 sites per pass (a bit per site;
+more sites take more passes). A value is *tainted by site s* if it may be, or contain, a
+continuation of s. Seeds: the receiver's parameter. Flows: `let`, join-point parameters, `set!`
+of locals, known calls (arguments into parameters, a rest list from the extra arguments, results
+back to the call), returns and tail calls into the procedure's result; a closure is tainted by
+its free variables (and by the contents of the boxes it captures); allocating primitives give
+their result the union of their arguments' taints and accessors (`car`, `vector-ref`,
+`record-ref`, `%values-ref`...) the taint of their argument -- immutable data built from `k` is
+followed, not given up; a box set by the procedure that binds it records its contents; the
+winders and handler lists are two abstract locations: `%set-winders!`/`%set-handlers!` add to
+them and `%winders`/`%handlers`/`%parameter-binding` read them (so `dynamic-wind` before/after
+thunks, `parameterize` values and `with-exception-handler` handlers that capture `k` do not make
+it escape), and `travel-to!` gets the winders' taint as its parameter (the runtime passes saved
+winders). An atom whose analysed type cannot hold a reference (fixnum, flonum, char, boolean,
+string, symbol, bytevector...) carries no taint. A call `(k v ...)` whose operator is the
+parameter of a receiver used only as a receiver delivers `v ...` as those sites' call/cc values.
+
+Site s **escapes** (tier 3) if a value tainted by s may reach: an argument of an unknown call,
+of `apply`, or of a continuation other than the receiver's own `k`; a mutating primitive's
+stored argument (`set-car!`, `vector-set!`, `record-set!`, `%promise-set-state!`, a box of
+another procedure...), `%uncaught`/`%exit`; a `set!` of a global; the result of a procedure that
+unknown code may call (a procedure whose value is used other than as the callee of a known call
+or the receiver of a call/cc: stored, passed, returned, kept); the value of s's own call/cc (the
+receiver returns it, or `k` is passed to itself); and s escapes when its receiver is not one
+known procedure. What survives is `k` passed down to known procedures -- inlined or analysed
+library procedures (`for-each`, `map`, `vector-for-each`, `dynamic-wind`,
+`with-exception-handler`, `parameterize`), user recursion, helper procedures -- that only call
+it or pass it further down.
+
+*Soundness argument.* Invariant: at run time a reference to a continuation `k` of an activation
+of s exists only (1) in C frames of activations inside that activation's extent, (2) in
+immutable data and closures reachable only from those, (3) in the winders and handler lists,
+whose entries are pushed and popped in LIFO order by activations inside the extent and are
+restored together with the stack by every continuation, and (4) in tier-3 stack copies taken
+inside the extent. Values move between activations only by arguments, returns, closures,
+mutation of shared data or globals, and continuation invocation; the analysis follows the first
+three into known code and treats every way into unknown code, every mutation that can make the
+value reachable from elsewhere, and the return out of the extent as an escape. Monovariance
+(all activations of s share one bit) is safe because a continuation of an earlier activation can
+only reach a later one through an escape. Case (4): a tier-3 copy taken inside the extent brings
+the site's frame back when it is copied back, and the re-entry revives it (below), so `k` is live
+again exactly when the stack that contains it is current. Unknown calls are covered by giving up
+on every value passed to unknown code and on the results of every procedure unknown code may
+call; the runtime calls into Scheme only through receivers (followed), `travel-to!` (winders
+taint) and `raise` (runtime errors; see the deviation on irritants). The dead-continuation check
+of tier 2 (`free[0] == #f`) stays as a cheap guard: if the analysis were ever wrong, the call
+raises "tier-2 continuation called after its extent (bug)" instead of jumping into a dead frame.
+
+*Imprecision* (tier 3 although no re-entry happens): `k` stored anywhere, even a local box of an
+enclosing procedure (`(set! return k)`); a value tainted only on some paths is tainted on all
+(per variable); a `guard` whose clause calls an outer continuation (`(call/cc (lambda (return)
+(guard (e (#t (return #f))) ...)))`): the clause's thunk reaches guard-run's call/cc value, which
+guard-run may return, so `return`'s site is tier 3 (guard's own site stays tier 2; restructuring
+guard-run to call a returned thunk makes it precise but costs a closure per normal guard exit,
+~20% on a guard microbenchmark, so it was not done); procedures passed to procedures that call
+them through a parameter count as escaping (at -O0, where little is inlined, `map` with a lambda
+that returns `k`-tainted data).
+
+**Assigned variables.** A copied frame brings back the values its C locals had at capture time;
+for a Scheme variable that is assigned (a location, R7RS 3.4) re-entry must see the current
+value, as the interpreter does (it boxes every assigned variable). So when some site is tier 3,
+`CAP` marks the procedures that may be on the stack, to be resumed, during a tier-3 capture: the
+procedure holding the site, callers through known calls, procedures with an unknown call (or
+apply / call-with-values) when some escaping procedure is in CAP, procedures holding a call/cc
+whose receiver is in CAP (fixpoint). Every assigned, unboxed local owned by a CAP procedure gets
+its name added to `ir_forcebox` and the round is rebuilt from the core forms (like a tier-1
+demotion): the normalizer boxes assigned variables of those names, the optimizer's unbox pass
+leaves them boxed. Names are unique per binder (the expander renames locals apart), so inlined
+copies are boxed too. Join-point parameters (loop variables) are bindings, not locations:
+restoring them is correct.
+
+**Runtime representation.** A tier-3 capture is the tier-2 `core_cont` frame (jump buffer, saved
+winders and handlers, receiver, `k`, value) plus: `k` has 3 free slots -- `free[0]` the frame
+while it is live on the current stack (else `#f`), `free[1]` the frame address always, `free[2]`
+the stack copy: a heap object of header type `RT_T_CONT` (raw class) `{hdr, lo, words...}` holding
+the bytes from `lo` (an address in `core_callcc3_run`'s frame, which lies below `rt_sys_catch`'s)
+up to the stack base `rt_init` recorded. Tier-2 `k`s keep 1 slot; `core_cont_code` serves both.
+
+**Capture** (`rt_call_cc3`): push the frame on `core_conts`, `rt_sys_catch` (setjmp: the
+registers go into the frame's jump buffer) calls `core_callcc3_run` (never inlined: GCC would clone
+`rt_sys_catch` and inline it, putting the copy's start above the jump-buffer frame), which checks
+that the stack grows down from below the base, allocates the copy, copies, stores it in
+`free[2]` and calls the receiver. Cost: one allocation and one copy of the live stack.
+
+**Invocation of a live k** (tier 2 or 3): as before -- `travel-to!` the capture's winders if they
+differ, mark the frames above dead, set the value, restore the lists, throw.
+
+**Re-entry** (`core_reenter`, a dead tier-3 `k`): (1) pack the value(s); (2) compute the common
+tail of the current and the captured winders (the captured list is read from the frame's image
+inside the copy) and `travel-to!` it: after thunks run on the current stack, innermost first, in
+the dynamic state outside each frame (R7RS 6.10); (3) make room: a C99 variable-length array moves
+the stack pointer 4 KB below `lo` if the current stack is shallower (re-entry from a shallower
+stack; from a deeper one nothing is needed); (4) `core_rewind` (never inlined, never seen as
+noreturn, so the call stays a call inside the array's frame): mark every frame of the current
+`core_conts` dead, copy the stack back, make the captured frame the head of `core_conts` and mark
+every frame of its chain live again (tier-2 frames inside the copy revive: their `k`s work
+exactly while their frames are back on the stack), store the value, restore the handler list
+(the winders list stays the common tail), throw to the frame's jump buffer; (5) the capture's
+`rt_sys_catch` returns 1 on the restored stack and `rt_call_cc3` `travel-to!`s the captured
+winders: before thunks run outermost first on the restored stack, where every frame they may
+escape to is live; then it returns the value. Multi-shot: the copy is never modified. An escape
+during an after or before thunk abandons the re-entry (consistent winders at every step). In
+compiled code the library's escape procedure (first-class `call/cc`) only applies `k`, so the
+before thunks never run on the wrong stack. `exit` in re-entered code unwinds the restored
+winders. Runtime globals describing in-flight state: arguments beyond a3 are copied out of
+`rt_args` by `core_cont_code` before anything runs; no trampoline call is pending at a capture or a
+throw; `core_conts`, `rt_winders`, `rt_handlers` are restored as above; nothing else describes
+the stack.
+
+**Collector.** `gc_scan` pushes the words of an `RT_T_CONT` copy as a range whose `lo` has its low
+bit set; `gc_drain` marks such ranges with `gc_mark_any` (conservatively, interior and untagged
+pointers, as the stack), sliced like vectors, so chains of continuations never recurse. The jump
+buffer inside the copy covers the saved registers. Stack addresses in the copy point outside the
+heap and are ignored. A copy keeps alive what its frames referenced, including the `k`s of the
+tier-2 frames inside it. All under `RT_TIER3`, so other programs' collectors are byte-identical.
+
+**Pay for use** (spec §9.1). `RT_TIER3` is emitted when `p->tier3 > 0`; everything above is under
+it. A program with only tier-1/2 sites compiles exactly the code it compiled before (only the
+dead-continuation message string changed, and it is shorter): hello world, ctak, fibc, fib,
+exceptions, dynamic_wind, control_tail, higher_order and the tier-1 shape program are
+byte-identical in size and symbol list at -O2 and -Os (hello world 50,880 bytes, `__text`
+1,568). callcc.scm (it returns `k` from a receiver: `(procedure? (call/cc (lambda (k) k)))`)
+grows 72,784 → 89,440 bytes at -O2 (one more 16 KB text page), 72,944 → 73,136 at -Os;
+tests/r7rs/base.scm 588,272 → 588,512.
+
+**Portability** (what the Linux port must check). Plain C99 plus the existing jump-buffer wrappers;
+no assembly. Assumptions, each checked or stated: the stack grows down (checked at every capture,
+with the capture frame below the base: else a catchable error); the base given to `rt_init` lies
+above every frame that can be live in Scheme code (main passes the address of its `argc`, and
+under `RT_TIER3` `rt_program_main` is never inlined into `main`; an own `_start` must pass an
+address above every frame it creates); memory between `lo` and the base stays mapped (it was
+stack when captured); `longjmp` to a frame above the current stack pointer (glibc's
+`__longjmp_chk` under `_FORTIFY_SOURCE` accepts that; mangled pointers in `jmp_buf` are restored
+bit for bit); no shadow stack (deviation). The `__builtin_setjmp` path (GCC) and the `sigsetjmp`
+path (Apple clang) both pass every test; `--cc gcc-16` on this machine exercises the former.
+
+**Tests.** tests/cases: reentry (the R7RS 6.10 example, both engines; no `compiled-only` marker is
+left in the suite), gen_fringe (tree-walking generators, same-fringe, a generator in a vector,
+2·10^4 values), coroutines (ping-pong with 10^5 switches, round-robin threads), amb (multiple
+dwelling, Pythagorean triples, eight queens: 92), reentry_wind (re-entered nested bodies three
+times with the before/after trace, re-entry from inside another wind, escapes through winds, a
+producer resumed in its wind, a before thunk escaping during the rewind), reentry_deep (captured
+10^4 frames deep and re-entered 1,000 times from the top; from a 9,000-frame-deeper stack; inside
+a 5,000-element map), reentry_values (0, 1, 2, 5 values, let-values, apply), reentry_dynamic
+(parameterize, a port parameter, with-exception-handler, guard re-entered and catching again, an
+error inside re-entered code), reentry_stored (list, vector, record, closure; assigned locals
+shared by every re-entry; `(k k)`), tier3_escape (stored continuations used only as escapes,
+10^5 times), reentry_map (map, vector-map, string-map, a user map: earlier results unchanged,
+both engines agree), reentry_exit (exit in re-entered code runs the restored after thunks).
+All pass under both engines, at -O0/-O2/-Os, with the trampoline, under GCC (-O2, -O0, -O0
+trampoline) and under stress (collection at every allocation; compiled at -O2 and -O0, and the
+interpreter; coroutines and tier3_escape use interval 10 in the interpreter's stress run, as
+control_tail and exceptions do, for time). Shape: `callcc_tier2` (escape-only patterns at every
+level: no `rt_call_cc3`, no stack-copying symbol linked), `callcc_tier3` (every re-entrant
+pattern's site is `rt_call_cc3`), `hello` (no continuation code). tests/fuzz/gen3.scm: random
+programs around call/cc (escapes through helpers, loops, map, traced dynamic-winds, handlers,
+guard; stored continuations used as escapes; bounded re-entries, also into map and
+dynamic-wind; assigned locals), compared between the interpreter and four compiled modes.
+`SHIKRA_TRACE=1` prints each site's tier, `SHIKRA_TRACE=2` also the first reason each escapes.
+
+**Numbers** (Apple M5, macOS 27.3, Apple clang; machine shared with other work, load ~9 during the
+timings, so they are compared interleaved).
+- Gate: tests/r7rs/base.scm compiled `658 tests, 658 passed, 0 failed` at -O2, -O0, -Os, -O0 with
+  the trampoline, under stress at -O2 and -O0 (collection at every allocation), and with
+  `--cc gcc-16` at -O2, -O0 and -O0 with the trampoline. Its only tier-3 site is the 6.10
+  re-entry example; the other 14 sites of the file and the test framework's guard stay tier 2.
+- ctak and fibc (r7rs-benchmarks): every site tier 2 (ctak 5, fibc 2), binaries identical in size
+  and symbols; ctak 1.73 s vs 1.74 s, fibc 1.03 s vs 1.03 s (M4-2 binary vs this one, best of three,
+  interleaved; 1.56 s / 0.89 s on the quiet machine before the change).
+- Generators: 10^6 values from a re-entrant generator (two captures and two re-entries per value)
+  take 0.26 s at -O2 (0.60 s at -O0; the interpreter 0.68 s) and peak at 2.6 MB RSS, the same as
+  10^7 values (2.8 s): each capture copies a ~300-byte stack, old copies are garbage.
+- reentry_deep: 1,000 re-entries of a 10^4-frame stack, 0.08 s.
+- Compile time: `emit-c` of tests/r7rs/base.scm 176 → 214 ms (machine loaded; the classification
+  plus one rebuild round for the boxing of assigned variables, since the file has a tier-3 site);
+  programs without tier-3 sites pay only the classification.
+- tests/fuzz.sh: 300 gen3 programs (seeds 41-340) and 300 gen/gen2 programs (seeds 5000-5149):
+  no failure.
+- `make test` (each mode of `tests/run.sh all` plus check-embed): 960 checks, 0 failures, no skip
+  left (the interpreter runs reentry.scm too); `tests/run.sh gcc` (gcc-16): 192 checks, 0 failures.

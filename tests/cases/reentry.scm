@@ -1,5 +1,6 @@
-;; R7RS 6.10 dynamic-wind example with re-entry: needs tier 3 continuations (M5). Until then
-;; invoking a continuation whose call/cc has returned raises a clear error.
+;; R7RS 6.10 dynamic-wind example with re-entry (tier 3, spec §8.2): the continuation is
+;; stored and invoked after its call/cc returned; re-entering the dynamic-wind body runs the
+;; before thunk again. Both engines print the R7RS result.
 (import (scheme base) (scheme write))
 (write (let ((path '())
              (c #f))

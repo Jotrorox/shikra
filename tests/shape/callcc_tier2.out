@@ -1,0 +1,4 @@
+(-2 zero #t (2 6))
+(3 found #f)
+(5 div-error ok (bad a) 2 1)
+(7 6765 1 caught)

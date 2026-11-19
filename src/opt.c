@@ -1203,7 +1203,7 @@ static void unbox(void) {
     for (L = P->lambdas; L; L = L->next) if (LIVE(L) && !L->nclauses) box_uses(L->body, L, 1);
     for (i = 0; i < P->nvars; i++) {
         ir_var *v = P->vars[i];
-        if ((v->flags & V_BOXED) && v->nrefs > 0 && v->ncalls == v->nrefs) { v->mark = 1; any = 1; }
+        if ((v->flags & V_BOXED) && v->nrefs > 0 && v->ncalls == v->nrefs && !pm_get(&ir_forcebox, v->name)) { v->mark = 1; any = 1; }
     }
     if (!any) return;
     for (L = P->lambdas; L; L = L->next) if (LIVE(L) && !L->nclauses) box_uses(L->body, L, 0);

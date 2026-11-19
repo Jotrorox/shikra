@@ -14,20 +14,19 @@
         (%set-winders! w)
         (after)
         r)))
-  ;; call/cc, tier 2 (spec §8.2): %call/cc's k restores the handler stack and jumps; the
-  ;; escape procedure first walks the winders back to the capture point. A k whose capture
-  ;; has returned cannot be re-entered until tier 3 (M5). Calls whose receiver is a literal
-  ;; (lambda (k) ...) that only calls k, without crossing a lambda, never get here: the
-  ;; compiler turns them into jumps (tier 1).
+  ;; call/cc (spec §8.2): %call/cc's k restores the handler stack and jumps (or re-enters);
+  ;; the escape procedure first walks the winders back to the capture point where the engine
+  ;; does not (the interpreter: %continuation-live? is #t there). Compiled continuations walk
+  ;; them themselves, also on re-entry (tier 3), so compiled code only applies k. Compiled
+  ;; calls of call/cc never get here: they are %call/cc directly, or jumps (tier 1).
   (define (call-with-current-continuation f)
     (%call/cc (lambda (k) (f (escape-procedure k (%winders))))))
   (define (call/cc f)
     (%call/cc (lambda (k) (f (escape-procedure k (%winders))))))
   (define (escape-procedure k w)
     (lambda vals
-      (if (%continuation-live? k)
-          (begin (travel-to! w) (%apply k vals))
-          (error "re-entrant continuation not supported yet (milestone M5)"))))
+      (if (%continuation-live? k) (travel-to! w))
+      (%apply k vals)))
   ;; Parameter objects are procedures (closures). The cell (converter . global-value) is
   ;; their identity: a parameterize frame (cell . value) in the winders list shadows it.
   ;; Called with the private key, a parameter returns its cell; with another argument it

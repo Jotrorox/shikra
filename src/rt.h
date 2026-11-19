@@ -310,8 +310,14 @@ RT_FN obj rt_current_jiffy(void);   /* monotonic nanoseconds */
 RT_EXTVAR int rt_argc;
 RT_EXTVAR char **rt_argv;
 #ifdef SHIKRA_PROGRAM
-/* Provided by the generated code: the program body (rt_sys.c's main calls it). */
+/* Provided by the generated code: the program body (rt_sys.c's main calls it). Tier 3 copies the
+ * stack up to the base main passes to rt_init (the address of a local of main), so no frame of the
+ * program may share main's frame (GCC inlines static functions called once). */
+#ifdef RT_TIER3
+static RT_NOINLINE void rt_program_main(void);
+#else
 static void rt_program_main(void);
+#endif
 #endif
 
 /* ---- error path (rt_core.c; DESIGN.md §3 "Engine boundary") ----
@@ -459,11 +465,16 @@ RT_FN obj rt_winders_set(obj w);
 RT_FN obj rt_handlers_get(void);
 RT_FN obj rt_handlers_set(obj h);
 RT_FN obj rt_parameter_binding(obj cell); /* innermost frame for cell, else cell; cdr = value */
-RT_FN obj rt_continuation_live_p(obj k);  /* #f only for a dead tier-2 escape */
+RT_FN obj rt_continuation_live_p(obj k);  /* #t: the library walks the winders before invoking k (VM);
+                                             #f for compiled continuations, which walk them themselves */
 #ifdef SHIKRA_PROGRAM
 /* The compiled engine's %call/cc (tier 2): calls f with an escape procedure that restores
  * the winders and handler lists and jumps back here with its arguments as the result. */
 RT_FN obj rt_call_cc(obj f);
+#ifdef RT_TIER3
+/* Tier 3: the same, plus a heap copy of the C stack, so k can be re-entered after it returned. */
+RT_FN obj rt_call_cc3(obj f);
+#endif
 #endif
 /* --unsafe (spec §3.3, RT_UNSAFE): the remaining checks are removed -- type, bounds, overflow,
  * undefined-variable, not-a-procedure and literal-mutation checks of the inline primitives and

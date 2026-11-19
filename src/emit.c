@@ -321,8 +321,8 @@ static void emit_loc(ir_node *n, int ind) {
 }
 static void emit_call(ir_node *c, const char *dest, int drep, int ind) {
     emit_loc(c, ind);
-    if (c->u.call.ctl == CTL_CALLCC) { /* tier 2: the runtime keeps the frame (not a tail call) */
-        const char *e = fmt("rt_call_cc(%s)", atom_as(c->u.call.args[0], R_OBJ));
+    if (c->u.call.ctl == CTL_CALLCC) { /* tiers 2 and 3: the runtime keeps the frame (not a tail call) */
+        const char *e = fmt(c->spec & N_TIER3 ? "rt_call_cc3(%s)" : "rt_call_cc(%s)", atom_as(c->u.call.args[0], R_OBJ));
         if (c->u.call.tail) out(ind, "return %s;", conv(e, R_OBJ, fn_rep(cur)));
         else assign(dest, drep, e, R_OBJ, ind, 0);
         return;
@@ -802,6 +802,7 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     if (o->no_musttail) sb_puts(o_, "#define SHIKRA_NO_MUSTTAIL 1\n");
     if (p->no_handlers) sb_puts(o_, "#define RT_NO_HANDLERS 1 /* no exception handler is ever installed */\n");
     if (p->no_flonums) sb_puts(o_, "#define RT_NO_FLONUMS 1 /* no flonum can exist: no float printer */\n");
+    if (p->tier3) sb_printf(o_, "#define RT_TIER3 1 /* %d call/cc site(s) of tier 3: stack copying */\n", p->tier3);
     sb_printf(o_, "#define RT_NLITPAIRS %d\n#define RT_NSTATIC_SYMS %d\n", npairs, nsyms);
     append_embedded(o_, "src/rt.h");
     sb_puts(o_, "\n/* ==== program ==== */\n");

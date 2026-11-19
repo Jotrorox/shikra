@@ -1,10 +1,11 @@
 #!/bin/sh
-# tests/fuzz.sh [N [SEED]] -- randomized differential test of the optimizer (M4-1) and of the flow
-# analysis and its specialisations (M4-2): for each seed SEED..SEED+N-1 (default 200 seeds from 1)
-# one program from tests/fuzz/gen.scm and one from tests/fuzz/gen2.scm, each run by the
+# tests/fuzz.sh [N [SEED]] -- randomized differential test of the optimizer (M4-1), of the flow
+# analysis and its specialisations (M4-2) and of the call/cc tiers (M5): for each seed
+# SEED..SEED+N-1 (default 200 seeds from 1) one program from each of tests/fuzz/gen.scm,
+# gen2.scm and gen3.scm (call/cc escapes and re-entry), each run by the
 # interpreter (the reference, spec §13) and compiled at -O0, -O2 and -Os (and -O0 with the
 # trampoline); stdout and the exit status must agree. Failing programs are kept in
-# tests/tmp/fuzz/. Not part of `make test`.
+# tests/tmp/fuzz/ (FUZZ_DIR). FUZZ_GENS="gen3" runs one generator. Not part of `make test`.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 N=${1:-200}
@@ -17,7 +18,7 @@ total=0
 while [ $i -lt "$N" ]; do
   s=$((SEED + i))
   i=$((i + 1))
-  for gen in gen gen2; do
+  for gen in ${FUZZ_GENS:-gen gen2 gen3}; do
     total=$((total + 1))
     p=$D/$gen-$s.scm
     ./shikra interp tests/fuzz/$gen.scm "$s" > "$p" || { echo "generator $gen failed for seed $s"; fails=$((fails + 1)); continue; }

@@ -1,0 +1,11 @@
+in 0
+out 1
+elsewhere in
+elsewhere out
+in 1
+out 2
+elsewhere in
+elsewhere out
+in 2
+exiting
+out 3

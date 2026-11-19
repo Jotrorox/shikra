@@ -1,0 +1,8 @@
+# Tier 3 (M5): escape-only call/cc stays in tiers 1 and 2 -- no site calls rt_call_cc3, and the
+# stack-copying runtime is not linked (spec §9.1 "Stack-copying continuations: some call/cc site
+# is tier 3"). Every level: the analysis must not depend on inlining.
+all
+no rt_call_cc3[(]
+has rt_call_cc[(]
+nm-no ^_?(rt_call_cc3|core_rewind|core_reenter|core_callcc3_run)$
+nm-has ^_?rt_call_cc$
