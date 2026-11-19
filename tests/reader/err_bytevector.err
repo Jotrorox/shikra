@@ -1,0 +1,1 @@
+tests/reader/err_bytevector.scm:1:1: error: bytevector element is not a byte

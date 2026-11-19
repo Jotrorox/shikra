@@ -1,0 +1,6 @@
+((a b) (a b) (a b))
+(x y)
+("shared" "shared")
+#((1) (1))
+(x x)
+((z) (z) (z))

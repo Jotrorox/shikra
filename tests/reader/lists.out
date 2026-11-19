@@ -1,0 +1,24 @@
+()
+(a b c)
+(a . b)
+(1 2 . 3)
+(a (b (c (d))) . e)
+(spaced out over lines)
+(a b c)
+(quote x)
+(quasiquote (a (unquote b) (unquote-splicing c)))
+(quote (quote x))
+(quote)
+kept
+(a c)
+after-block
+(x y)
+#(1 #(2) "three" #\4)
+#()
+#u8()
+#u8(0 1 127 128 255)
+#t
+#f
+#t
+#f
+(#t . #f)

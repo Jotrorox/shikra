@@ -1,0 +1,1 @@
+tests/reader/err_dot.scm:1:8: error: expected ')' after dotted tail

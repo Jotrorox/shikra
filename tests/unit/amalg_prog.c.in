@@ -1,0 +1,19 @@
+/* amalg_prog.c.in -- stands in for generated code in the program-mode self-check.
+ * tests/run.sh builds: #define SHIKRA_PROGRAM + rt.h + this file + every rt_*.c, as one
+ * translation unit, with -Wall -Wextra -Werror, then runs it. */
+static void rt_engine_raise(obj e) { rt_uncaught(e); }
+
+static obj fib(obj n) {
+    if (rt_lt(n, RT_FIX(2)) != RT_FALSE) return n;
+    return rt_add(fib(rt_sub(n, RT_FIX(1))), fib(rt_sub(n, RT_FIX(2))));
+}
+
+static void rt_program_main(void) {
+    rt_display(rt_cstring("hello, world"), rt_stdout);
+    rt_newline(rt_stdout);
+    rt_write(rt_cons(fib(RT_FIX(20)), rt_cons(rt_div(RT_FIX(1), RT_FIX(4)), RT_NIL)), rt_stdout);
+    rt_newline(rt_stdout);
+    rt_write(rt_read(rt_open_input_string(rt_cstring("(a \"b\" #\\c . 1.5)"))), rt_stdout);
+    rt_newline(rt_stdout);
+    rt_car(RT_FIX(5)); /* uncaught: prints "Error: car: expected pair 5", exits 70 */
+}

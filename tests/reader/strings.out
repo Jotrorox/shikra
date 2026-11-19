@@ -1,0 +1,33 @@
+""
+"hello"
+"tab\there\nnewline \"quoted\" back\\slash"
+"\a\b\r"
+"hex A λ 😀"
+"line one continued"
+"bar | ok"
+"raw tab\tand\nreal newline"
+"λ unicode ∀"
+#\a
+#\A
+#\z
+#\0
+#\(
+#\)
+#\;
+#\"
+#\|
+#\space
+#\newline
+#\tab
+#\alarm
+#\backspace
+#\delete
+#\escape
+#\null
+#\return
+#\A
+#\λ
+#\null
+#\delete
+#\x
+#\λ
