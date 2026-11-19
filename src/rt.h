@@ -28,11 +28,13 @@ typedef char rt_assert_64bit[(sizeof(void *) == 8 && sizeof(double) == 8 && size
 #if defined(__GNUC__) || defined(__clang__)
 #define RT_NORETURN __attribute__((noreturn))
 #define RT_UNUSED __attribute__((unused))
+#define RT_NOINLINE __attribute__((noinline))
 #define RT_LIKELY(x) __builtin_expect(!!(x), 1)
 #define RT_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #else
 #define RT_NORETURN
 #define RT_UNUSED
+#define RT_NOINLINE
 #define RT_LIKELY(x) (x)
 #define RT_UNLIKELY(x) (x)
 #endif

@@ -3,6 +3,7 @@
 #include "rt.h"
 #include <setjmp.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
 
@@ -87,6 +88,67 @@ static NOINLINE const char *interior_only(void) { /* a string buffer kept alive 
 }
 
 static int num_is(obj x, const char *expect) { return strcmp(RT_STR(rt_number_to_string(x, RT_FIX(10)))->buf, expect) == 0; }
+/* ---- float printing and parsing against the host libc (DESIGN.md "M5 as built") ----
+ * Printing: the output must read back (strtod) to the same double and be no longer than the
+ * shortest %.*e that does. Parsing: rt_parse_number must agree with strtod (correctly rounded). */
+static uint64_t xs = 88172645463325252u;
+static uint64_t xrand(void) { xs ^= xs << 13; xs ^= xs >> 7; xs ^= xs << 17; return xs; }
+static uint64_t dbits(double d) { uint64_t u; memcpy(&u, &d, 8); return u; }
+static void float_print_check(double d) {
+    char b[64], r[64];
+    size_t n = rt_format_double(d, b);
+    int p, nd = 0, lead = 1, k;
+    b[n] = 0;
+    checks++;
+    if (dbits(strtod(b, 0)) != dbits(d)) { fails++; printf("FAIL print %a -> %s does not read back\n", d, b); return; }
+    for (k = 0; b[k] && b[k] != 'e'; k++) if (b[k] >= '1' || (b[k] == '0' && !lead)) { lead = 0; nd++; }
+    for (k--; k >= 0 && (b[k] == '0' || b[k] == '.'); k--) if (b[k] == '0') nd--; /* trailing zeros */
+    for (p = 1; p < 17; p++) { snprintf(r, sizeof r, "%.*e", p - 1, d); if (strtod(r, 0) == d) break; }
+    if (d != 0 && nd > p) { fails++; printf("FAIL print %a -> %s is not shortest (%d digits)\n", d, b, p); }
+}
+static void float_parse_check(const char *s) {
+    obj o;
+    checks++;
+    if (rt_parse_number(s, strlen(s), 10, &o) != 0 || !rt_is_flo(o) || dbits(RT_FLO(o)) != dbits(strtod(s, 0))) {
+        fails++;
+        printf("FAIL parse %s\n", s);
+    }
+}
+static void float_corpus(long n) {
+    static const char *const hard[] = {"4.9406564584124654e-324", "5e-324", "2.4703282292062327e-324", "2.4703282292062328e-324",
+        "2.2250738585072011e-308", "2.2250738585072012e-308", "2.2250738585072014e-308", "1.7976931348623157e308",
+        "1.7976931348623158e308", "1.7976931348623159e308", "9007199254740993.0", "9007199254740995.0", "0.1", "0.3",
+        "0.30000000000000004", "1e23", "8.41e21", "1e-400", "1e400", "-0.0", "0e999", "1.0e-7",
+        "1.00000000000000011102230246251565404236316680908203125", "1.00000000000000011102230246251565404236316680908203124",
+        "1.00000000000000011102230246251565404236316680908203126", "7.2057594037927933e16", "2.5e-324", "3.5e-324",
+        "1.4489974452386991", "0.14285714285714282", "123456789012345678901234567890.0", 0};
+    static const double hd[] = {0x1p-1074, 0x1p-1022, 0x1.fffffffffffffp1023, 9007199254740992.0, 0.30000000000000004,
+                                1e23, 8.41e21, 0x1p-1022 - 0x1p-1074, 1.0, 0.5, 1e21, 1e20, 1e-7, 123.456};
+    char b[64], *q;
+    long i;
+    int k;
+    for (i = 0; hard[i]; i++) float_parse_check(hard[i]);
+    for (i = 0; i < (long)(sizeof hd / sizeof hd[0]); i++) { float_print_check(hd[i]); float_print_check(-hd[i]); }
+    for (k = -1074; k <= 1023; k++) { /* powers of two and their neighbours */
+        double p = 1.0, e = k > 0 ? 2.0 : 0.5;
+        int j;
+        for (j = 0; j < (k > 0 ? k : -k); j++) p *= e;
+        float_print_check(p);
+        if (k > -1074) float_print_check(p * (1 - 0x1p-53)), float_print_check(p * (1 + 0x1p-52));
+    }
+    for (i = 0; i < n; i++) {
+        uint64_t u = xrand();
+        double d;
+        memcpy(&d, &u, 8);
+        if ((u >> 52 & 0x7FF) == 0x7FF) continue;
+        float_print_check(d);
+        snprintf(b, sizeof b, "%.*e", (int)(xrand() % 20), d);
+        float_parse_check(b);
+        for (q = b, k = 1 + (int)(xrand() % 30); k > 0; k--) *q++ = (char)('0' + xrand() % 10);
+        sprintf(q, "e%d", (int)(xrand() % 700) - 360);
+        float_parse_check(b);
+    }
+}
 
 int main(int argc, char **argv) {
     obj x, y, port, file;
@@ -144,8 +206,13 @@ int main(int argc, char **argv) {
             if (!rt_is_flo(back) || RT_FLO(back) != v[i]) { fails++; printf("FAIL float round trip %.17g -> %s\n", v[i], RT_STR(s)->buf); }
         }
         CHECK(num_is(rt_make_flonum(0.1), "0.1"));
-        CHECK(num_is(rt_make_flonum(1e22), "1e22"));
+        CHECK(num_is(rt_make_flonum(1e22), "1.0e+22"));
         CHECK(num_is(rt_make_flonum(123.456), "123.456"));
+        CHECK(num_is(rt_make_flonum(5e-324), "5.0e-324"));
+        CHECK(num_is(rt_make_flonum(-1.7976931348623157e308), "-1.7976931348623157e+308"));
+        CHECK(num_is(rt_make_flonum(1e-7), "0.0000001") && num_is(rt_make_flonum(1e-8), "1.0e-8"));
+        CHECK(num_is(rt_make_flonum(1e20), "100000000000000000000.0") && num_is(rt_make_flonum(1e21), "1.0e+21"));
+        float_corpus(100000);
     }
 
     /* strings: UTF-8, ASCII fast path, mutation with width change */
