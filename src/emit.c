@@ -440,8 +440,6 @@ static const char *special(ir_node *r, int *erep) {
         if (sp_ && op != PI_rt_write && only(t0, T_STRING)) return fmt("rt_put_string(%s, %s)", x, p);
         if (sp_ && op != PI_rt_write && only(t0, T_CHAR)) return fmt("rt_put_char(%s, %s)", x, p);
         if (sp_ && only(t0, T_FIX) && op != PI_rt_write_char && op != PI_rt_write_string) return fmt("rt_put_fixnum(%s, %s)", x, p);
-        if (op == PI_rt_display && only(t0, T_STRING)) return fmt("rt_write_string(%s, %s)", x, p);
-        if (op == PI_rt_display && only(t0, T_CHAR)) return fmt("rt_write_char(%s, %s)", x, p);
         if ((op == PI_rt_display || op == PI_rt_write) && t0 && !(t0 & (T_PAIR | T_VECTOR | T_PCELL)))
             return fmt("rt_%s_flat(%s, %s)", op == PI_rt_display ? "display" : "write", x, p);
         return NULL;
