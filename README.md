@@ -117,7 +117,7 @@ sh tests/linux.sh amd64 MODE  # x86-64, emulated with qemu-user (slow)
 `tests/linux.sh` copies the working tree into a Debian container, builds the tool with the
 one-liner using GCC and clang, and runs `tests/run.sh` once per program compiler. Under
 emulation the collector stress passes are run with `LINUX_ENV=STRESS_SCALE=20` (a collection
-every 20 allocations instead of every one; DESIGN.md "Integration").
+every 20 allocations instead of every one; DESIGN.md "Linux integration as built").
 
 ## More
 
