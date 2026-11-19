@@ -2193,3 +2193,5 @@ timings, so they are compared interleaved).
   programs without tier-3 sites pay only the classification.
 - tests/fuzz.sh: 300 gen3 programs (seeds 41-340) and 300 gen/gen2 programs (seeds 5000-5149):
   no failure.
+- `make test` (each mode of `tests/run.sh all` plus check-embed): 960 checks, 0 failures, no skip
+  left (the interpreter runs reentry.scm too); `tests/run.sh gcc` (gcc-16): 192 checks, 0 failures.
