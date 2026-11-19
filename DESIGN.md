@@ -3025,7 +3025,33 @@ commits changed documentation only). Every
 mode of `all`: reader unit (rt_unit, math_unit, flmath) amalg expand levels (compiled cases at
 -O2/-O0/-Os + r7rs) shape size cache debug driver interp (+ repl) tramp stress.
 
-RESULTS_TABLE
+| mode | arm64 GCC | arm64 clang | x86-64 GCC | x86-64 clang |
+|---|---|---|---|---|
+| reader | 35 | 35 | 35 | 35 |
+| unit (rt_unit, flush at exit, math_unit, flmath) | 4 | 4 | 4 | 4 |
+| amalg | 1 | 1 | 1 | 1 |
+| expand | 1 | 1 | 1 | 1 |
+| levels (cases -O2/-O0/-Os + C warning check, r7rs both engines) | 576 | 576 | AMD_LEVELS |
+| shape (incl. tier-3, extension shapes, two hello-world size pins) | 61 | 61 | AMD_SHAPE |
+| size | 27 | 27 | AMD_SIZE |
+| cache | 99 | 99 | AMD_CACHE |
+| debug (-g) | 30 | 30 | AMD_DEBUG |
+| driver (incl. 6 build-mode checks) | 70 | 70 | AMD_DRIVER |
+| interp (+ repl) | 87 + 1 skip | 87 + 1 skip | AMD_INTERP |
+| tramp | 85 | 85 | AMD_TRAMP |
+| stress | 255 + 1 skip | 255 + 1 skip | AMD_STRESS |
+| **total** | **1,331 passed, 0 failed, 2 skipped** | **1,331, 0, 2** | AMD_TOTAL |
+
+Skips: ext_ffi_user in the interpreter and in its stress pass (marked compiled-only: its C functions
+are in a user C file). arm64 runs every mode at full intervals (stress: a collection at every
+allocation). x86-64 is emulated (qemu-user, `QEMU_STACK_SIZE=64 MB` as in M6) and runs the stress
+mode with `STRESS_SCALE=20` (a collection every 20 allocations; every per-case interval times 20),
+the only reduction; every other mode is identical to arm64. The one-line build (`-Werror`) is
+warning-free with GCC and clang in all four containers. A first run at commit 9af1958 (before the
+popcount fix) gave the same 1,331 / 0 / 2 on arm64 with both compilers and found the x86-64 GCC
+link failure; that amd64 run was stopped after it. macOS has 1,327 checks: the four Linux-only
+checks (two size pins in shape, three Linux build-mode checks in driver) less the macOS hello-world
+pin (size).
 
 **Cross-compilation re-check from macOS.** This host has neither `zig` nor `ld.lld` (nor Homebrew
 GCC), so the macOS side was Apple clang 21 through `shikra build --target x86_64-linux|aarch64-linux
@@ -3047,7 +3073,8 @@ with GCC is below it) and on arm64 with GCC; not by clang's arm64 -Os scheme (16
 (155 KB), nor at -O2 by scheme and dynamic (186-312 KB, both compilers and architectures) and by
 slatex with clang (160-163 KB): the -O2 inlining budget, as on macOS (deviation, §10).
 
-**macOS** (`make test` at the final commit): MAC_RESULT
+**macOS** (`make test` at commit 37723ec, Apple clang 21): check-embed ok; 1,327 passed, 0 failed,
+2 skipped (the same two). Hello world 50,888 bytes (pin 52,000).
 
 **Line counts of the merged tree** (`wc -l`): compiler and tool (src/*.c, *.h without the runtime,
 embed.c and rt_unicode.c) 11,822; runtime (rt.h, rt_*.c without rt_unicode.c) 5,315 (incl. rt_math.c 454 and rt_ext.c 515). The
