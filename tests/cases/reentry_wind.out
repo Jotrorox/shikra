@@ -1,0 +1,5 @@
+(in1 in2 first out2 out1 in1 in2 1 out2 out1 in1 in2 2 out2 out1 in1 in2 3 out2 out1)
+(a-in a-body a-out b-in b-out a-in again a-out)
+(x-in y-in y-out x-out escaped)
+(p-in p-out 0 p-in p-out 1 p-in p-out 2 p-in p-out end)
+((enter 1) leave inside (enter 2) refused)

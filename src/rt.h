@@ -310,8 +310,14 @@ RT_FN obj rt_current_jiffy(void);   /* monotonic nanoseconds */
 RT_EXTVAR int rt_argc;
 RT_EXTVAR char **rt_argv;
 #ifdef SHIKRA_PROGRAM
-/* Provided by the generated code: the program body (rt_sys.c's main calls it). */
+/* Provided by the generated code: the program body (rt_sys.c's main calls it). Tier 3 copies the
+ * stack up to the base main passes to rt_init (the address of a local of main), so no frame of the
+ * program may share main's frame (GCC inlines static functions called once). */
+#ifdef RT_TIER3
+static RT_NOINLINE void rt_program_main(void);
+#else
 static void rt_program_main(void);
+#endif
 #endif
 
 /* ---- error path (rt_core.c; DESIGN.md §3 "Engine boundary") ----

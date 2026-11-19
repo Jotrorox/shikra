@@ -689,12 +689,13 @@ RT_FN obj rt_call_cc(obj f) {
 /* Tier 3. The stack grows down on every target (checked at each capture). The copy is a heap
  * object scanned conservatively, like the stack (rt_gc.c); lo is the address it came from. */
 typedef struct { uintptr_t hdr; char *lo; uintptr_t w[]; } core_stack;
-static void core_callcc3_run(void *p) {
+static RT_NOINLINE void core_callcc3_run(void *p) { /* never inlined into rt_sys_catch (GCC clones it) */
     core_cont *c = (core_cont *)p;
     char *lo = (char *)((uintptr_t)&p & ~(uintptr_t)15); /* in this frame: below rt_sys_catch's */
     size_t n = (size_t)(core_base - lo) & ~(size_t)7;
     core_stack *s;
-    if (lo >= core_base) rt_error("call/cc", "tier 3 needs a downward-growing C stack", RT_NIL);
+    if (lo >= core_base || (char *)(c + 1) > core_base) /* the stack must grow down, from below the base */
+        rt_error("call/cc", "cannot copy the C stack for a re-entrant continuation", RT_NIL);
     s = (core_stack *)rt_alloc(RT_HDR(RT_T_CONT, 0, sizeof(char *) + n), sizeof(core_stack) + n);
     s->lo = lo;
     rt_memcpy(s->w, lo, n); /* the jump buffer (registers) is in c, inside the copy */
@@ -718,26 +719,26 @@ RT_FN obj rt_call_cc3(obj f) {
     RT_PROC(c.k)->free[0] = RT_FALSE;
     return c.val;
 }
-/* Grow the stack until this frame lies below the copy's region, then copy it back: the frames
- * of the current stack die, those of the copy (tier-2 frames included) come back to life, and
- * the capture's rt_sys_catch returns 1. The recursive call is not a tail call (pad is read
- * after it), so each level really takes stack space. */
-static RT_NOINLINE int core_rewind(obj self, obj v) {
-    volatile char pad[512];
+/* Copy the stack back: the caller made room, so this frame lies below the copy's region. The
+ * frames of the current stack die, those of the copy (tier-2 frames included) come back to
+ * life, and the capture's rt_sys_catch returns 1. core_never keeps compilers from treating
+ * this as noreturn, so the call below stays a call (a tail call would free the room). */
+static volatile int core_never;
+static RT_NOINLINE void core_rewind(obj self, obj v) {
     core_stack *s = RT_PTR(RT_PROC(self)->free[2], core_stack);
     core_cont *c, *t;
-    pad[0] = 0;
-    if ((uintptr_t)pad + sizeof pad + 1024 > (uintptr_t)s->lo) return core_rewind(self, v) + pad[0];
+    if ((uintptr_t)&s >= (uintptr_t)s->lo) rt_sys_exit(70); /* cannot happen: room was made */
     for (t = core_conts; t; t = t->prev) RT_PROC(t->k)->free[0] = RT_FALSE;
     rt_memcpy(s->lo, s->w, (size_t)RT_HLEN(RT_TAGPTR(s)) - sizeof(char *));
     core_conts = c = (core_cont *)(void *)RT_PROC(self)->free[1];
     for (t = c; t; t = t->prev) RT_PROC(t->k)->free[0] = (obj)(void *)t;
     c->val = v;
     rt_handlers = c->handlers; /* rt_winders stays the common tail: rt_call_cc3 rewinds */
-    rt_sys_throw(&c->jb);
+    if (!core_never) rt_sys_throw(&c->jb);
 }
 /* Re-entry: the after thunks run on the current stack, down to the winders the current and
- * the captured list share (R7RS 6.10); the frame image in the copy holds the captured lists. */
+ * the captured list share (R7RS 6.10; the frame image in the copy holds the captured lists),
+ * then a variable-length array moves the stack pointer below the copy's region, if needed. */
 static void core_reenter(obj self, obj v) {
     core_stack *s = RT_PTR(RT_PROC(self)->free[2], core_stack);
     core_cont *img = (core_cont *)(void *)((char *)s->w + ((char *)RT_PROC(self)->free[1] - s->lo));
@@ -747,7 +748,12 @@ static void core_reenter(obj self, obj v) {
     for (; nb > na; nb--) b = RT_CDR(b);
     for (; a != b; a = RT_CDR(a)) b = RT_CDR(b);
     if (a != rt_winders) rt_engine_travel(a);
-    core_rewind(self, v);
+    {
+        volatile char room[(uintptr_t)&a > (uintptr_t)s->lo - 4096 ? (uintptr_t)&a - (uintptr_t)s->lo + 4096 : 1];
+        room[0] = 0;
+        core_rewind(self, v);
+        if (room[0]) rt_sys_exit(70);
+    }
     rt_sys_exit(70); /* not reached */
 }
 #endif

@@ -1,0 +1,51 @@
+;; Coroutines on re-entrant call/cc (tier 3, spec §8.2): two coroutines pass control back and
+;; forth 10^5 times through a queue of continuations, then three round-robin threads.
+(import (scheme base) (scheme write))
+
+;; ping-pong: each transfer captures the current coroutine and re-enters the other
+(define other #f)
+(define (transfer v)
+  (call/cc (lambda (k) (let ((o other)) (set! other k) (o v)))))
+(define log '())
+(define (ping n)
+  (let loop ((i 0) (acc 0))
+    (if (< i n)
+        (let ((got (transfer i)))
+          (loop (+ i 1) (+ acc got)))
+        acc)))
+(define (pong first)
+  (let loop ((v first) (count 0))
+    (if (< count 3) (set! log (cons v log)))
+    (loop (transfer (* v 2)) (+ count 1))))
+(define result
+  (call/cc
+   (lambda (done)
+     (set! other pong)
+     (done (ping 100000)))))
+(write result) ; the sum of 2i for i < 10^5
+(newline)
+(write (reverse log))
+(newline)
+
+;; round-robin threads with a queue
+(define queue '())
+(define (enqueue! k) (set! queue (append queue (list k))))
+(define (dequeue!) (let ((k (car queue))) (set! queue (cdr queue)) k))
+(define (yield!) (call/cc (lambda (k) (enqueue! k) ((dequeue!) #f))))
+(define (spawn! thunk) (enqueue! (lambda (ignore) (thunk) (quit!))))
+(define quit-k #f)
+(define (quit!) (if (null? queue) (quit-k #t) ((dequeue!) #f)))
+(define out '())
+(define (worker name n)
+  (lambda ()
+    (let loop ((i 0))
+      (when (< i n)
+        (set! out (cons (list name i) out))
+        (yield!)
+        (loop (+ i 1))))))
+(spawn! (worker 'a 3))
+(spawn! (worker 'b 2))
+(spawn! (worker 'c 4))
+(call/cc (lambda (k) (set! quit-k k) ((dequeue!) #f)))
+(write (reverse out))
+(newline)

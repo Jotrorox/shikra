@@ -1,0 +1,5 @@
+((body inner 0) (after outer) (body inner 1) (after outer) (body inner 2) (after outer))
+"(line 0)(line 1)(line 2)"
+((handled first) (handled 1) (handled 2))
+(normal (caught boom) (caught bang))
+(2 "+: expected number")
