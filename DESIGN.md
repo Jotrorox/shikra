@@ -2499,7 +2499,8 @@ and `get-environment-variables` scan envp; `command-line` is argv, as before.
 `optimize("no-tree-loop-distribute-patterns")` so it cannot turn them into calls to themselves)
 for the calls the compiler emits; the runtime's `rt_mem*` use `__builtin_mem*`. Nothing needs
 libgcc on either architecture (64-bit division and float conversions are instructions; no
-`__int128`, no long double arithmetic), and `-nostdlib` would make a stray helper a link error.
+`__int128`, no long double arithmetic), and `-nostdlib` would make a stray helper a link error
+(which is how the extensions' popcount was caught at the integration; "Integration").
 **Non-local exits**: `__builtin_setjmp` with GCC (both architectures) and clang on x86-64, as
 before; clang has no `__builtin_setjmp` on arm64, so `shikra_setjmp/shikra_longjmp` (26
 instructions: x19-x30, sp, d8-d15 into `rt_jmpbuf`; `returns_twice`) replace `sigsetjmp` there.
@@ -3001,6 +3002,13 @@ of generated C compiles hosted programs without `SHIKRA_NOLIBC`.
 - *Interpreter `define-c` of libm functions failed on Linux* ("not available in the interpreter"): the
   tool does not link libm there (rt_math.c), so `hypot` etc. are not in the process; ffi.c falls back
   to `dlopen("libm.so.6")`.
+- *ext_fixnum_ref did not link on Linux x86-64 with GCC* (found in this step's first amd64 run):
+  `fxbit-count`'s `__builtin_popcountll` is a call to libgcc's `__popcountdi2` when the target has no
+  POPCNT instruction (GCC's x86-64 baseline), and static programs link no libgcc. rt_ext.c now uses
+  the builtin only where it is an instruction (`__POPCNT__`, AArch64) and a branch-free SWAR count
+  otherwise (checked against the builtin on 10^7 values). Clang inlines its own sequence, arm64 has
+  `cnt`; nothing else in the runtime needs libgcc (every ext case at -O2/-O0/-Os links with both
+  compilers on x86-64).
 - *flmath accuracy bounds* (tests/unit/flmath.scm) were measured against macOS libm: on Linux the
   reference is glibc, whose cbrt is up to 3 ulp and tanh up to 2 ulp off; those two bounds are
   per platform (3 and 4 ulp on Linux; 1 and 3 elsewhere), every other bound is unchanged.
@@ -3012,8 +3020,8 @@ world pin (size mode); the flmath bounds above. Nothing was weakened on all plat
 
 **Linux test results** (`tests/linux.sh ARCH all`, one container per architecture × program
 compiler, Debian trixie: GCC 14.2, clang 19.1.7, glibc 2.41; podman machine applehv, kernel 7.2.7;
-arm64 native, amd64 under qemu-user; measured at commit 9af1958, whose code and tests are
-identical to the final commit of this step -- later commits changed documentation only). Every
+arm64 native, amd64 under qemu-user; measured at commit 37723ec, the last commit of this step that changes code or tests -- later
+commits changed documentation only). Every
 mode of `all`: reader unit (rt_unit, math_unit, flmath) amalg expand levels (compiled cases at
 -O2/-O0/-Os + r7rs) shape size cache debug driver interp (+ repl) tramp stress.
 
