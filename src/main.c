@@ -249,6 +249,11 @@ static char **cc_argv(const options *o, const char *cfile, const char *out) {
     }
     av[n++] = "-std=c99";
     av[n++] = optflag;
+    {   /* Apple clang splits every cold path (error calls) into its own function with its own
+         * symbol: 15% of a large program, no measurable speed (DESIGN.md "M4-3 as built") */
+        const char *base = strrchr(av[0], '/') ? strrchr(av[0], '/') + 1 : av[0];
+        if ((darwin && !strcmp(base, "cc")) || !strncmp(base, "clang", 5)) { av[n++] = "-Xclang"; av[n++] = "-fno-split-cold-code"; }
+    }
     av[n++] = "-ffunction-sections";
     av[n++] = "-fdata-sections";
     if (o->debug) av[n++] = "-g";
