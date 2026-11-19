@@ -787,8 +787,6 @@ static obj expand_core(int k, obj x, frame *env) {
     case K_DEFINE: case K_DEFINE_SYNTAX: case K_DEFINE_RECORD_TYPE: case K_DEFINE_VALUES:
         cerror(x, "%s is only allowed at the top level or at the beginning of a body", keyword_names[k]);
     case K_SYNTAX_RULES: cerror(x, "syntax-rules is only valid as a macro transformer");
-    case K_PARAMETERIZE: case K_GUARD:
-        cerror(x, "%s is not implemented yet (milestone M1)", keyword_names[k]);
     case K_DELAY: case K_DELAY_FORCE:
         cerror(x, "%s is not implemented yet (milestone M5)", keyword_names[k]);
     default: cerror(x, "invalid use of auxiliary syntax %s", keyword_names[k]);

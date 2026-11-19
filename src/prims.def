@@ -112,13 +112,27 @@ PRIM("%error-object-message", "error-object-message", rt_error_object_message, 1
 PRIM("%error-object-irritants", "error-object-irritants", rt_error_object_irritants, 1, "a", 'l', PF_FAIL)
 PRIM("%file-error?", "file-error?", rt_file_error_p, 1, "a", 'b', PF_PURE)
 PRIM("%read-error?", "read-error?", rt_read_error_p, 1, "a", 'b', PF_PURE)
-/* M0: raise without handlers (uncaught); M1 puts the Scheme-level handler stack in front */
-PRIM("%raise", "raise", rt_raise_o, 1, "a", 'a', PF_FAIL | PF_EFFECT)
+/* report an uncaught exception and exit (the bottom of raise in lib/) */
+PRIM("%uncaught", "raise", rt_uncaught_o, 1, "a", 'a', PF_EFFECT)
+
+/* dynamic state (spec §8.3, §8.4): the winders list (dynamic-wind and parameterize frames)
+ * and the handler stack are runtime globals; lib/ implements everything on top of these */
+PRIM("%winders", "winders", rt_winders_get, 0, "", 'l', 0)
+PRIM("%set-winders!", "winders", rt_winders_set, 1, "l", 'a', PF_EFFECT)
+PRIM("%handlers", "handlers", rt_handlers_get, 0, "", 'l', 0)
+PRIM("%set-handlers!", "handlers", rt_handlers_set, 1, "l", 'a', PF_EFFECT)
+PRIM("%parameter-binding", "parameter", rt_parameter_binding, 1, "p", 'p', PF_FAIL)
+PRIM("%continuation-live?", "continuation", rt_continuation_live_p, 1, "a", 'b', 0)
 
 /* multiple-values object (values flowing to an unknown receiver) */
 PRIM("%make-values", "values", rt_make_values, 1, "l", 'a', PF_ALLOC | PF_FAIL)
 PRIM("%values?", "values?", rt_values_p, 1, "a", 'b', PF_PURE)
 PRIM("%values->list", "values->list", rt_values_to_list, 1, "a", 'l', PF_ALLOC | PF_FAIL)
+/* spreading a values object into a known receiver (emitted by normalize.c; nreq, i and
+ * rest are compiler constants) */
+PRIM("%values-check", "call-with-values", rt_values_check, 3, "afb", 'a', PF_FAIL)
+PRIM("%values-ref", "call-with-values", rt_values_ref, 2, "af", 'a', 0)
+PRIM("%values-tail", "call-with-values", rt_values_tail, 2, "af", 'l', PF_ALLOC)
 
 /* numbers (binary; the library folds the variadic forms) */
 PRIM("%number?", "number?", rt_number_p, 1, "a", 'b', PF_PURE)

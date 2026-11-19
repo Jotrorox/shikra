@@ -6,7 +6,8 @@
  *   3. known top-level procedures (defined once by lambda / %case-lambda, never set!);
  *   4. normalization of core forms to the ANF IR (ir.h): letrec* grouping, boxes,
  *      undefined checks, direct lambda application as let, known calls (arity checked
- *      at compile time), self tail calls as jumps to the procedure's entry join point;
+ *      at compile time), self tail calls as jumps to the procedure's entry join point,
+ *      call-with-values with a literal receiver as a join point, tier 1 call/cc as jumps;
  *   5. closure layout (free variables), static closures, C names. */
 #include "ir.h"
 #include <stdio.h>
@@ -22,6 +23,14 @@ static ir_lambda *cur_lam, *last_lam;
 static library *cur_lib;
 static int cur_form, in_static;
 static obj UNSPEC_FORM;
+/* (scheme base) procedures the middle end knows (M1 part A): calls to values,
+ * call-with-values and apply become the control primitives; call/cc sites may be tier 1;
+ * raise is the engine's raise entry. */
+static global *g_values, *g_cwv, *g_apply, *g_callcc1, *g_callcc2, *g_raise;
+static obj S_pvalues, S_pcwv, S_papply;
+static pmap kctx;          /* tier-1 continuation variable symbol -> ir_join*, or &ret_ctx */
+static ir_join ret_ctx;    /* "k returns from the procedure" */
+static ir_node *dead_sink; /* code after a jump of a tier-1 k goes here and is dropped */
 
 #define CADR(x) RT_CAR(RT_CDR(x))
 #define CDDR(x) RT_CDR(RT_CDR(x))
@@ -94,6 +103,82 @@ static int prim_index(obj head) {
     return p ? (int)((intptr_t)p - 1) : -1;
 }
 static int is_lambda_form(obj x) { return rt_is_pair(x) && (RT_CAR(x) == S_lambda || RT_CAR(x) == S_case_lambda); }
+static int is_thunk(obj x) { return rt_is_pair(x) && RT_CAR(x) == S_lambda && CADR(x) == RT_NIL; }
+
+/* ---- control forms the normalizer open-codes ---- */
+static global *base_global(library *order, const char *name) {
+    library *l;
+    for (l = order; l; l = l->next)
+        if (!strcmp(l->id, "scheme/base")) {
+            binding *b = (binding *)pm_get(&l->env->map, sym(name));
+            return b && b->kind == B_GLOBAL ? b->g : NULL;
+        }
+    return NULL;
+}
+/* Calls to (scheme base)'s values / call-with-values / apply (imported bindings are never
+ * assigned) become %values / %call-with-values / %apply, in place, before tree shaking. */
+static void rewrite_aliases(obj x) {
+    obj l;
+    global *g;
+    if (!rt_is_pair(x) || RT_CAR(x) == S_quote) return;
+    if ((g = front_global(RT_CAR(x)))) {
+        int n = list_len(RT_CDR(x));
+        if (g == g_values) RT_CAR(x) = S_pvalues;
+        else if (g == g_cwv && n == 2) RT_CAR(x) = S_pcwv;
+        else if (g == g_apply && n == 2) RT_CAR(x) = S_papply;
+    }
+    for (l = x; rt_is_pair(l); l = RT_CDR(l)) rewrite_aliases(RT_CAR(l));
+}
+/* (%call-with-values producer (lambda formals body)): the receiver becomes a join point
+ * whose parameters are its formals; a (lambda () body) producer is inlined. Both lambdas
+ * are then scopes of the enclosing procedure, like a let. */
+static int cwv_inline(obj x) {
+    obj c;
+    if (!rt_is_pair(x) || RT_CAR(x) != S_pcwv || list_len(x) != 3) return 0;
+    c = CADDR(x);
+    return rt_is_pair(c) && RT_CAR(c) == S_lambda;
+}
+/* Tier 1 (spec §8.2): (call/cc (lambda (k) body)) where body only calls k, never crossing a
+ * lambda (let-style direct applications, inlined call-with-values lambdas and nested tier-1
+ * sites do not count as crossing). k is then a jump to the join point after the site (or a
+ * return), with no runtime cost; no dynamic-wind, parameterize or handler can intervene. */
+static int tier1_site(obj x);
+static int occurs(obj x, obj s) {
+    if (x == s) return 1;
+    if (!rt_is_pair(x) || RT_CAR(x) == S_quote) return 0;
+    for (; rt_is_pair(x); x = RT_CDR(x)) if (occurs(RT_CAR(x), s)) return 1;
+    return x == s;
+}
+static int k_ok(obj x, obj k) {
+    obj h, l;
+    if (x == k) return 0;
+    if (!rt_is_pair(x)) return 1;
+    h = RT_CAR(x);
+    if (h == S_quote) return 1;
+    if (is_lambda_form(x)) return !occurs(x, k);
+    if (cwv_inline(x))
+        return (is_thunk(CADR(x)) ? k_ok(CADDR(CADR(x)), k) : k_ok(CADR(x), k)) && k_ok(CADDR(CADDR(x)), k);
+    if (tier1_site(x)) return k_ok(CADDR(CADR(x)), k);
+    if (h == k) l = RT_CDR(x);
+    else if (rt_is_pair(h) && RT_CAR(h) == S_lambda) {
+        if (!k_ok(CADDR(h), k)) return 0;
+        l = RT_CDR(x);
+    } else l = x;
+    for (; rt_is_pair(l); l = RT_CDR(l)) if (!k_ok(RT_CAR(l), k)) return 0;
+    return 1;
+}
+static pmap t1memo; /* site -> 1 (no) / 2 (yes) */
+static int tier1_site(obj x) {
+    global *g;
+    obj f;
+    intptr_t m;
+    if (!rt_is_pair(x) || !(g = front_global(RT_CAR(x))) || (g != g_callcc1 && g != g_callcc2) || list_len(x) != 2) return 0;
+    if ((m = (intptr_t)pm_get(&t1memo, x))) return m == 2;
+    f = CADR(x);
+    m = rt_is_pair(f) && RT_CAR(f) == S_lambda && list_len(CADR(f)) == 1 && k_ok(CADDR(f), RT_CAR(CADR(f)));
+    pm_put(&t1memo, x, (void *)(m + 1));
+    return (int)m;
+}
 
 /* ---- 1. tree shaking ----
  * Roots: every form of the program and of user libraries (so the middle end's diagnostics
@@ -159,6 +244,7 @@ static void shake(library *order) {
         }
     for (i = 0; i < ntops; i++)
         if (tops[i].root) { tops[i].keep = 1; mark_refs(tops[i].form); }
+    if (g_raise) mark_global(g_raise); /* the engine's raise entry (runtime errors) */
     while (done < ngwork) {
         global *g = gwork[done++];
         obj d = (obj)pm_get(&defs, g);
@@ -236,6 +322,18 @@ static void analyse(obj x, int lam) {
         return;
     }
     if (h == S_define) { analyse(CADDR(x), lam); return; }
+    if (cwv_inline(x)) {
+        obj p = CADR(x), c = CADDR(x);
+        analyse(is_thunk(p) ? CADDR(p) : p, lam);
+        bind_formals(CADR(c), lam);
+        analyse(CADDR(c), lam);
+        return;
+    }
+    if (tier1_site(x)) {
+        bind_formals(CADR(CADR(x)), lam);
+        analyse(CADDR(CADR(x)), lam);
+        return;
+    }
     if (h == S_if || h == S_begin || prim_index(h) >= 0) {
         for (l = RT_CDR(x); l != RT_NIL; l = RT_CDR(l)) analyse(RT_CAR(l), lam);
         return;
@@ -519,7 +617,15 @@ static ir_node *norm_prim(obj x, bld *b, int tail) {
     int op = prim_index(RT_CAR(x)), n = list_len(x) - 1, i;
     ir_node *p;
     obj l;
-    if (op == PI_CALLCC) cerror(x, "call/cc is not implemented yet (milestone M1)");
+    if (op == PI_CALLCC) {
+        p = node(IR_CALL, x);
+        p->u.call.ctl = CTL_CALLCC;
+        p->u.call.n = 1;
+        p->u.call.args = NEWN(ir_node *, 1);
+        p->u.call.args[0] = norm_value(CADR(x), b);
+        p->u.call.tail = tail;
+        return p;
+    }
     if (op == PI_APPLY || op == PI_CWV) {
         p = node(IR_CALL, x);
         p->u.call.ctl = op == PI_APPLY ? CTL_APPLY : CTL_CWV;
@@ -533,6 +639,175 @@ static ir_node *norm_prim(obj x, bld *b, int tail) {
     p = mk_prim(op, n, x);
     for (i = 0, l = RT_CDR(x); i < n; i++, l = RT_CDR(l)) p->u.prim.args[i] = norm_value(RT_CAR(l), b);
     return p;
+}
+
+static ir_node *mk_jump(ir_join *j, int n, ir_node **args, obj loc) {
+    ir_node *jn = node(IR_JUMP, loc);
+    jn->u.jump.j = j;
+    jn->u.jump.n = n;
+    jn->u.jump.args = args;
+    return jn;
+}
+static ir_node *mk_letj(bld *b, ir_join *j, obj loc) { /* *hole = LETJ j; hole -> its body */
+    ir_node *n = node(IR_LETJ, loc);
+    n->u.letj.j = j;
+    *b->hole = n;
+    b->hole = &n->u.letj.body;
+    return n;
+}
+
+/* ---- tier 1 call/cc ---- */
+static int is_kcall(obj x) { return rt_is_pair(x) && rt_is_symbol(RT_CAR(x)) && pm_get(&kctx, RT_CAR(x)); }
+/* (k arg ...): jump to k's join point (or return) with the value(s); the rest of the
+ * current term is dead. */
+static void kjump(obj x, bld *b) {
+    ir_join *j = (ir_join *)pm_get(&kctx, RT_CAR(x));
+    int n = list_len(x) - 1, i;
+    ir_node *v;
+    obj l;
+    if (n == 1) v = norm_value(CADR(x), b);
+    else {
+        ir_node *p = mk_prim(PI_VALUES, n, x);
+        for (i = 0, l = RT_CDR(x); i < n; i++, l = RT_CDR(l)) p->u.prim.args[i] = norm_value(RT_CAR(l), b);
+        v = atomize(b, p, sym("vals"));
+    }
+    if (j == &ret_ctx) put_tail(b, mk_ret(v));
+    else {
+        ir_node **a = NEWN(ir_node *, 1);
+        a[0] = v;
+        put_tail(b, mk_jump(j, 1, a, x));
+    }
+    b->hole = &dead_sink;
+}
+/* A tier-1 site: in tail position k returns; otherwise k jumps to a join point whose one
+ * parameter is the site's value (packed values when k gets several). */
+static ir_node *norm_callcc1(obj x, bld *b, int tail) {
+    obj f = CADR(x), body = CADDR(f);
+    ir_join *j;
+    ir_node **a;
+    bld bb;
+    if (tail) {
+        pm_put(&kctx, RT_CAR(CADR(f)), &ret_ctx);
+        norm_tail(body, b);
+        return NULL;
+    }
+    j = new_join(1);
+    j->params[0] = new_var(sym("k"), cur_lam);
+    bb = *b;
+    mk_letj(&bb, j, x);
+    pm_put(&kctx, RT_CAR(CADR(f)), j);
+    a = NEWN(ir_node *, 1);
+    a[0] = norm_value(body, &bb);
+    put_tail(&bb, mk_jump(j, 1, a, x));
+    b->hole = &j->body;
+    return mk_ref(j->params[0]);
+}
+
+/* ---- call-with-values with a literal receiver: a join point (spec §8.5) ----
+ * (%call-with-values (lambda () body) (lambda formals rbody)): every tail of body that is
+ * (values a ...) jumps straight to the receiver's join point with the atoms, no allocation;
+ * other tails spread the (possibly packed) value with %values-check / %values-ref.
+ * TODO(M4): known procedures returning several values could return a small C struct and
+ * feed mv_spread directly; this is where that hooks in. */
+typedef struct { ir_join *j; int nreq, rest; } mvctx;
+static void mv_jump(bld *b, mvctx *m, ir_node **atoms, int n, obj loc) {
+    ir_node **args = NEWN(ir_node *, m->nreq + m->rest), *l = mk_const(RT_NIL);
+    int i;
+    if (m->rest ? n < m->nreq : n != m->nreq)
+        cerror(loc, "the receiver takes %s%d value%s, but %d %s produced", m->rest ? "at least " : "", m->nreq,
+               m->nreq == 1 ? "" : "s", n, n == 1 ? "is" : "are");
+    for (i = 0; i < m->nreq; i++) args[i] = atoms[i];
+    if (m->rest) {
+        for (i = n - 1; i >= m->nreq; i--) l = atomize(b, prim2(PI_rt_cons, atoms[i], l), sym("rest"));
+        args[m->nreq] = l;
+    }
+    put_tail(b, mk_jump(m->j, m->nreq + m->rest, args, loc));
+}
+static void mv_spread(bld *b, mvctx *m, ir_node *v, obj loc) {
+    ir_node **args = NEWN(ir_node *, m->nreq + m->rest), *chk = mk_prim(PI_rt_values_check, 3, loc);
+    int i;
+    chk->u.prim.args[0] = v;
+    chk->u.prim.args[1] = mk_const(RT_FIX(m->nreq));
+    chk->u.prim.args[2] = mk_const(RT_BOOL(m->rest));
+    bind_let(b, NULL, chk, loc);
+    if (m->nreq == 1 && !m->rest) args[0] = v; /* checked: a single value is itself */
+    else for (i = 0; i < m->nreq; i++) args[i] = atomize(b, prim2(PI_rt_values_ref, v, mk_const(RT_FIX(i))), sym("val"));
+    if (m->rest) args[m->nreq] = atomize(b, prim2(PI_rt_values_tail, v, mk_const(RT_FIX(m->nreq))), sym("rest"));
+    put_tail(b, mk_jump(m->j, m->nreq + m->rest, args, loc));
+}
+static void norm_mv(obj x, bld *b, mvctx *m) {
+    obj h, l;
+    if (rt_is_pair(x)) {
+        h = RT_CAR(x);
+        if (h == S_if) {
+            ir_node *test = norm_value(CADR(x), b), *ifn;
+            obj els = list_len(x) == 4 ? RT_CAR(RT_CDR(CDDR(x))) : UNSPEC_FORM;
+            bld bt, be;
+            if (test->kind == IR_CONST) { norm_mv(test->u.value != RT_FALSE ? CADDR(x) : els, b, m); return; }
+            ifn = node(IR_IF, x);
+            ifn->u.if_.test = test;
+            put_tail(b, ifn);
+            bt.hole = &ifn->u.if_.then;
+            norm_mv(CADDR(x), &bt, m);
+            be.hole = &ifn->u.if_.els;
+            norm_mv(els, &be, m);
+            return;
+        }
+        if (h == S_begin) {
+            for (l = RT_CDR(x); RT_CDR(l) != RT_NIL; l = RT_CDR(l)) norm_effect(RT_CAR(l), b);
+            norm_mv(RT_CAR(l), b, m);
+            return;
+        }
+        if (h == S_letrec_star) { norm_letrec(x, b); norm_mv(CADDR(x), b, m); return; }
+        if (rt_is_pair(h) && RT_CAR(h) == S_lambda) { norm_mv(norm_let(x, b), b, m); return; }
+        if (h == S_pvalues) {
+            int n = list_len(x) - 1, i;
+            ir_node **atoms = NEWN(ir_node *, n);
+            for (i = 0, l = RT_CDR(x); i < n; i++, l = RT_CDR(l)) atoms[i] = norm_value(RT_CAR(l), b);
+            mv_jump(b, m, atoms, n, x);
+            return;
+        }
+    }
+    mv_spread(b, m, norm_value(x, b), x);
+}
+static ir_node *norm_cwv(obj x, bld *b, int tail) {
+    obj p = CADR(x), c = CADDR(x), f;
+    ir_join *jk = NULL;
+    ir_node **a;
+    mvctx m;
+    bld pb, cb;
+    int i;
+    m.nreq = 0;
+    for (f = CADR(c); rt_is_pair(f); f = RT_CDR(f)) m.nreq++;
+    m.rest = f != RT_NIL;
+    m.j = new_join(m.nreq + m.rest);
+    for (i = 0, f = CADR(c); i < m.j->n; i++) { /* boxed formals get a raw parameter */
+        ir_var *v = var_of(i < m.nreq ? RT_CAR(f) : f);
+        if (v->flags & V_BOXED) m.j->params[i] = new_var(v->name, cur_lam);
+        else (m.j->params[i] = v)->owner = cur_lam;
+        if (i < m.nreq) f = RT_CDR(f);
+    }
+    if (!tail) {
+        jk = new_join(1);
+        jk->params[0] = new_var(sym("v"), cur_lam);
+        mk_letj(b, jk, x);
+    }
+    pb = *b;
+    mk_letj(&pb, m.j, x);
+    if (is_thunk(p)) norm_mv(CADDR(p), &pb, &m);
+    else mv_spread(&pb, &m, norm_value(setloc(rt_cons(p, RT_NIL), x), &pb), x);
+    cb.hole = &m.j->body;
+    for (i = 0, f = CADR(c); i < m.j->n; i++) {
+        ir_var *v = var_of(i < m.nreq ? RT_CAR(f) : f);
+        if (v->flags & V_BOXED) bind_let(&cb, v, prim1(PI_rt_make_box, mk_ref(m.j->params[i])), x);
+        if (i < m.nreq) f = RT_CDR(f);
+    }
+    if (tail) { norm_tail(CADDR(c), &cb); return NULL; }
+    a = NEWN(ir_node *, 1);
+    a[0] = norm_value(CADDR(c), &cb);
+    put_tail(&cb, mk_jump(jk, 1, a, x));
+    b->hole = &jk->body;
+    return mk_ref(jk->params[0]);
 }
 
 static ir_node *norm_rhs(obj x, bld *b) {
@@ -589,6 +864,9 @@ static ir_node *norm_rhs(obj x, bld *b) {
         return mk_ref(j->params[0]);
     }
     if (h == S_define) cerror(x, "internal error: define in expression");
+    if (is_kcall(x)) { kjump(x, b); return mk_const(RT_UNSPEC); }
+    if (tier1_site(x)) return norm_callcc1(x, b, 0);
+    if (cwv_inline(x)) return norm_cwv(x, b, 0);
     if (prim_index(h) >= 0) return norm_prim(x, b, 0);
     if (rt_is_pair(h) && RT_CAR(h) == S_lambda) return norm_rhs(norm_let(x, b), b);
     return norm_call(x, b, 0);
@@ -619,9 +897,12 @@ static void norm_tail(obj x, bld *b) {
         }
         if (h == S_letrec_star) { norm_letrec(x, b); norm_tail(CADDR(x), b); return; }
         if (rt_is_pair(h) && RT_CAR(h) == S_lambda) { norm_tail(norm_let(x, b), b); return; }
+        if (is_kcall(x)) { kjump(x, b); return; }
+        if (tier1_site(x)) { norm_callcc1(x, b, 1); return; }
+        if (cwv_inline(x)) { norm_cwv(x, b, 1); return; }
         if (h != S_quote && h != S_lambda && h != S_case_lambda && h != S_set && h != S_define) {
             int p = prim_index(h);
-            if (p < 0 || p == PI_APPLY || p == PI_CWV) {
+            if (p < 0 || p == PI_APPLY || p == PI_CWV || p == PI_CALLCC) {
                 put_tail(b, p < 0 ? norm_call(x, b, 1) : norm_prim(x, b, 1));
                 return;
             }
@@ -697,6 +978,7 @@ static void free_node(ir_lambda *L, ir_node *n) {
 }
 static void free_lambda(ir_lambda *L) {
     int i;
+    L->reached = 1;
     if (L->nclauses) {
         for (i = 0; i < L->nclauses; i++) free_sub(L, L->clauses[i]);
         for (i = 0; i < L->nclauses; i++) { L->clauses[i]->nfree = L->nfree; L->clauses[i]->free = L->free; }
@@ -753,9 +1035,22 @@ static void name_lambdas(void) {
     }
 }
 
-/* ---- def/use counts ---- */
-static ir_node **jumpv;
-static int njumpv, jumpv_cap;
+/* ---- def/use counts ----
+ * A jump argument, or the variable rhs of a LET, is a use only if the variable it is copied
+ * into is used (the emitter drops such copies otherwise): these are counted in a fixpoint. */
+typedef struct { ir_var *to; ir_node *atom; } pending;
+static pending *pend;
+static int npend, pend_cap;
+static void add_pending(ir_var *to, ir_node *atom) {
+    if (npend == pend_cap) {
+        pending *np = NEWN(pending, pend_cap * 2 + 64);
+        if (pend) memcpy(np, pend, sizeof(pending) * (size_t)npend);
+        pend = np;
+        pend_cap = pend_cap * 2 + 64;
+    }
+    pend[npend].to = to;
+    pend[npend++].atom = atom;
+}
 static void count_node(ir_node *n) {
     int i;
     if (!n) return;
@@ -773,7 +1068,11 @@ static void count_node(ir_node *n) {
         return;
     }
     case IR_SET: n->u.set.v->nsets++; count_node(n->u.set.val); return;
-    case IR_LET: count_node(n->u.let.rhs); count_node(n->u.let.body); return;
+    case IR_LET:
+        if (n->u.let.v && n->u.let.rhs->kind == IR_REF && !n->u.let.rhs->u.ref.check) add_pending(n->u.let.v, n->u.let.rhs);
+        else count_node(n->u.let.rhs);
+        count_node(n->u.let.body);
+        return;
     case IR_FIX: {
         int k;
         for (k = 0; k < n->u.fix.n; k++)
@@ -784,13 +1083,7 @@ static void count_node(ir_node *n) {
     case IR_LETJ: count_node(n->u.letj.j->body); count_node(n->u.letj.body); return;
     case IR_JUMP: /* arguments are counted later, only for parameters that are used */
         n->u.jump.j->njumps++;
-        if (njumpv == jumpv_cap) {
-            ir_node **nj = NEWN(ir_node *, jumpv_cap * 2 + 64);
-            if (jumpv) memcpy(nj, jumpv, sizeof(ir_node *) * (size_t)njumpv);
-            jumpv = nj;
-            jumpv_cap = jumpv_cap * 2 + 64;
-        }
-        jumpv[njumpv++] = n;
+        for (i = 0; i < n->u.jump.n; i++) add_pending(n->u.jump.j->params[i], n->u.jump.args[i]);
         return;
     case IR_IF: count_node(n->u.if_.test); count_node(n->u.if_.then); count_node(n->u.if_.els); return;
     case IR_RET: count_node(n->u.ret); return;
@@ -815,25 +1108,18 @@ void ir_count(ir_program *p) {
         if (L->entry) L->entry->njumps = 0;
         reset_joins(L->body);
     }
-    njumpv = 0;
+    npend = 0;
     for (L = p->lambdas; L; L = L->next) count_node(L->body);
-    {   /* a jump argument is a use only if the join parameter is used: fixpoint */
-        char changed = 1;
-        int k, *base = NEWN(int, njumpv + 1), total = 0;
-        char *argdone;
-        for (k = 0; k < njumpv; k++) { base[k] = total; total += jumpv[k]->u.jump.n; }
-        argdone = NEWN(char, total);
+    {   /* fixpoint: count a pending atom once its target variable is used */
+        char changed = 1, *done = NEWN(char, npend);
         while (changed) {
             changed = 0;
-            for (k = 0; k < njumpv; k++) {
-                ir_node *j = jumpv[k];
-                for (i = 0; i < j->u.jump.n; i++)
-                    if (!argdone[base[k] + i] && j->u.jump.j->params[i]->nrefs > 0) {
-                        argdone[base[k] + i] = 1;
-                        count_node(j->u.jump.args[i]);
-                        changed = 1;
-                    }
-            }
+            for (i = 0; i < npend; i++)
+                if (!done[i] && pend[i].to->nrefs > 0) {
+                    done[i] = 1;
+                    count_node(pend[i].atom);
+                    changed = 1;
+                }
         }
     }
 }
@@ -845,6 +1131,21 @@ ir_program *ir_build(library *order) {
     prog = NEW(ir_program);
     UNSPEC_FORM = L2(S_quote, RT_UNSPEC);
     for (i = 0; i < NPRIMS_ALL; i++) pm_put(&primmap, sym(prim_table[i].name), (void *)(intptr_t)(i + 1));
+    S_pvalues = sym("%values");
+    S_pcwv = sym("%call-with-values");
+    S_papply = sym("%apply");
+    g_values = base_global(order, "values");
+    g_cwv = base_global(order, "call-with-values");
+    g_apply = base_global(order, "apply");
+    g_callcc1 = base_global(order, "call-with-current-continuation");
+    g_callcc2 = base_global(order, "call/cc");
+    g_raise = base_global(order, "raise");
+    {
+        library *l;
+        obj f;
+        for (l = order; l; l = l->next)
+            for (f = l->core; f != RT_NIL; f = RT_CDR(f)) rewrite_aliases(RT_CAR(f));
+    }
     shake(order);
     for (i = 0; i < ntops; i++) {
         if (!tops[i].keep) continue;
@@ -917,6 +1218,13 @@ ir_program *ir_build(library *order) {
     /* 5. closure layout, names, counts */
     for (L = prog->lambdas; L; L = L->next)
         if (!L->parent || L == prog->main) free_lambda(L);
+    {   /* drop procedures created in dead code (after a tier-1 jump) */
+        ir_lambda **pp = &prog->lambdas;
+        for (L = prog->lambdas; L; L = L->next)
+            if (L->reached) { *pp = L; pp = &L->next; }
+        *pp = NULL;
+    }
+    if (g_raise && gvar(g_raise)->known) prog->raise = gvar(g_raise)->known;
     name_lambdas();
     ir_count(prog);
     return prog;

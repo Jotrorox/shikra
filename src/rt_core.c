@@ -14,6 +14,7 @@ RT_VAR void (*rt_raise_hook)(obj e);
 static RT_UNUSED obj core_argbuf[RT_ARGBUF];
 static RT_UNUSED intptr_t core_argcap = RT_ARGBUF;
 RT_VAR obj *rt_args = core_argbuf;
+RT_VAR obj rt_winders = RT_NIL, rt_handlers = RT_NIL;
 static RT_UNUSED obj core_symtab; /* vector, open addressing; #f = empty slot */
 static RT_UNUSED intptr_t core_symcount;
 
@@ -23,6 +24,8 @@ RT_FN void rt_init(int argc, char **argv, void *stack_base) {
     rt_gc_init(stack_base);
     rt_gc_add_roots(&core_symtab, &core_symtab + 1);
     rt_gc_add_roots(core_argbuf, core_argbuf + RT_ARGBUF);
+    rt_gc_add_roots(&rt_winders, &rt_winders + 1);
+    rt_gc_add_roots(&rt_handlers, &rt_handlers + 1);
     core_symtab = rt_vector_n(256, RT_FALSE);
     rt_gc_add_roots(&rt_stdin, &rt_stdin + 1);
     rt_gc_add_roots(&rt_stdout, &rt_stdout + 1);
@@ -38,8 +41,9 @@ RT_FN void rt_exit(int code) {
     rt_sys_exit(code);
 }
 
+/* R7RS exit statuses: #f -> 1, an exact integer -> itself, anything else -> 0. */
 RT_FN obj rt_exit_o(obj code) {
-    rt_exit(code == RT_TRUE || code == RT_DEFAULT ? 0 : rt_is_fix(code) ? (int)RT_FIXVAL(code) : 1);
+    rt_exit(code == RT_FALSE ? 1 : rt_is_fix(code) ? (int)RT_FIXVAL(code) : 0);
 }
 
 /* ---- error path ---- */
@@ -409,4 +413,83 @@ RT_FN obj rt_append2(obj a, obj b) {
     for (; rt_is_pair(rev); rev = RT_CDR(rev)) b = rt_cons(RT_CAR(rev), b);
     return b;
 }
-RT_FN obj rt_raise_o(obj e) { rt_raise(e); }
+RT_FN obj rt_uncaught_o(obj e) { rt_uncaught(e); }
+
+/* ---- multiple values into a known receiver (call-with-values fallback) ---- */
+static intptr_t core_nvalues(obj v) { return rt_is_type(v, RT_T_VALUES) ? RT_HLEN(v) : 1; }
+RT_FN obj rt_values_check(obj v, obj nreq, obj rest) {
+    intptr_t n = core_nvalues(v);
+    if (rest == RT_FALSE ? n != RT_FIXVAL(nreq) : n < RT_FIXVAL(nreq))
+        rt_error("call-with-values", "wrong number of values for the receiver", rt_cons(RT_FIX(n), RT_NIL));
+    return RT_UNSPEC;
+}
+RT_FN obj rt_values_ref(obj v, obj i) { return rt_is_type(v, RT_T_VALUES) ? RT_VEC(v)[RT_FIXVAL(i)] : v; }
+RT_FN obj rt_values_tail(obj v, obj i) {
+    obj r = RT_NIL;
+    intptr_t k;
+    for (k = core_nvalues(v) - 1; k >= RT_FIXVAL(i); k--) r = rt_cons(rt_values_ref(v, RT_FIX(k)), r);
+    return r;
+}
+
+/* ---- dynamic state: the winders list and the handler stack (spec §8.3, §8.4) ---- */
+RT_FN obj rt_winders_get(void) { return rt_winders; }
+RT_FN obj rt_winders_set(obj w) { rt_winders = w; return RT_UNSPEC; }
+RT_FN obj rt_handlers_get(void) { return rt_handlers; }
+RT_FN obj rt_handlers_set(obj h) { rt_handlers = h; return RT_UNSPEC; }
+RT_FN obj rt_parameter_binding(obj cell) {
+    obj w;
+    RT_CHECK(rt_is_pair(cell), "parameter", "parameter cell", cell);
+    for (w = rt_winders; rt_is_pair(w); w = RT_CDR(w))
+        if (RT_CAR(RT_CAR(w)) == cell) return RT_CAR(w);
+    return cell;
+}
+
+/* ---- the compiled engine's escapes: %call/cc, tier 2 (spec §8.2) ----
+ * A capture is a core_cont frame on the C stack (jump buffer, saved winders and handler
+ * lists) plus a heap procedure k whose free[0] points at the frame (a raw word that looks
+ * like a fixnum) or is #f once the frame is gone. core_conts lists the live frames,
+ * innermost first, so a jump can mark every frame it discards as dead. Tier 3 (M5) adds a
+ * heap copy of the stack segment for k instead of #f. */
+#ifdef SHIKRA_PROGRAM
+typedef struct core_cont { rt_jmpbuf jb; struct core_cont *prev; obj winders, handlers, f, k, val; } core_cont;
+static core_cont *core_conts;
+static obj core_cont_code(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3) {
+    core_cont *c = (core_cont *)(void *)RT_PROC(self)->free[0], *t;
+    obj v = argc == 1 ? a0 : rt_make_values(rt_rest_list(argc, 0, a0, a1, a2, a3));
+    if ((obj)(void *)c == RT_FALSE)
+        rt_error("continuation", "re-entrant continuation not supported yet (milestone M5)", RT_NIL);
+    for (t = core_conts; t != c; t = t->prev) RT_PROC(t->k)->free[0] = RT_FALSE;
+    core_conts = c;
+    c->val = v;
+    rt_winders = c->winders;
+    rt_handlers = c->handlers;
+    rt_sys_throw(&c->jb);
+}
+static void core_callcc_run(void *p) {
+    core_cont *c = (core_cont *)p;
+    c->val = RT_PROC(c->f)->code(c->f, 1, c->k, 0, 0, 0);
+}
+RT_FN obj rt_call_cc(obj f) {
+    core_cont c;
+    RT_CALLABLE(f);
+    c.prev = core_conts;
+    c.winders = rt_winders;
+    c.handlers = rt_handlers;
+    c.f = f;
+    c.val = RT_UNSPEC;
+    c.k = rt_make_proc(core_cont_code, 1);
+    RT_PROC(c.k)->free[0] = (obj)(void *)&c;
+    core_conts = &c;
+    rt_sys_catch(&c.jb, core_callcc_run, &c);
+    core_conts = c.prev;
+    RT_PROC(c.k)->free[0] = RT_FALSE;
+    return c.val;
+}
+#endif
+RT_FN obj rt_continuation_live_p(obj k) {
+#ifdef SHIKRA_PROGRAM
+    if (rt_is_proc(k) && RT_PROC(k)->code == core_cont_code) return RT_BOOL(RT_PROC(k)->free[0] != RT_FALSE);
+#endif
+    (void)k;
+    return RT_TRUE;
+}

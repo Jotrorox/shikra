@@ -201,6 +201,18 @@ RT_FN int rt_sys_open(const char *path, int mode);              /* fd or -1 */
 RT_FN int rt_sys_close(int fd);
 RT_FN RT_NORETURN void rt_sys_exit(int code);
 RT_FN void *rt_sys_mem(size_t n);                    /* zeroed memory from the OS, never freed; NULL on failure */
+/* Non-local exits (tier 2 continuations, spec §8.2): rt_sys_catch runs fn(arg) and returns 0
+ * when it returns, 1 when rt_sys_throw(b) left it. __builtin_setjmp where the compiler
+ * supports it (GCC; clang on x86 only), else sigsetjmp(b, 0) from <setjmp.h>, included by
+ * rt_sys.c only (the size of sigjmp_buf is checked there). */
+#if (defined(__GNUC__) && !defined(__clang__)) || (defined(__clang__) && (defined(__x86_64__) || defined(__i386__)))
+#define RT_BUILTIN_SETJMP 1
+typedef struct { void *w[5]; } rt_jmpbuf;
+#else
+typedef struct { union { void *p; double d; long double ld; } w[48]; } rt_jmpbuf;
+#endif
+RT_FN int rt_sys_catch(rt_jmpbuf *b, void (*fn)(void *), void *arg);
+RT_FN RT_NORETURN void rt_sys_throw(rt_jmpbuf *b);
 RT_FN int64_t rt_sys_clock_ns(int monotonic);        /* realtime or monotonic nanoseconds */
 RT_FN void rt_memcpy(void *d, const void *s, size_t n);
 RT_FN void rt_memmove(void *d, const void *s, size_t n);
@@ -334,7 +346,30 @@ RT_FN RT_NORETURN void rt_undefined_error(const char *name);
 RT_FN intptr_t rt_spread(obj args, obj *regs);
 RT_FN intptr_t rt_spread_values(obj v, obj *regs);
 RT_FN obj rt_append2(obj a, obj b);
-RT_FN obj rt_raise_o(obj e);
+RT_FN obj rt_uncaught_o(obj e);
+/* Multiple values spread into a known receiver (normalize.c, call-with-values fallback). */
+RT_FN obj rt_values_check(obj v, obj nreq, obj rest); /* raises unless v has nreq (or more) values */
+RT_FN obj rt_values_ref(obj v, obj i);
+RT_FN obj rt_values_tail(obj v, obj i);               /* list of the values from i on */
+
+/* ---- dynamic state (rt_core.c; spec §8.3, §8.4; DESIGN.md §11 M1 part A) ----
+ * Both are Scheme lists, innermost first, read and written by lib/ through %primitives.
+ * rt_winders: (before . after) frames of dynamic-wind (car is a procedure) and
+ *             (cell . value) frames of parameterize (car is the parameter's cell, a pair
+ *             (converter . global-value)).
+ * rt_handlers: exception handler procedures. */
+RT_EXTVAR obj rt_winders, rt_handlers;
+RT_FN obj rt_winders_get(void);
+RT_FN obj rt_winders_set(obj w);
+RT_FN obj rt_handlers_get(void);
+RT_FN obj rt_handlers_set(obj h);
+RT_FN obj rt_parameter_binding(obj cell); /* innermost frame for cell, else cell; cdr = value */
+RT_FN obj rt_continuation_live_p(obj k);  /* #f only for a dead tier-2 escape */
+#ifdef SHIKRA_PROGRAM
+/* The compiled engine's %call/cc (tier 2): calls f with an escape procedure that restores
+ * the winders and handler lists and jumps back here with its arguments as the result. */
+RT_FN obj rt_call_cc(obj f);
+#endif
 RT_INLINE obj rt_chkdef(obj v, const char *name) {
     if (RT_UNLIKELY(v == RT_UNDEF)) rt_undefined_error(name);
     return v;

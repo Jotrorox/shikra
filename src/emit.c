@@ -206,6 +206,10 @@ static const char *call_args(ir_node **args, int n, int ind) {
 /* Emit "dest = <call>;", "(void)<call>;" or a tail call. */
 static void emit_call(ir_node *c, const char *dest, int ind) {
     const char *pre = c->u.call.tail ? "RT_MUSTTAIL return " : dest ? fmt("%s = ", dest) : "(void)";
+    if (c->u.call.ctl == CTL_CALLCC) { /* tier 2: the runtime keeps the frame (not a tail call) */
+        out(ind, "%srt_call_cc(%s);", c->u.call.tail ? "return " : dest ? fmt("%s = ", dest) : "(void)", atom(c->u.call.args[0]));
+        return;
+    }
     if (c->u.call.ctl != CTL_NONE) {
         const char *f = atom(c->u.call.args[0]), *x = atom(c->u.call.args[1]);
         out(ind, "{");
@@ -268,7 +272,8 @@ static void emit_rhs(ir_node *r, const char *dest, int ind) {
         sbuf b = {0};
         if (!dest && (p->flags & PF_PURE)) return;
         if (r->u.prim.op == PI_VALUES) {
-            if (r->u.prim.n == 0) sb_puts(&b, "rt_values_n(0, 0)");
+            if (r->u.prim.n == 1) sb_puts(&b, atom(r->u.prim.args[0])); /* one value is itself */
+            else if (r->u.prim.n == 0) sb_puts(&b, "rt_values_n(0, 0)");
             else {
                 sb_printf(&b, "rt_values_n(%d, (obj[]){", r->u.prim.n);
                 for (i = 0; i < r->u.prim.n; i++) sb_printf(&b, "%s%s", i ? ", " : "", atom(r->u.prim.args[i]));
@@ -462,7 +467,10 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     sb_printf(o_, "    rt_gc_add_roots(rt_g, rt_g + %d);\n", nglob + 1);
     if (nsyms) sb_printf(o_, "    for (i = 0; i < %d; i++) rt_intern_static(rt_static_syms[i]);\n", nsyms);
     sb_printf(o_, "    (void)%s(RT_FALSE, 0, 0, 0, 0, 0);\n}\n", p->main->cname);
-    sb_puts(o_, "static void rt_engine_raise(obj e) { rt_uncaught(e); } /* TODO(M1): handler stack */\n");
+    if (p->raise) /* runtime errors detected by primitives are raised by (scheme base) raise */
+        sb_printf(o_, "static void rt_engine_raise(obj e) {\n    (void)%s(RT_SPROC(%s), 1, e, 0, 0, 0);\n    rt_uncaught(e);\n}\n",
+                  p->raise->cname, closure_name(p->raise));
+    else sb_puts(o_, "static void rt_engine_raise(obj e) { rt_uncaught(e); }\n");
     for (i = 0; rtfiles[i]; i++) append_embedded(o_, rtfiles[i]);
     sb_free(&protos);
     sb_free(&closures);

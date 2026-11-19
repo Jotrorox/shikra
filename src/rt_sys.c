@@ -53,6 +53,26 @@ RT_FN void rt_memset(void *d, int c, size_t n) { memset(d, c, n); }
 RT_FN int rt_memcmp(const void *a, const void *b, size_t n) { return memcmp(a, b, n); }
 RT_FN size_t rt_strlen(const char *s) { return strlen(s); }
 
+/* Non-local exits. The setjmp lives in rt_sys_catch, whose frame stays active while fn
+ * runs; returning 1 after a throw restores the caller's callee-saved registers. */
+#ifdef RT_BUILTIN_SETJMP
+RT_FN int rt_sys_catch(rt_jmpbuf *b, void (*fn)(void *), void *arg) {
+    if (__builtin_setjmp(b->w)) return 1;
+    fn(arg);
+    return 0;
+}
+RT_FN void rt_sys_throw(rt_jmpbuf *b) { __builtin_longjmp(b->w, 1); }
+#else
+#include <setjmp.h>
+typedef char sys_jmpbuf_fits[sizeof(sigjmp_buf) <= sizeof(rt_jmpbuf) ? 1 : -1];
+RT_FN int rt_sys_catch(rt_jmpbuf *b, void (*fn)(void *), void *arg) {
+    if (sigsetjmp(*(sigjmp_buf *)(void *)b, 0)) return 1; /* 0: no signal-mask system call */
+    fn(arg);
+    return 0;
+}
+RT_FN void rt_sys_throw(rt_jmpbuf *b) { siglongjmp(*(sigjmp_buf *)(void *)b, 1); }
+#endif
+
 #ifdef SHIKRA_PROGRAM
 int main(int argc, char **argv) {
     rt_init(argc, argv, (void *)&argc);

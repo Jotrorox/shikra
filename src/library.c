@@ -32,7 +32,7 @@ const char *const keyword_names[NKEYWORDS] = {
     "cond", "case", "and", "or", "when", "unless", "do", "quasiquote", "define-syntax",
     "let-syntax", "letrec-syntax", "syntax-rules", "syntax-error", "define-record-type",
     "case-lambda", "let-values", "let*-values", "define-values", "include", "include-ci",
-    "cond-expand", "parameterize", "guard", "delay", "delay-force",
+    "cond-expand", "delay", "delay-force",
     "else", "=>", "...", "_", "unquote", "unquote-splicing"};
 
 /* ---- pointer map ---- */

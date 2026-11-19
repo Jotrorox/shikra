@@ -5,7 +5,7 @@
 ;; optional arguments use case-lambda; variadic arithmetic folds the binary primitives.
 ;; M0 contains what the existing primitives support; M1 completes the library.
 (define-library (scheme base)
-  (import (shikra primitives))
+  (import (shikra primitives) (shikra dynamic))
   (include-library-declarations
    "base/syntax.scm"
    "base/errors.scm"

@@ -66,7 +66,8 @@ enum ir_kind {
     IR_IF,     /* tail: u.if_ */
     IR_RET     /* tail: return atom u.ret */
 };
-enum { CTL_NONE, CTL_APPLY, CTL_CWV }; /* IR_CALL flavours: (%apply f l), (%call-with-values p c) */
+/* IR_CALL flavours: (%apply f l), (%call-with-values p c), (%call/cc f) (tier 2: rt_call_cc) */
+enum { CTL_NONE, CTL_APPLY, CTL_CWV, CTL_CALLCC };
 
 struct ir_node {
     int kind;
@@ -122,6 +123,7 @@ struct ir_lambda {
     global *g;             /* known top-level procedure: its global */
     library *lib;          /* library whose code creates it (C names, shikra size) */
     ir_lambda *next;       /* all procedures, in creation order */
+    int reached;           /* closure layout reached it (others were dead code) */
 };
 
 typedef struct {
@@ -131,6 +133,7 @@ typedef struct {
     int nglobals;
     ir_var **vars;         /* every variable, indexed by id */
     int nvars;
+    ir_lambda *raise;      /* (scheme base) raise: the engine's raise entry, or NULL */
 } ir_program;
 
 /* Middle end (normalize.c): tree shaking, normalization to IR, closure layout.
