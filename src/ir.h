@@ -33,7 +33,8 @@ enum {
     T_UNSPEC = 1 << 14, T_PORT = 1 << 15, T_STDIN = 1 << 16, T_STDOUT = 1 << 17, T_STDERR = 1 << 18,
     T_PCELL0 = 1 << 19, T_PCELL1 = 1 << 20, T_PCELL2 = 1 << 21, T_RTD = 1 << 22, T_UNDEF = 1 << 23,
     T_OTHER = 1 << 24, /* boxes, promises, error objects, values objects, markers */
-    T_ANY = (1 << 25) - 1, T_TOP = T_ANY & ~T_UNDEF,
+    T_F64 = 1 << 25,   /* f64vector (shikra f64vector) */
+    T_ANY = (1 << 26) - 1, T_TOP = T_ANY & ~T_UNDEF,
     T_BOOL = T_TRUE | T_FALSE, T_NUM = T_FIX | T_FLO, T_PCELL = T_PCELL0 | T_PCELL1 | T_PCELL2,
     T_STDPORT = T_STDIN | T_STDOUT | T_STDERR, T_PORTS = T_PORT | T_STDPORT
 };
@@ -237,6 +238,12 @@ int ir_classify_callcc(ir_program *p);
  * boxes alone (filled by ir_classify_callcc). */
 extern pmap ir_forcebox;
 int ir_const_type(obj x);
+/* define-c (PI_CCALL, spec §10): the type letters of a %c-call's arguments ("a" for the
+ * descriptor, then one per C argument) and the descriptor's C types */
+const char *ir_ccall_letters(ir_node *p);
+enum { FT_INT, FT_LONG, FT_DOUBLE, FT_FLOAT, FT_BOOL, FT_CHAR, FT_STRING, FT_POINTER, FT_VOID };
+int ir_ffi_type(obj sym);              /* FT_*, -1 if unknown */
+int ir_ccall_type(ir_node *p, int i);  /* FT_* of C argument i (i = -1: the result) */
 
 /* Back end (emit.c): the complete C translation unit (DESIGN.md §3). */
 typedef struct { int unsafe, debug, gc_bump, unicode_full, gc_stress, no_musttail; } emit_opts;

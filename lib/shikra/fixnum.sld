@@ -1,0 +1,95 @@
+;; (shikra fixnum) -- SRFI 143 on Shikra's 63-bit fixnums (spec §10). Every procedure is a
+;; primitive of its own name (rt_ext.c), so errors name it and the compiler turns each into
+;; tagged-word C with known argument and result types; the variadic ones fold here.
+(define-library (shikra fixnum)
+  (import (shikra primitives) (only (scheme base) error))
+  (export fx-width fx-greatest fx-least fixnum? fx=? fx<? fx>? fx<=? fx>=?
+          fxzero? fxpositive? fxnegative? fxodd? fxeven? fxmax fxmin
+          fx+ fx- fxneg fx* fxquotient fxremainder fxabs fxsquare fxsqrt
+          fx+/carry fx-/carry fx*/carry
+          fxnot fxand fxior fxxor fxarithmetic-shift fxarithmetic-shift-left
+          fxarithmetic-shift-right fxbit-count fxlength fxif fxbit-set? fxcopy-bit
+          fxfirst-set-bit fxbit-field fxbit-field-rotate fxbit-field-reverse)
+  (begin
+    (define fx-width 63)
+    (define fx-greatest 4611686018427387903)
+    (define fx-least -4611686018427387904)
+    (define (fixnum? x) (%exact-integer? x))
+    (define-syntax define-compare
+      (syntax-rules ()
+        ((_ name prim)
+         (define name
+           (case-lambda
+             ((a b) (prim a b))
+             ((a) (prim a a) #t)
+             ((a b c) (let ((ok (prim a b))) (if (prim b c) ok #f)))
+             ((a b . rest)
+              (let loop ((x b) (rest rest) (ok (prim a b)))
+                (if (%null? rest)
+                    ok
+                    (let ((y (%car rest)))
+                      (loop y (%cdr rest) (if (prim x y) ok #f)))))))))))
+    (define-compare fx=? %fx=?)
+    (define-compare fx<? %fx<?)
+    (define-compare fx>? %fx>?)
+    (define-compare fx<=? %fx<=?)
+    (define-compare fx>=? %fx>=?)
+    (define-syntax define-fold
+      (syntax-rules ()
+        ((_ name prim one)
+         (define name
+           (case-lambda
+             ((a) (prim a one))
+             ((a b) (prim a b))
+             ((a b c) (prim (prim a b) c))
+             ((a b . rest)
+              (let loop ((acc (prim a b)) (rest rest))
+                (if (%null? rest) acc (loop (prim acc (%car rest)) (%cdr rest))))))))))
+    (define-fold fxmax %fxmax fx-least)
+    (define-fold fxmin %fxmin fx-greatest)
+    (define fxand (case-lambda (() -1) ((a) (%fxand a -1)) ((a b) (%fxand a b)) ((a b . r) (fxfold %fxand (%fxand a b) r))))
+    (define fxior (case-lambda (() 0) ((a) (%fxior a 0)) ((a b) (%fxior a b)) ((a b . r) (fxfold %fxior (%fxior a b) r))))
+    (define fxxor (case-lambda (() 0) ((a) (%fxxor a 0)) ((a b) (%fxxor a b)) ((a b . r) (fxfold %fxxor (%fxxor a b) r))))
+    (define-syntax fxfold
+      (syntax-rules ()
+        ((_ prim acc rest)
+         (let loop ((a acc) (l rest)) (if (%null? l) a (loop (prim a (%car l)) (%cdr l)))))))
+    (define (fxzero? i) (%fxzero? i))
+    (define (fxpositive? i) (%fxpositive? i))
+    (define (fxnegative? i) (%fxnegative? i))
+    (define (fxodd? i) (%fxodd? i))
+    (define (fxeven? i) (%fxeven? i))
+    (define (fx+ i j) (%fx+ i j))
+    (define (fx- i j) (%fx- i j))
+    (define (fx* i j) (%fx* i j))
+    (define (fxneg i) (%fxneg i))
+    (define (fxabs i) (%fxabs i))
+    (define (fxsquare i) (%fxsquare i))
+    (define (fxquotient i j) (%fxquotient i j))
+    (define (fxremainder i j) (%fxremainder i j))
+    ;; exact integer square root: Newton from above (no flonums)
+    (define (fxsqrt i)
+      (if (if (%exact-integer? i) (%< i 0) #t) (error "fxsqrt: expected nonnegative fixnum" i))
+      (if (%fx<? i 2)
+          (%values i 0)
+          (let loop ((x (%fxquotient i 2)))
+            (let ((y (%fxquotient (%fx+ x (%fxquotient i x)) 2)))
+              (if (%fx>=? y x)
+                  (%values x (%fx- i (%fx* x x)))
+                  (loop y))))))
+    (define (fx+/carry i j k) (%values (%fx+/carry i j k 0) (%fx+/carry i j k 1)))
+    (define (fx-/carry i j k) (%values (%fx-/carry i j k 0) (%fx-/carry i j k 1)))
+    (define (fx*/carry i j k) (%values (%fx*/carry i j k 0) (%fx*/carry i j k 1)))
+    (define (fxnot i) (%fxnot i))
+    (define (fxarithmetic-shift i n) (%fxarithmetic-shift i n))
+    (define (fxarithmetic-shift-left i n) (%fxarithmetic-shift-left i n))
+    (define (fxarithmetic-shift-right i n) (%fxarithmetic-shift-right i n))
+    (define (fxbit-count i) (%fxbit-count i))
+    (define (fxlength i) (%fxlength i))
+    (define (fxif mask i j) (%fxif mask i j))
+    (define (fxbit-set? index i) (%fxbit-set? index i))
+    (define (fxcopy-bit index i b) (%fxcopy-bit index i b))
+    (define (fxfirst-set-bit i) (%fxfirst-set-bit i))
+    (define (fxbit-field i start end) (%fxbit-field i start end))
+    (define (fxbit-field-rotate i count start end) (%fxbit-field-rotate i count start end))
+    (define (fxbit-field-reverse i start end) (%fxbit-field-reverse i start end))))

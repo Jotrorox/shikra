@@ -839,4 +839,36 @@ RT_INLINE obj rt_eof_object(void) { return RT_EOF; }
 RT_INLINE obj rt_eof_object_p(obj x) { return RT_BOOL(x == RT_EOF); }
 RT_INLINE obj rt_port_cell(obj k) { return RT_O((char *)&rt_port_cells[RT_FIXVAL(k)] + 1); }
 
+/* ---- the (shikra ...) extension libraries (rt_ext.c; spec §10, DESIGN.md "Extensions as built").
+ * Program mode: only in programs that use them (the emitter defines RT_EXT and pastes rt_ext.c
+ * right after this header). f64vector: header type RT_T_F64VECTOR, length = 8 * elements. */
+#if !defined(SHIKRA_PROGRAM) || defined(RT_EXT)
+#define RT_HAVE_EXT 1
+typedef struct { uintptr_t hdr; double d[]; } rt_f64vector;
+#define RT_F64(x) (RT_PTR(x, rt_f64vector)->d)
+RT_FN obj rt_fx_add(obj, obj); RT_FN obj rt_fx_sub(obj, obj); RT_FN obj rt_fx_mul(obj, obj); RT_FN obj rt_fx_neg(obj);
+RT_FN obj rt_fx_abs(obj); RT_FN obj rt_fx_square(obj); RT_FN obj rt_fx_quotient(obj, obj); RT_FN obj rt_fx_remainder(obj, obj);
+RT_FN obj rt_fx_max(obj, obj); RT_FN obj rt_fx_min(obj, obj); RT_FN obj rt_fx_eq(obj, obj); RT_FN obj rt_fx_lt(obj, obj);
+RT_FN obj rt_fx_gt(obj, obj); RT_FN obj rt_fx_le(obj, obj); RT_FN obj rt_fx_ge(obj, obj); RT_FN obj rt_fx_zero_p(obj);
+RT_FN obj rt_fx_positive_p(obj); RT_FN obj rt_fx_negative_p(obj); RT_FN obj rt_fx_odd_p(obj); RT_FN obj rt_fx_even_p(obj);
+RT_FN obj rt_fx_not(obj); RT_FN obj rt_fx_and(obj, obj); RT_FN obj rt_fx_ior(obj, obj); RT_FN obj rt_fx_xor(obj, obj);
+RT_FN obj rt_fx_ash(obj, obj); RT_FN obj rt_fx_ashl(obj, obj); RT_FN obj rt_fx_ashr(obj, obj); RT_FN obj rt_fx_if(obj, obj, obj);
+RT_FN obj rt_fx_bit_set_p(obj, obj); RT_FN obj rt_fx_bit_count(obj); RT_FN obj rt_fx_length(obj); RT_FN obj rt_fx_first_set_bit(obj);
+RT_FN obj rt_fx_copy_bit(obj, obj, obj); RT_FN obj rt_fx_bit_field(obj, obj, obj); RT_FN obj rt_fx_bit_field_rotate(obj, obj, obj, obj);
+RT_FN obj rt_fx_bit_field_reverse(obj, obj, obj); RT_FN obj rt_fx_add_carry(obj, obj, obj, obj);
+RT_FN obj rt_fx_sub_carry(obj, obj, obj, obj); RT_FN obj rt_fx_mul_carry(obj, obj, obj, obj);
+RT_FN obj rt_flonum_p(obj); RT_FN obj rt_fl_add(obj, obj); RT_FN obj rt_fl_sub(obj, obj); RT_FN obj rt_fl_mul(obj, obj);
+RT_FN obj rt_fl_div(obj, obj); RT_FN obj rt_fl_fma(obj, obj, obj); RT_FN obj rt_fl_max(obj, obj); RT_FN obj rt_fl_min(obj, obj);
+RT_FN obj rt_fl_eq(obj, obj); RT_FN obj rt_fl_lt(obj, obj); RT_FN obj rt_fl_gt(obj, obj); RT_FN obj rt_fl_le(obj, obj);
+RT_FN obj rt_fl_ge(obj, obj); RT_FN obj rt_fl_abs(obj); RT_FN obj rt_fl_floor(obj); RT_FN obj rt_fl_ceiling(obj);
+RT_FN obj rt_fl_round(obj); RT_FN obj rt_fl_truncate(obj); RT_FN obj rt_fl_sqrt(obj); RT_FN obj rt_fl_exp(obj); RT_FN obj rt_fl_log(obj);
+RT_FN obj rt_fl_sin(obj); RT_FN obj rt_fl_cos(obj); RT_FN obj rt_fl_tan(obj); RT_FN obj rt_fl_asin(obj); RT_FN obj rt_fl_acos(obj);
+RT_FN obj rt_fl_atan(obj); RT_FN obj rt_fl_atan2(obj, obj); RT_FN obj rt_fl_expt(obj, obj); RT_FN obj rt_fl_copysign(obj, obj);
+RT_FN obj rt_fl_adjacent(obj, obj); RT_FN obj rt_fl_sign_bit(obj); RT_FN obj rt_make_flonum_e(obj, obj); RT_FN obj rt_fl_exponent(obj);
+RT_FN obj rt_fl_integer_exponent(obj); RT_FN obj rt_fl_remainder(obj, obj); RT_FN obj rt_fl_remquo(obj, obj);
+RT_FN obj rt_fl_remquo_bits(obj, obj); RT_FN obj rt_fl_fast_fma(void);
+RT_FN obj rt_make_f64vector(obj, obj); RT_FN obj rt_f64vector_p(obj); RT_FN obj rt_f64vector_length(obj);
+RT_FN obj rt_f64vector_ref(obj, obj); RT_FN obj rt_f64vector_set(obj, obj, obj); RT_FN obj rt_f64vector_to_list(obj);
+RT_FN obj rt_list_to_f64vector(obj); RT_FN obj rt_assume_failed(obj);
+#endif
 #endif /* SHIKRA_RT_H */

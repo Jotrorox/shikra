@@ -24,6 +24,8 @@ static htab litcontent;    /* "kind:hex bytes" of a string, flonum or bytevector
 static sbuf pairs;         /* initialisers of rt_lit_pairs[] (all literal pairs, spec §3.2) */
 static int nlits, nsyms, npairs;
 static pmap litmap;        /* heap literal datum -> C expression */
+static int need_ext;       /* the program uses an extension library: RT_EXT, rt_ext.c (spec §10) */
+static const char *dbl_lit(double d);
 static htab symmap;        /* symbol name -> C expression */
 static sbuf symtab;        /* initialiser list of static symbols */
 static ir_lambda *cur;     /* function being emitted */
@@ -183,6 +185,13 @@ static const char *lit(obj x) {
             sb_puts(&linit, "}}");
         }
         lit_shared("b:", RT_PTR(x, rt_bytevector)->b, (size_t)n, r);
+    } else if (rt_is_type(x, RT_T_F64VECTOR)) { /* (shikra f64vector) literal: read-only raw doubles */
+        n = RT_HLEN(x) >> 3;
+        need_ext = 1;
+        r = lit_member(n ? fmt("struct { uintptr_t hdr; double d[%ld]; }", (long)n) : "struct { uintptr_t hdr; }");
+        sb_printf(&linit, "{RT_HDR(RT_T_F64VECTOR, RT_F_RO, %ld)%s", (long)(8 * n), n ? ", {" : "");
+        for (i = 0; i < n; i++) sb_printf(&linit, "%s%s", i ? ", " : "", dbl_lit(RT_F64(x)[i]));
+        sb_puts(&linit, n ? "}}" : "}");
     } else cerror(RT_FALSE, "internal error: cannot emit literal %s", dstr(x));
     pm_put(&litmap, x, (void *)r);
     return r;
@@ -409,6 +418,199 @@ static const char *prim_call(ir_node *r) {
     sb_free(&b);
     return s;
 }
+/* ---- the extension libraries (spec §10; DESIGN.md "Extensions as built") ----
+ * Every operand is either proven (the analysis: its type alone) and used as it is -- a tagged
+ * intptr_t, a double -- or checked first: the checks of the unproven operands come in order in
+ * a comma expression before the operation (rt_fxchk, rt_flchk, rt_f64chk: one tag test each, gone
+ * with --unsafe), so the operation itself is the same straight-line code either way. */
+static sbuf ext_chk;
+static const char *ext_who(ir_node *r) { sbuf q = {0}; const char *w = prim_table[r->u.prim.op].who; c_string(&q, w, strlen(w)); w = arena_strdup(&compiler_arena, q.s); sb_free(&q); return w; }
+static void ext_check(const char *fn, ir_node *a, const char *who) { sb_printf(&ext_chk, "%s(%s, %s), ", fn, atom_as(a, R_OBJ), who); }
+static const char *fxa(ir_node *r, int i, const char *who) {
+    ir_node *a = r->u.prim.args[i];
+    if ((r->spec & S_OK(i)) || only(ir_atom_type(a), T_FIX)) return atom_as(a, R_FIX);
+    ext_check("rt_fxchk", a, who);
+    return fmt("(intptr_t)%s", atom_as(a, R_OBJ));
+}
+static const char *fla(ir_node *r, int i, const char *who) {
+    ir_node *a = r->u.prim.args[i];
+    if ((r->spec & S_OK(i)) || only(ir_atom_type(a), T_FLO)) return as_dbl(a);
+    ext_check("rt_flchk", a, who);
+    return fmt("RT_FLO(%s)", atom_as(a, R_OBJ));
+}
+static const char *f64a(ir_node *r, int i, const char *who) {
+    ir_node *a = r->u.prim.args[i];
+    if (!((r->spec & S_OK(i)) || only(ir_atom_type(a), T_F64))) ext_check("rt_f64chk", a, who);
+    return atom_as(a, R_OBJ);
+}
+static const char *ext_seq(const char *e) {
+    const char *r = ext_chk.len ? fmt("(%s%s)", ext_chk.s, e) : e;
+    ext_chk.len = 0;
+    if (ext_chk.s) ext_chk.s[0] = 0;
+    return r;
+}
+static const char *ext_special(ir_node *r, int *erep) {
+    int op = r->u.prim.op;
+    const char *w = ext_who(r), *A, *B, *C, *e = NULL;
+    static const char *const fxcmp[] = {"==", "<", ">", "<=", ">="};
+    *erep = R_OBJ;
+    ext_chk.len = 0;
+    if (ext_chk.s) ext_chk.s[0] = 0;
+    switch (op) {
+    case PI_rt_fx_add: case PI_rt_fx_sub: case PI_rt_fx_mul:
+        A = fxa(r, 0, w), B = fxa(r, 1, w), *erep = R_FIX;
+        if ((r->spec & S_NOOVF) && op != PI_rt_fx_mul) e = fmt("%s %s %s", A, op == PI_rt_fx_add ? "+" : "-", B);
+        else e = fmt("rt_fx%sw(%s, %s, %s)", op == PI_rt_fx_add ? "add" : op == PI_rt_fx_sub ? "sub" : "mul", A, B, w);
+        break;
+    case PI_rt_fx_neg: A = fxa(r, 0, w), *erep = R_FIX, e = fmt("rt_fxnegw(%s, %s)", A, w); break;
+    case PI_rt_fx_abs: A = fxa(r, 0, w), *erep = R_FIX, e = fmt("rt_fxabsw(%s, %s)", A, w); break;
+    case PI_rt_fx_square: A = fxa(r, 0, w), *erep = R_FIX, e = fmt("rt_fxmulw(%s, %s, %s)", A, A, w); break;
+    case PI_rt_fx_quotient: case PI_rt_fx_remainder:
+        A = fxa(r, 0, w), B = fxa(r, 1, w), *erep = R_FIX;
+        e = fmt("rt_fx%sw(%s, %s, %s)", op == PI_rt_fx_quotient ? "quo" : "rem", A, B, w);
+        break;
+    case PI_rt_fx_max: case PI_rt_fx_min:
+        A = fxa(r, 0, w), B = fxa(r, 1, w), *erep = R_FIX;
+        e = fmt("(%s %s %s ? %s : %s)", A, op == PI_rt_fx_max ? ">" : "<", B, A, B);
+        break;
+    case PI_rt_fx_eq: case PI_rt_fx_lt: case PI_rt_fx_gt: case PI_rt_fx_le: case PI_rt_fx_ge:
+        A = fxa(r, 0, w), B = fxa(r, 1, w);
+        e = fmt("RT_BOOL(%s %s %s)", A, fxcmp[op - PI_rt_fx_eq], B);
+        break;
+    case PI_rt_fx_zero_p: e = fmt("RT_BOOL(%s == 0)", fxa(r, 0, w)); break;
+    case PI_rt_fx_positive_p: e = fmt("RT_BOOL(%s > 0)", fxa(r, 0, w)); break;
+    case PI_rt_fx_negative_p: e = fmt("RT_BOOL(%s < 0)", fxa(r, 0, w)); break;
+    case PI_rt_fx_odd_p: e = fmt("RT_BOOL(%s & 2)", fxa(r, 0, w)); break;
+    case PI_rt_fx_even_p: e = fmt("RT_BOOL(!(%s & 2))", fxa(r, 0, w)); break;
+    case PI_rt_fx_not: A = fxa(r, 0, w), *erep = R_FIX, e = fmt("(%s ^ ~(intptr_t)1)", A); break;
+    case PI_rt_fx_and: case PI_rt_fx_ior: case PI_rt_fx_xor:
+        A = fxa(r, 0, w), B = fxa(r, 1, w), *erep = R_FIX;
+        e = fmt("(%s %s %s)", A, op == PI_rt_fx_and ? "&" : op == PI_rt_fx_ior ? "|" : "^", B);
+        break;
+    case PI_rt_fx_ash: case PI_rt_fx_ashl: case PI_rt_fx_ashr:
+        A = fxa(r, 0, w), B = fxa(r, 1, w), *erep = R_FIX;
+        e = fmt("rt_fxash%sw(%s, %s, %s)", op == PI_rt_fx_ash ? "" : op == PI_rt_fx_ashl ? "l" : "r", A, B, w);
+        break;
+    case PI_rt_fx_if:
+        A = fxa(r, 0, w), B = fxa(r, 1, w), C = fxa(r, 2, w), *erep = R_FIX;
+        e = fmt("((%s & %s) | (~%s & %s))", A, B, A, C);
+        break;
+    case PI_rt_fx_bit_set_p: A = fxa(r, 0, w), B = fxa(r, 1, w), e = fmt("rt_fxbitsetw(%s, %s, %s)", A, B, w); break;
+    case PI_rt_flonum_p: e = fmt("RT_BOOL(rt_is_flo(%s))", atom_as(r->u.prim.args[0], R_OBJ)); break;
+    case PI_rt_fl_add: case PI_rt_fl_sub: case PI_rt_fl_mul: case PI_rt_fl_div:
+        A = fla(r, 0, w), B = fla(r, 1, w), *erep = R_DBL;
+        e = fmt("%s %s %s", A, op == PI_rt_fl_add ? "+" : op == PI_rt_fl_sub ? "-" : op == PI_rt_fl_mul ? "*" : "/", B);
+        break;
+    case PI_rt_fl_fma: A = fla(r, 0, w), B = fla(r, 1, w), C = fla(r, 2, w), *erep = R_DBL, e = fmt("rt_flfma(%s, %s, %s)", A, B, C); break;
+    case PI_rt_fl_eq: case PI_rt_fl_lt: case PI_rt_fl_gt: case PI_rt_fl_le: case PI_rt_fl_ge:
+        A = fla(r, 0, w), B = fla(r, 1, w);
+        e = fmt("RT_BOOL(%s %s %s)", A, fxcmp[op - PI_rt_fl_eq], B);
+        break;
+    case PI_rt_fl_max: case PI_rt_fl_min: case PI_rt_fl_atan2: case PI_rt_fl_expt: case PI_rt_fl_copysign: case PI_rt_fl_adjacent:
+    case PI_rt_fl_remainder: case PI_rt_fl_remquo: {
+        static const char *const f2[] = {"rt_flmax2", "rt_flmin2", "rt_sys_atan2", "rt_sys_pow", "rt_flcopysign", "rt_flnext", "rt_flfmod", "rt_flremq"};
+        int k = op == PI_rt_fl_max ? 0 : op == PI_rt_fl_min ? 1 : op == PI_rt_fl_atan2 ? 2 : op == PI_rt_fl_expt ? 3 : op == PI_rt_fl_copysign ? 4
+              : op == PI_rt_fl_adjacent ? 5 : op == PI_rt_fl_remainder ? 6 : 7;
+        A = fla(r, 0, w), B = fla(r, 1, w), *erep = R_DBL;
+        e = fmt("%s(%s, %s)", f2[k], A, B);
+        break;
+    }
+    case PI_rt_fl_remquo_bits: A = fla(r, 0, w), B = fla(r, 1, w), *erep = R_FIX, e = fmt("(intptr_t)RT_FIX(rt_flremqbits(%s, %s))", A, B); break;
+    case PI_rt_fl_abs: case PI_rt_fl_floor: case PI_rt_fl_ceiling: case PI_rt_fl_round: case PI_rt_fl_truncate: case PI_rt_fl_sqrt:
+    case PI_rt_fl_exp: case PI_rt_fl_log: case PI_rt_fl_sin: case PI_rt_fl_cos: case PI_rt_fl_tan: case PI_rt_fl_asin:
+    case PI_rt_fl_acos: case PI_rt_fl_exponent: {
+        static const char *const f1[] = {"rt_flabs", "rt_flfloor", "rt_flceil", "rt_flround", "rt_fltrunc", "rt_sys_sqrt", "rt_sys_exp",
+                                         "rt_sys_log", "rt_sys_sin", "rt_sys_cos", "rt_sys_tan", "rt_sys_asin", "rt_sys_acos", "rt_fllogb"};
+        A = fla(r, 0, w), *erep = R_DBL;
+        e = fmt("%s(%s)", f1[op == PI_rt_fl_exponent ? 13 : op - PI_rt_fl_abs], A);
+        break;
+    }
+    case PI_rt_fl_atan: A = fla(r, 0, w), *erep = R_DBL, e = fmt("rt_sys_atan2(%s, 1.0)", A); break;
+    case PI_rt_fl_sign_bit: A = fla(r, 0, w), *erep = R_FIX, e = fmt("(intptr_t)RT_FIX(rt_flsignbit(%s))", A); break;
+    case PI_rt_fl_integer_exponent: A = fla(r, 0, w), *erep = R_FIX, e = fmt("(intptr_t)RT_FIX(rt_flilogb(%s))", A); break;
+    case PI_rt_make_flonum_e: A = fla(r, 0, w), B = fxa(r, 1, w), *erep = R_DBL, e = fmt("rt_flldexp(%s, RT_FIXVAL(%s))", A, B); break;
+    case PI_rt_f64vector_p: e = fmt("RT_BOOL(rt_is_type(%s, RT_T_F64VECTOR))", atom_as(r->u.prim.args[0], R_OBJ)); break;
+    case PI_rt_f64vector_length: A = f64a(r, 0, w), *erep = R_FIX, e = fmt("(intptr_t)RT_FIX(RT_HLEN(%s) >> 3)", A); break;
+    case PI_rt_f64vector_ref: A = f64a(r, 0, w), B = fxa(r, 1, w), *erep = R_DBL, e = fmt("rt_f64ref(%s, %s)", A, B); break;
+    case PI_rt_f64vector_set: {
+        ir_node *x = r->u.prim.args[2];
+        A = f64a(r, 0, w), B = fxa(r, 1, w);
+        C = only(ir_atom_type(x), T_NUM) ? as_dbl(x) : fmt("rt_f64num(%s, %s)", atom_as(x, R_OBJ), w);
+        e = fmt("rt_f64set(%s, %s, %s)", A, B, C);
+        break;
+    }
+    default: return NULL;
+    }
+    return ext_seq(e);
+}
+/* define-c: the C prototype (once per function, under a private name bound to the real symbol
+ * with an asm label, so it cannot clash with a declaration of a system header in the runtime) and
+ * the call with its conversions. */
+static sbuf ffi_protos, ffi_names;
+static htab ffi_seen;
+static const char *const ffi_ctype[] = {"int", "long", "double", "float", "_Bool", "char", "const char *", "void *", "void"};
+static const char *ccall(ir_node *r, int *erep) {
+    obj d = r->u.prim.args[0]->u.value;
+    const char *cname = RT_STR(RT_CAR(RT_CDR(d)))->buf, *name, *who, *pn;
+    int n = r->u.prim.n - 1, i, rt = ir_ccall_type(r, -1);
+    sbuf b = {0}, q = {0};
+    obj nm = RT_CAR(d);
+    c_string(&q, cname_str(nm), strlen(cname_str(nm)));
+    who = arena_strdup(&compiler_arena, q.s);
+    sb_free(&q);
+    for (i = 0; cname[i]; i++) if (!(cname[i] == '_' || (cname[i] >= '0' && cname[i] <= '9') || ((cname[i] | 32) >= 'a' && (cname[i] | 32) <= 'z')))
+        cerror(r->loc ? r->loc : RT_FALSE, "define-c: %s is not a C identifier", cname);
+    sb_printf(&b, "%s:", cname);
+    for (i = -1; i < n; i++) sb_printf(&b, "%d", ir_ccall_type(r, i));
+    if (!(pn = (const char *)ht_get(&ffi_seen, cname))) {
+        pn = fmt("rt_c_%s", cname);
+        sb_printf(&ffi_protos, "extern %s %s(", ffi_ctype[rt], pn);
+        for (i = 0; i < n; i++) sb_printf(&ffi_protos, "%s%s", i ? ", " : "", ffi_ctype[ir_ccall_type(r, i)]);
+        sb_printf(&ffi_protos, "%s) RT_CNAME(\"%s\");\n", n ? "" : "void", cname);
+        sb_printf(&ffi_names, "#define %s %s\n", pn, cname);
+        ht_put(&ffi_seen, arena_strdup(&compiler_arena, cname), (void *)arena_strdup(&compiler_arena, b.s));
+        ht_put(&ffi_seen, arena_strdup(&compiler_arena, b.s), (void *)pn);
+    } else if (strcmp(pn, b.s)) cerror(r->loc ? r->loc : RT_FALSE, "define-c: C function %s bound twice with different types", cname);
+    else pn = (const char *)ht_get(&ffi_seen, b.s);
+    sb_free(&b);
+    ext_chk.len = 0;
+    if (ext_chk.s) ext_chk.s[0] = 0;
+    {
+        sbuf c = {0};
+        sb_printf(&c, "%s(", pn);
+        for (i = 0; i < n; i++) {
+            ir_node *a = r->u.prim.args[i + 1];
+            int t = ir_ccall_type(r, i), ok = i < 6 && (r->spec & S_OK(i + 1));
+            const char *x = atom_as(a, R_OBJ);
+            if (i) sb_puts(&c, ", ");
+            switch (t) {
+            case FT_INT: sb_printf(&c, "rt_ffi_int(%s, %s)", x, who); break;
+            case FT_LONG: sb_printf(&c, ok ? "(long)RT_FIXVAL(%s)" : "rt_ffi_long(%s, %s)", ok ? atom_as(a, R_FIX) : x, who); break;
+            case FT_DOUBLE: case FT_FLOAT:
+                if (ok || only(ir_atom_type(a), T_NUM)) sb_printf(&c, "%s%s", t == FT_FLOAT ? "(float)" : "", as_dbl(a));
+                else sb_printf(&c, "%srt_ffi_dbl(%s, %s)", t == FT_FLOAT ? "(float)" : "", x, who);
+                break;
+            case FT_BOOL: sb_printf(&c, ok ? "(%s == RT_TRUE)" : "rt_ffi_bool(%s, %s)", x, who); break;
+            case FT_CHAR: sb_printf(&c, "rt_ffi_char(%s, %s)", x, who); break;
+            case FT_STRING: sb_printf(&c, ok ? "RT_STR(%s)->buf" : "rt_ffi_str(%s, %s)", x, who); break;
+            default: sb_printf(&c, "rt_ffi_ptr(%s, %s)", x, who); break;
+            }
+        }
+        sb_putc(&c, ')');
+        switch (rt) {
+        case FT_INT: *erep = R_FIX; name = fmt("(intptr_t)RT_FIX(%s)", c.s); break;
+        case FT_LONG: name = fmt("rt_ffi_rlong(%s, %s)", c.s, who); break;
+        case FT_DOUBLE: case FT_FLOAT: *erep = R_DBL; name = fmt("(double)%s", c.s); break;
+        case FT_BOOL: name = fmt("RT_BOOL(%s)", c.s); break;
+        case FT_CHAR: name = fmt("RT_CHAR((unsigned char)%s)", c.s); break;
+        case FT_STRING: name = fmt("rt_ffi_rstr(%s)", c.s); break;
+        case FT_POINTER: name = fmt("rt_ffi_rptr(%s, %s)", c.s, who); break;
+        default: name = fmt("(%s, RT_UNSPEC)", c.s); break;
+        }
+        sb_free(&c);
+    }
+    return name;
+}
 static int std_port(ir_node *p) { return only(ir_atom_type(p), T_STDOUT | T_STDERR); } /* open: prog_->std_open */
 static ir_program *prog_;
 /* the specialised expression and its representation, or NULL (generic) */
@@ -524,6 +726,14 @@ static void emit_prim(ir_node *r, const char *dest, int drep, int ind) {
         return;
     }
     if (!dest && (p->flags & PF_PURE)) return;
+    if (r->u.prim.op == PI_CCALL) { need_ext = 1; assign(dest, drep, ccall(r, &erep), erep, ind, 0); return; }
+    if (r->u.prim.op >= PI_rt_fx_add && r->u.prim.op < NPRIMS) {
+        need_ext = 1;
+        if (r->u.prim.op == PI_rt_assume_failed && unsafe_) { out(ind, "RT_UNREACHABLE();"); return; } /* trusted (spec §10) */
+        if (!(e = ext_special(r, &erep))) { e = prim_call(r); erep = R_OBJ; }
+        assign(dest, drep, e, erep, ind, (p->flags & PF_PURE) != 0);
+        return;
+    }
     if (!(e = special(r, &erep))) { e = prim_call(r); erep = R_OBJ; }
     assign(dest, drep, e, erep, ind, (p->flags & PF_PURE) != 0);
 }
@@ -803,8 +1013,10 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     if (p->no_handlers) sb_puts(o_, "#define RT_NO_HANDLERS 1 /* no exception handler is ever installed */\n");
     if (p->no_flonums) sb_puts(o_, "#define RT_NO_FLONUMS 1 /* no flonum can exist: no float printer */\n");
     if (p->tier3) sb_printf(o_, "#define RT_TIER3 1 /* %d call/cc site(s) of tier 3: stack copying */\n", p->tier3);
+    if (need_ext) sb_puts(o_, "#define RT_EXT 1 /* the (shikra ...) extension libraries: rt_ext.c */\n");
     sb_printf(o_, "#define RT_NLITPAIRS %d\n#define RT_NSTATIC_SYMS %d\n", npairs, nsyms);
     append_embedded(o_, "src/rt.h");
+    if (need_ext) append_embedded(o_, "src/rt_ext.c"); /* before the program: its inline helpers */
     sb_puts(o_, "\n/* ==== program ==== */\n");
     sb_puts(o_, "#if defined(__GNUC__) || defined(__clang__)\n#define G_INF __builtin_inf()\n#define G_NAN __builtin_nan(\"\")\n"
                 "#else\n#define G_INF (1e308 * 10.0)\n#define G_NAN (G_INF - G_INF)\n#endif\n");
@@ -823,6 +1035,13 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     if (nsyms) /* entered into the symbol table only if the program creates it (spec §9.1) */
         sb_printf(o_, "static const obj rt_static_syms[%d] = {%s};\n", nsyms, symtab.s);
     sb_putn(o_, protos.s, protos.len);
+    if (ffi_protos.len) { /* define-c */
+        sb_puts(o_, "#if defined(__GNUC__) || defined(__clang__)\n#define RT_CNAME2(p, n) __asm__(#p n)\n#define RT_CNAME1(p, n) RT_CNAME2(p, n)\n"
+                    "#define RT_CNAME(n) RT_CNAME1(__USER_LABEL_PREFIX__, n)\n#else\n#define RT_CNAME(n)\n");
+        sb_putn(o_, ffi_names.s, ffi_names.len); /* without asm labels: the C names themselves */
+        sb_puts(o_, "#endif\n");
+        sb_putn(o_, ffi_protos.s, ffi_protos.len);
+    }
     if (closures.len) sb_putn(o_, closures.s, closures.len);
     sb_putc(o_, '\n');
     sb_putn(o_, code.s, code.len);

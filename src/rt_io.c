@@ -471,6 +471,16 @@ static void io_print_atom(obj x, obj port, int write) {
         }
         rt_port_putc(port, ')');
         return;
+#if defined(RT_HAVE_EXT) && !defined(RT_NO_FLONUMS)
+    case RT_T_F64VECTOR: /* (shikra f64vector), SRFI 4 syntax */
+        rt_port_puts(port, "#f64(");
+        for (i = 0; i < RT_HLEN(x) >> 3; i++) {
+            if (i) rt_port_putc(port, ' ');
+            rt_port_write(port, buf, rt_format_double(RT_F64(x)[i], buf));
+        }
+        rt_port_putc(port, ')');
+        return;
+#endif
     case RT_T_RECORD: rt_port_puts(port, "#<"); io_print_atom(RT_VEC(RT_VEC(x)[0])[0], port, 0); rt_port_putc(port, '>'); return;
     case RT_T_RTD: rt_port_puts(port, "#<record-type "); io_print_atom(RT_VEC(x)[0], port, 0); rt_port_putc(port, '>'); return;
     case RT_T_ERROR: rt_port_puts(port, "#<error "); rt_print(RT_VEC(x)[0], port, 1); rt_port_putc(port, '>'); return;
