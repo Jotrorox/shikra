@@ -1,0 +1,24 @@
+# Spec §12 with the flow analysis (M4-2): i and acc are tagged words in intptr_t locals, the loop
+# has exactly one overflow check (acc + i; i + 1 cannot overflow because i <= n) and no type
+# check, call or allocation; display of the fixnum is the integer printer, newline a char write.
+# Linked: no collector, no generic printer, no float printer, no exception machinery beyond the
+# overflow report, no symbol table, reader or file ports.
+fn P_init[(]
+has intptr_t[[:space:]]v_i_
+has intptr_t[[:space:]]v_acc_
+loops 1
+count 1 rt_fx(add|sub|mul)[(]
+has \+[[:space:]][(]intptr_t[)]RT_FIX[(]1[)]
+no rt_(add|gt|lt|car|cdr|make_flonum|cons|alloc)[(]
+no RT_NT[(]
+no RT_PROC[(]
+fn P_init[(]
+has rt_put_fixnum[(]
+has rt_put_newline[(]
+no rt_display[(]
+nm-no ^_?rt_alloc_slow$
+nm-no ^_?gc_(run|mark|scan)
+nm-no ^_?rt_(print|display|write|format_double|intern|read|open_input_file|make_error|raise|engine_raise)$
+nm-no ^_?io_(scan|print|label)
+nm-no ^_?P_scheme_base__raise$
+nm-has ^_?rt_put_fixnum$

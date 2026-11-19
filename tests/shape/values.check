@@ -1,0 +1,6 @@
+all
+has typedef[[:space:]]struct[[:space:]][{][[:space:]]obj[[:space:]]v\[2\];[[:space:]][}][[:space:]]rt_mv2;
+has ^static[[:space:]]rt_mv2[[:space:]]P_main__divmod[(]intptr_t[[:space:]]v_a_[0-9]+,[[:space:]]intptr_t[[:space:]]v_b_
+no rt_values_n
+no rt_values_(check|ref)
+no rt_make_values

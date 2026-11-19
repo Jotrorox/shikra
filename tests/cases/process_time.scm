@@ -20,7 +20,7 @@
 (check (non-decreasing? 100000) #t)
 (define t0 (current-jiffy))
 (define s0 (current-second))
-(let loop ((i 0)) (when (< i 2000000) (loop (+ i 1))))
+(let loop ((i 0)) (when (< i 200000) (current-second) (loop (+ i 1)))) ; time passes (a loop without effects is removed by the C compiler)
 (check (> (current-jiffy) t0) #t)
 (check (>= (current-second) s0) #t)
 (check (< (/ (- (current-jiffy) t0) (jiffies-per-second)) 60) #t)

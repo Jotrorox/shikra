@@ -1,6 +1,7 @@
 #!/bin/sh
-# tests/fuzz.sh [N [SEED]] -- randomized differential test of the optimizer (M4-1): N programs
-# from tests/fuzz/gen.scm (default 200, seeds SEED..SEED+N-1, default 1), each run by the
+# tests/fuzz.sh [N [SEED]] -- randomized differential test of the optimizer (M4-1) and of the flow
+# analysis and its specialisations (M4-2): for each seed SEED..SEED+N-1 (default 200 seeds from 1)
+# one program from tests/fuzz/gen.scm and one from tests/fuzz/gen2.scm, each run by the
 # interpreter (the reference, spec §13) and compiled at -O0, -O2 and -Os (and -O0 with the
 # trampoline); stdout and the exit status must agree. Failing programs are kept in
 # tests/tmp/fuzz/. Not part of `make test`.
@@ -8,15 +9,18 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 N=${1:-200}
 SEED=${2:-1}
-D=tests/tmp/fuzz
+D=${FUZZ_DIR:-tests/tmp/fuzz} # separate directories let several runs go in parallel
 mkdir -p "$D"
 fails=0
 i=0
+total=0
 while [ $i -lt "$N" ]; do
-    s=$((SEED + i))
-    i=$((i + 1))
-    p=$D/p$s.scm
-    ./shikra interp tests/fuzz/gen.scm "$s" > "$p" || { echo "generator failed for seed $s"; fails=$((fails + 1)); continue; }
+  s=$((SEED + i))
+  i=$((i + 1))
+  for gen in gen gen2; do
+    total=$((total + 1))
+    p=$D/$gen-$s.scm
+    ./shikra interp tests/fuzz/$gen.scm "$s" > "$p" || { echo "generator $gen failed for seed $s"; fails=$((fails + 1)); continue; }
     ./shikra interp "$p" > "$D/ref.out" 2>&1
     echo "exit $?" >> "$D/ref.out"
     bad=
@@ -33,10 +37,11 @@ while [ $i -lt "$N" ]; do
     done
     if [ -n "$bad" ]; then
         fails=$((fails + 1))
-        echo "seed $s: differs at$bad (kept $p)"
+        echo "$gen seed $s: differs at$bad (kept $p)"
     else
         rm -f "$p"
     fi
+  done
 done
-echo "fuzz: $N programs, $fails failing"
+echo "fuzz: $total programs, $fails failing"
 [ "$fails" -eq 0 ]

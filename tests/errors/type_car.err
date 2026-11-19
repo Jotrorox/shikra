@@ -1,0 +1,1 @@
+type_car.scm:2:13: error: car: expected a pair, but the argument is always a fixnum

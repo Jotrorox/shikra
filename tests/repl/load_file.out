@@ -18,14 +18,14 @@ shikra> ((case-lambda ((x) (list 'one x)) ((x y) (list 'two x y))) 1 2)
 shikra> ,c bump!
 /* main: bump! */
 static obj P_main__bump_x(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3) {
-    obj v_a_N = 0;
-    obj v_t_N = 0;
+    intptr_t v_a_N = 0;
+    intptr_t v_t_N = 0;
     (void)self; (void)argc; (void)a0; (void)a1; (void)a2; (void)a3;
     if (RT_UNLIKELY(argc != 0)) rt_arity_error("bump!", argc);
-    v_a_N = rt_chkdef(rt_g[3], "counter");
-    v_t_N = rt_add(v_a_N, RT_FIX(10));
-    rt_g[3] = v_t_N;
-    return rt_chkdef(rt_g[3], "counter");
+    v_a_N = (intptr_t)(rt_chkdef(rt_g[0], "counter"));
+    v_t_N = rt_fxadd(v_a_N, (intptr_t)RT_FIX(10));
+    rt_g[0] = (obj)(v_t_N);
+    return rt_chkdef(rt_g[0], "counter");
 }
 
 shikra> 

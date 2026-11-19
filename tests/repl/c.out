@@ -16,21 +16,21 @@ shikra> ,c count-to
 /* main: count-to */
 static obj P_main__count_to(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3) {
     obj v_n_N = 0;
-    obj v_i_N = 0;
+    intptr_t v_i_N = 0;
     obj v_t_N = 0;
-    obj v_t_N = 0;
+    intptr_t v_t_N = 0;
     (void)self; (void)argc; (void)a0; (void)a1; (void)a2; (void)a3;
     if (RT_UNLIKELY(argc != 1)) rt_arity_error("count-to", argc);
     v_n_N = a0;
-    v_i_N = RT_FIX(0);
+    v_i_N = (intptr_t)RT_FIX(0);
 jN:;
-    v_t_N = rt_lt(v_i_N, v_n_N);
+    v_t_N = rt_lt((obj)(v_i_N), v_n_N);
     if (v_t_N != RT_FALSE) {
-        v_t_N = rt_add(v_i_N, RT_FIX(1));
+        v_t_N = rt_fxadd(v_i_N, (intptr_t)RT_FIX(1));
         v_i_N = v_t_N;
         goto jN;
     } else {
-        return v_i_N;
+        return (obj)(v_i_N);
     }
 }
 

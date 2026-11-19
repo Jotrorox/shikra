@@ -1,9 +1,12 @@
-flags --keep norm1
+# Record accessors are calls of nothing: the record primitive is applied in place; the flow
+# analysis proves p is a point (closed record types, spec §4.1), so each access is one load.
 all
 no P_main__point_x
 no P_main__point_y
 no P_main__make_point
-fn P_main__norm1[(]
-has rt_record_ref[(]
+fn P_init[(]
+no rt_record_ref[(]
+no rt_record_set[(]
+count 4 RT_VEC[(]
 no RT_NT[(]
 no RT_PROC[(]

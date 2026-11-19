@@ -1,6 +1,6 @@
 # Spec §12: sum-to's loop is a C loop inside sum-to's own function: no separate loop function,
 # no closure, no call of any kind inside the loop (the named let and >, + are gone).
-# M4-2 adds: no type checks, tagged arithmetic, the integer printer only.
+# (sum-to is kept as a first-class procedure here, so n is unknown; see sum_to_main for M4-2.)
 flags --keep sum-to
 all
 no ^static[[:space:]]obj[[:space:]]P_main__sum_to__
@@ -10,5 +10,5 @@ no rt_make_proc
 no RT_PROC[(]
 no RT_NT[(]
 no RT_TAIL
-has rt_add[(]
+has rt_fxadd[(]
 has rt_gt[(]

@@ -1,0 +1,1 @@
+type_not_procedure.scm:2:27: error: not a procedure: the operator is always a fixnum

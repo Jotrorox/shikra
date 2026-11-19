@@ -279,12 +279,15 @@ GCC=${GCC:-gcc-16}
 #   loops N      the selection has at least N loops (a label and a later goto back to it); select
 #                the loop bodies (label to last goto)
 #   no REGEX     no line of the selection matches          has REGEX   some line does
+#   count N REGEX  exactly N lines of the selection match
+#   nm-no REGEX  no symbol defined in the binary (nm) matches;  nm-has REGEX  some symbol does (M4-2:
+#                what is linked, spec §9.1)
 # REGEX is an extended regular expression without spaces (use [[:space:]]; "(" as [(]).
 shape_select() { # $1 directive, $2 argument; selection in $TMP/sel, program in $TMP/prog.fns
     case $1 in
     all) cp "$TMP/prog.fns" "$TMP/sel" ;;
-    fn) awk -v re="$2" '/^static obj [A-Za-z0-9_]+\(.*\) \{$/ { on = ($0 ~ re) } on { print } /^}$/ { on = 0 }' "$TMP/prog.fns" > "$TMP/sel" ;;
-    fnof) awk -v re="$2" '/^static obj [A-Za-z0-9_]+\(.*\) \{$/ { n = 0; hit = 0 } { buf[n++] = $0; if ($0 ~ re) hit = 1 }
+    fn) awk -v re="$2" '/^static [A-Za-z0-9_]+ [A-Za-z0-9_]+\(.*\) \{$/ { on = ($0 ~ re) } on { print } /^}$/ { on = 0 }' "$TMP/prog.fns" > "$TMP/sel" ;;
+    fnof) awk -v re="$2" '/^static [A-Za-z0-9_]+ [A-Za-z0-9_]+\(.*\) \{$/ { n = 0; hit = 0 } { buf[n++] = $0; if ($0 ~ re) hit = 1 }
               /^}$/ { if (hit) for (i = 0; i < n; i++) print buf[i]; n = 0; hit = 0 }' "$TMP/prog.fns" > "$TMP/sel" ;;
     loops) awk -v want="$2" '{ l[NR] = $0 } END {
               for (a = 1; a <= NR; a++) if (match(l[a], /^ *(j[0-9]+|entry):;$/)) {
@@ -318,6 +321,10 @@ run_shape() {
                 all | fn | fnof | loops) shape_select "$dir" "$arg" 2> "$TMP/shape.err" || failed="$dir $arg: $(cat "$TMP/shape.err")" ;;
                 no) if grep -Eq -- "$arg" "$TMP/sel"; then failed="no $arg: $(grep -E -- "$arg" "$TMP/sel" | head -2)"; fi ;;
                 has) grep -Eq -- "$arg" "$TMP/sel" || failed="has $arg" ;;
+                count) [ "$(grep -Ec -- "$rest" "$TMP/sel")" = "$arg" ] || failed="count $arg $rest: $(grep -Ec -- "$rest" "$TMP/sel")" ;;
+                nm-no) if nm "$TMP/shape" | awk '$2 !~ /^[Uu]$/ { print $3 }' | grep -Eq -- "$arg"; then
+                           failed="nm-no $arg: $(nm "$TMP/shape" | awk '$2 !~ /^[Uu]$/ { print $3 }' | grep -E -- "$arg" | head -3 | tr '\n' ' ')"; fi ;;
+                nm-has) nm "$TMP/shape" | awk '$2 !~ /^[Uu]$/ { print $3 }' | grep -Eq -- "$arg" || failed="nm-has $arg" ;;
                 *) failed="unknown directive $dir" ;;
                 esac
                 [ -n "$failed" ] && break

@@ -1,0 +1,3 @@
+warnings/types_boundary.scm:6:19: warning: car: expected a pair, but the argument is always a fixnum (an error when it runs)
+warnings/types_boundary.scm:9:66: warning: vector-ref: expected a vector, but the argument is always a string (an error when it runs)
+warnings/types_boundary.scm:10:29: warning: string-length: expected a string, but the argument is always a symbol (an error when it runs)

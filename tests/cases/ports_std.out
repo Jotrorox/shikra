@@ -1,0 +1,7 @@
+inner
+1 after escape: a
+caughtab
+abc
+(inner
+dup abc)
+42

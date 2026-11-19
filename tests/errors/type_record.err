@@ -1,0 +1,1 @@
+type_record.scm:4:34: error: record accessor: expected a record of type point, but the argument is always a fixnum

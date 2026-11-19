@@ -1,0 +1,1 @@
+type_vector_ref.scm:2:10: error: vector-ref: expected a vector, but the argument is always a string

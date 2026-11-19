@@ -1,0 +1,16 @@
+# The loop: x and acc are C doubles, no boxing, no type check, no call; the procedure takes and
+# returns a double (private signature).
+all
+has ^static[[:space:]]double[[:space:]]P_main__sum_squares[(]double[[:space:]]v_n
+has ^static[[:space:]]double[[:space:]]P_main__fib[(]double[[:space:]]v_n
+fn P_main__sum_squares[(]
+has double[[:space:]]v_x_
+has double[[:space:]]v_acc_
+loops 1
+no rt_make_flonum
+no rt_(add|sub|mul|gt|lt|negate)[(]
+no RT_FLO[(]
+no RT_NT[(]
+fn P_main__fib[(]
+no rt_make_flonum
+no rt_(add|sub|lt)[(]
