@@ -45,6 +45,33 @@ RT_FN obj rt_exit_o(obj code) {
     rt_exit(code == RT_FALSE ? 1 : rt_is_fix(code) ? (int)RT_FIXVAL(code) : 0);
 }
 
+/* ---- system interface: (scheme process-context), (scheme time) ---- */
+RT_FN obj rt_command_line(void) {
+    obj l = RT_NIL;
+    int i;
+    for (i = rt_argc - 1; i >= 0; i--) l = rt_cons(rt_cstring(rt_argv[i]), l);
+    return l;
+}
+RT_FN obj rt_get_environment_variable(obj name) {
+    const char *v;
+    RT_CHECK(rt_is_string(name), "get-environment-variable", "string", name);
+    v = rt_sys_getenv(RT_STR(name)->buf);
+    return v ? rt_cstring(v) : RT_FALSE;
+}
+RT_FN obj rt_get_environment_variables(void) {
+    char **e = rt_sys_environ();
+    obj l = RT_NIL, k;
+    size_t n;
+    for (; e && *e; e++) {
+        for (n = 0; (*e)[n] && (*e)[n] != '='; n++) {}
+        k = rt_make_string_n(*e, n);
+        l = rt_cons(rt_cons(k, rt_cstring((*e)[n] ? *e + n + 1 : "")), l);
+    }
+    return rt_reverse(l);
+}
+RT_FN obj rt_current_second(void) { return rt_make_flonum((double)rt_sys_clock_ns(0) / 1e9); }
+RT_FN obj rt_current_jiffy(void) { return RT_FIX(rt_sys_clock_ns(1)); } /* nanoseconds */
+
 /* ---- error path ---- */
 RT_FN obj rt_make_error(int kind, obj message, obj irritants, obj loc) {
     rt_vector *e = (rt_vector *)rt_alloc(RT_HDR(RT_T_ERROR, kind, 3), 4 * sizeof(obj));

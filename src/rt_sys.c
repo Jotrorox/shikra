@@ -18,6 +18,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <poll.h>
 #include <math.h>
 #ifndef MAP_ANONYMOUS
@@ -46,8 +47,24 @@ RT_FN int rt_sys_ready(int fd) {
     p.revents = 0;
     return poll(&p, 1, 0) != 0; /* readable, at end of file, or in error: a read will not block */
 }
-/* Math needed by (scheme base) (expt on flonums). M6 supplies its own pow. */
+/* Math: (scheme base) expt on flonums, (scheme inexact). One function per libm function, so a
+ * program links only those it uses; M6 (no libc) supplies its own implementations of exactly
+ * these (DESIGN.md "M5 as built", platform layer). atan of one argument is atan2(x, 1). */
 RT_FN double rt_sys_pow(double x, double y) { return pow(x, y); }
+RT_FN double rt_sys_exp(double x) { return exp(x); }
+RT_FN double rt_sys_log(double x) { return log(x); }
+RT_FN double rt_sys_sin(double x) { return sin(x); }
+RT_FN double rt_sys_cos(double x) { return cos(x); }
+RT_FN double rt_sys_tan(double x) { return tan(x); }
+RT_FN double rt_sys_asin(double x) { return asin(x); }
+RT_FN double rt_sys_acos(double x) { return acos(x); }
+RT_FN double rt_sys_atan2(double y, double x) { return atan2(y, x); }
+RT_FN double rt_sys_sqrt(double x) { return sqrt(x); }
+/* Files and the environment ((scheme file), (scheme process-context)). */
+RT_FN int rt_sys_exists(const char *path) { struct stat st; return stat(path, &st) == 0; }
+RT_FN int rt_sys_remove(const char *path) { return unlink(path); }
+extern char **environ;
+RT_FN char **rt_sys_environ(void) { return environ; }
 RT_FN void rt_sys_exit(int code) { exit(code); }
 RT_FN void *rt_sys_mem(size_t n) {
     void *p = mmap(0, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

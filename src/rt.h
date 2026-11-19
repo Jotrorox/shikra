@@ -204,6 +204,18 @@ RT_FN int rt_sys_open(const char *path, int mode);              /* fd or -1 */
 RT_FN int rt_sys_close(int fd);
 RT_FN int rt_sys_ready(int fd);                      /* 1 if a read would not block */
 RT_FN double rt_sys_pow(double x, double y);         /* libm pow: (scheme base) expt */
+RT_FN double rt_sys_exp(double x);                   /* libm, (scheme inexact) */
+RT_FN double rt_sys_log(double x);
+RT_FN double rt_sys_sin(double x);
+RT_FN double rt_sys_cos(double x);
+RT_FN double rt_sys_tan(double x);
+RT_FN double rt_sys_asin(double x);
+RT_FN double rt_sys_acos(double x);
+RT_FN double rt_sys_atan2(double y, double x);
+RT_FN double rt_sys_sqrt(double x);
+RT_FN int rt_sys_exists(const char *path);           /* 1 if the file exists */
+RT_FN int rt_sys_remove(const char *path);           /* 0 on success */
+RT_FN char **rt_sys_environ(void);                   /* NULL-terminated "NAME=value" strings */
 RT_FN RT_NORETURN void rt_sys_exit(int code);
 RT_FN void *rt_sys_mem(size_t n);                    /* zeroed memory from the OS; NULL on failure */
 RT_FN void rt_sys_free(void *p, size_t n);           /* return rt_sys_mem(n) memory (collector only) */
@@ -288,6 +300,11 @@ static const obj rt_static_syms[RT_NSTATIC_SYMS]; /* entered into the symbol tab
 /* ---- initialisation and exit (rt_core.c) ---- */
 RT_FN void rt_init(int argc, char **argv, void *stack_base);
 RT_FN RT_NORETURN void rt_exit(int code); /* flushes the standard ports */
+RT_FN obj rt_command_line(void);
+RT_FN obj rt_get_environment_variable(obj name);
+RT_FN obj rt_get_environment_variables(void);
+RT_FN obj rt_current_second(void);  /* POSIX time in seconds, a flonum */
+RT_FN obj rt_current_jiffy(void);   /* monotonic nanoseconds */
 RT_EXTVAR int rt_argc;
 RT_EXTVAR char **rt_argv;
 #ifdef SHIKRA_PROGRAM
@@ -464,6 +481,16 @@ RT_FN obj rt_integer_p(obj x);
 RT_FN obj rt_nan_p(obj x);
 RT_FN obj rt_infinite_p(obj x);
 RT_FN obj rt_finite_p(obj x);
+RT_FN obj rt_exp(obj x);
+RT_FN obj rt_log(obj x);
+RT_FN obj rt_sin(obj x);
+RT_FN obj rt_cos(obj x);
+RT_FN obj rt_tan(obj x);
+RT_FN obj rt_asin(obj x);
+RT_FN obj rt_acos(obj x);
+RT_FN obj rt_atan(obj x);
+RT_FN obj rt_atan2(obj y, obj x);
+RT_FN obj rt_sqrt(obj x);
 RT_FN obj rt_number_to_string(obj n, obj radix);
 RT_FN obj rt_string_to_number(obj s, obj radix);
 /* Parse number syntax (R7RS 7.1.1, Shikra subset). Returns 0 and sets *out on success,
@@ -508,6 +535,10 @@ RT_FN obj rt_open_output_bytevector(void);
 RT_FN obj rt_get_output_bytevector(obj port);
 RT_FN obj rt_open_input_file(obj path);  /* raises a file error */
 RT_FN obj rt_open_output_file(obj path);
+RT_FN obj rt_open_binary_input_file(obj path);
+RT_FN obj rt_open_binary_output_file(obj path);
+RT_FN obj rt_file_exists_p(obj path);
+RT_FN obj rt_delete_file(obj path);
 RT_FN obj rt_close_port(obj port);
 RT_FN int rt_port_getc(obj port);  /* next code point or -1; tracks line/col */
 RT_FN int rt_port_peekc(obj port);

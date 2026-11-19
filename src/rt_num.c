@@ -186,6 +186,19 @@ RT_FN obj rt_nan_p(obj x) { double d = num_d(x, "nan?"); return RT_BOOL(d != d);
 RT_FN obj rt_infinite_p(obj x) { double d = num_d(x, "infinite?"); return RT_BOOL(d == NUM_INF || d == -NUM_INF); }
 RT_FN obj rt_finite_p(obj x) { double d = num_d(x, "finite?"); return RT_BOOL(d - d == 0); }
 
+/* ---- (scheme inexact): through the platform layer (rt_sys.c) ---- */
+#define NUM_MATH1(name, who, f) RT_FN obj name(obj x) { return rt_make_flonum(f(num_d(x, who))); }
+NUM_MATH1(rt_exp, "exp", rt_sys_exp)
+NUM_MATH1(rt_log, "log", rt_sys_log)
+NUM_MATH1(rt_sin, "sin", rt_sys_sin)
+NUM_MATH1(rt_cos, "cos", rt_sys_cos)
+NUM_MATH1(rt_tan, "tan", rt_sys_tan)
+NUM_MATH1(rt_asin, "asin", rt_sys_asin)
+NUM_MATH1(rt_acos, "acos", rt_sys_acos)
+NUM_MATH1(rt_sqrt, "sqrt", rt_sys_sqrt)
+RT_FN obj rt_atan(obj x) { return rt_make_flonum(rt_sys_atan2(num_d(x, "atan"), 1.0)); }
+RT_FN obj rt_atan2(obj y, obj x) { return rt_make_flonum(rt_sys_atan2(num_d(y, "atan"), num_d(x, "atan"))); }
+
 /* ---- decimal conversion (spec §9.1 "Float printing and parsing"; DESIGN.md "M5 as built") ----
  * Both directions are exact, on small fixed-size big integers (32-bit limbs, up to 4160 bits:
  * enough for every double and for the 780 significant digits that parsing keeps).

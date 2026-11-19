@@ -69,20 +69,33 @@ RT_FN obj rt_get_output_bytevector(obj port) {
     rt_memcpy(RT_PTR(bv, rt_bytevector)->b, RT_PORT(port)->buf, (size_t)RT_PORT(port)->len);
     return bv;
 }
-static obj io_open_file(obj path, int mode, const char *who) {
+/* (scheme file): every failure raises a file error (file-error?) "who: cannot ... file" path. */
+static RT_NORETURN void io_file_error(const char *who, const char *msg, obj path) {
+    obj m = rt_open_output_string();
+    rt_port_puts(m, who);
+    rt_port_puts(m, msg);
+    rt_raise(rt_make_error(RT_ERR_FILE, rt_get_output_string(m), rt_cons(path, RT_NIL), RT_FALSE));
+}
+static obj io_open_file(obj path, int mode, int binary, const char *who) {
     int fd;
     RT_CHECK(rt_is_string(path), who, "string", path);
     fd = rt_sys_open(RT_STR(path)->buf, mode);
-    if (fd < 0) {
-        obj m = rt_open_output_string();
-        rt_port_puts(m, who);
-        rt_port_puts(m, ": cannot open file");
-        rt_raise(rt_make_error(RT_ERR_FILE, rt_get_output_string(m), rt_cons(path, RT_NIL), RT_FALSE));
-    }
-    return rt_make_fd_port(fd, mode == RT_O_READ ? RT_PF_IN : RT_PF_OUT, path);
+    if (fd < 0) io_file_error(who, ": cannot open file", path);
+    return rt_make_fd_port(fd, (mode == RT_O_READ ? RT_PF_IN : RT_PF_OUT) | binary, path);
 }
-RT_FN obj rt_open_input_file(obj path) { return io_open_file(path, RT_O_READ, "open-input-file"); }
-RT_FN obj rt_open_output_file(obj path) { return io_open_file(path, RT_O_WRITE, "open-output-file"); }
+RT_FN obj rt_open_input_file(obj path) { return io_open_file(path, RT_O_READ, 0, "open-input-file"); }
+RT_FN obj rt_open_output_file(obj path) { return io_open_file(path, RT_O_WRITE, 0, "open-output-file"); }
+RT_FN obj rt_open_binary_input_file(obj path) { return io_open_file(path, RT_O_READ, RT_PF_BINARY, "open-binary-input-file"); }
+RT_FN obj rt_open_binary_output_file(obj path) { return io_open_file(path, RT_O_WRITE, RT_PF_BINARY, "open-binary-output-file"); }
+RT_FN obj rt_file_exists_p(obj path) {
+    RT_CHECK(rt_is_string(path), "file-exists?", "string", path);
+    return RT_BOOL(rt_sys_exists(RT_STR(path)->buf));
+}
+RT_FN obj rt_delete_file(obj path) {
+    RT_CHECK(rt_is_string(path), "delete-file", "string", path);
+    if (rt_sys_remove(RT_STR(path)->buf) != 0) io_file_error("delete-file", ": cannot delete file", path);
+    return RT_UNSPEC;
+}
 
 static void io_flush(rt_port *p) {
     if (p->fd >= 0 && p->len > 0) rt_sys_write((int)p->fd, p->buf, (size_t)p->len);
@@ -298,11 +311,21 @@ static void io_escaped(obj port, const char *s, intptr_t n, char q) {
     rt_port_write(port, s + run, (size_t)(n - run));
     rt_port_putc(port, q);
 }
+/* A symbol is written without bars unless it would read back as something else: a number,
+ * or what a reader with complex numbers takes for one (+i, -i, and anything beginning with
+ * +inf.0, -inf.0, +nan.0 or -nan.0, in any case). */
+static int io_ci(const char *s, intptr_t n, const char *lit) {
+    intptr_t i;
+    for (i = 0; lit[i]; i++) if (i >= n || (s[i] | 0x20) != lit[i]) return 0;
+    return 1;
+}
 static int io_sym_plain(const char *s, intptr_t n) {
     obj dummy;
     intptr_t i;
     if (n == 0 || s[0] == '#' || (n == 1 && s[0] == '.')) return 0;
     if (rt_parse_number(s, (size_t)n, 10, &dummy) != -1) return 0;
+    if ((s[0] == '+' || s[0] == '-') && ((n == 2 && (s[1] | 0x20) == 'i') || io_ci(s + 1, n - 1, "inf.0") || io_ci(s + 1, n - 1, "nan.0")))
+        return 0;
     for (i = 0; i < n; i++) {
         unsigned char c = (unsigned char)s[i];
         const char *d;

@@ -904,6 +904,69 @@ static const char *const e15[] = {
 "",
 0};
 static const char *const e16[] = {
+";; (scheme file) -- R7RS 6.13.1, 6.14. File ports are OS-descriptor ports (rt_io.c), textual or\n"
+";; binary; every failure to open or delete raises an error satisfying file-error?. The\n"
+";; call-with-* and with-* procedures close the port when the procedure returns (not when it\n"
+";; escapes); with-input-from-file / with-output-to-file rebind the current port with\n"
+";; parameterize, so an escape restores the previous one.\n"
+"(define-library (scheme file)\n"
+"  (import (shikra primitives) (scheme base))\n"
+"  (export call-with-input-file call-with-output-file delete-file file-exists?\n"
+"          open-binary-input-file open-binary-output-file open-input-file open-output-file\n"
+"          with-input-from-file with-output-to-file)\n"
+"  (begin\n"
+"    (define (open-input-file f) (%open-input-file f))\n"
+"    (define (open-output-file f) (%open-output-file f))\n"
+"    (define (open-binary-input-file f) (%open-binary-input-file f))\n"
+"    (define (open-binary-output-file f) (%open-binary-output-file f))\n"
+"    (define (file-exists? f) (%file-exists? f))\n"
+"    (define (delete-file f) (%delete-file f))\n"
+"    (define (call-with-input-file f proc) (call-with-port (open-input-file f) proc))\n"
+"    (define (call-with-output-file f proc) (call-with-port (open-output-file f) proc))\n"
+"    (define (with-input-from-file f thunk)\n"
+"      (let ((p (open-input-file f)))\n"
+"        (call-with-values (lambda () (parameterize ((current-input-port p)) (thunk)))\n"
+"          (lambda vals (%close-port p) (apply values vals)))))\n"
+"    (define (with-output-to-file f thunk)\n"
+"      (let ((p (open-output-file f)))\n"
+"        (call-with-values (lambda () (parameterize ((current-output-port p)) (thunk)))\n"
+"          (lambda vals (%close-port p) (apply values vals)))))))\n"
+"",
+0};
+static const char *const e17[] = {
+";; (scheme inexact) -- R7RS 6.2.6. The functions go through the platform layer (rt_sys.c; M6\n"
+";; supplies them without libm). No complex numbers (spec \302\2473): a real argument outside a\n"
+";; function's real domain gives +nan.0, e.g. (sqrt -4), (log -1), (asin 2). sqrt of an exact\n"
+";; perfect square is exact, as R7RS expects of (sqrt 16).\n"
+"(define-library (scheme inexact)\n"
+"  (import (shikra primitives) (only (scheme base) exact-integer-sqrt call-with-values))\n"
+"  (export acos asin atan cos exp finite? infinite? log nan? sin sqrt tan)\n"
+"  (begin\n"
+"    (define (finite? z) (%finite? z))\n"
+"    (define (infinite? z) (%infinite? z))\n"
+"    (define (nan? z) (%nan? z))\n"
+"    (define (exp z) (%exp z))\n"
+"    (define log\n"
+"      (case-lambda\n"
+"        ((z) (%log z))\n"
+"        ((z b) (%/ (%log z) (%log b)))))\n"
+"    (define (sin z) (%sin z))\n"
+"    (define (cos z) (%cos z))\n"
+"    (define (tan z) (%tan z))\n"
+"    (define (asin z) (%asin z))\n"
+"    (define (acos z) (%acos z))\n"
+"    (define atan\n"
+"      (case-lambda\n"
+"        ((z) (%atan z))\n"
+"        ((y x) (%atan2 y x))))\n"
+"    (define (sqrt z)\n"
+"      (if (if (%exact-integer? z) (%>= z 0) #f)\n"
+"          (call-with-values (lambda () (exact-integer-sqrt z))\n"
+"            (lambda (s r) (if (%= r 0) s (%sqrt z))))\n"
+"          (%sqrt z)))))\n"
+"",
+0};
+static const char *const e18[] = {
 ";; (scheme lazy) -- R7RS 4.2.5. delay and delay-force are expander keywords (expand.c):\n"
 ";;   (delay-force e) = (%make-promise #f (lambda () e))\n"
 ";;   (delay e)       = (delay-force (%make-promise #t e))\n"
@@ -933,7 +996,7 @@ static const char *const e16[] = {
 "              (force-promise p)))))))\n"
 "",
 0};
-static const char *const e17[] = {
+static const char *const e19[] = {
 ";; (scheme load) -- REPL only (spec \302\2473.1): read the file's forms one at a time and evaluate\n"
 ";; each in the environment (default: the interaction environment) before reading the next.\n"
 "(define-library (scheme load)\n"
@@ -951,15 +1014,19 @@ static const char *const e17[] = {
 "        ((file env) (load-forms (%open-input-file file) env))))))\n"
 "",
 0};
-static const char *const e18[] = {
-";; (scheme process-context) -- exit unwinds (runs outstanding dynamic-wind after thunks)\n"
-";; before it flushes the ports and exits; emergency-exit does not unwind. Exit status: #t or\n"
-";; no argument 0, #f 1, an exact integer itself, anything else 0.\n"
-";; TODO(next): command-line, get-environment-variable(s).\n"
+static const char *const e20[] = {
+";; (scheme process-context) -- R7RS 6.14. command-line is the program's argv: a compiled\n"
+";; program's own, or, under `shikra run FILE args` and `shikra interp FILE args`, FILE then the\n"
+";; arguments. exit unwinds (runs outstanding dynamic-wind after thunks) before it flushes the\n"
+";; ports and exits; emergency-exit does not unwind. Exit status: #t or no argument 0, #f 1, an\n"
+";; exact integer itself, anything else 0.\n"
 "(define-library (scheme process-context)\n"
 "  (import (shikra primitives) (shikra dynamic))\n"
-"  (export exit emergency-exit)\n"
+"  (export command-line exit emergency-exit get-environment-variable get-environment-variables)\n"
 "  (begin\n"
+"    (define (command-line) (%command-line))\n"
+"    (define (get-environment-variable name) (%get-environment-variable name))\n"
+"    (define (get-environment-variables) (%get-environment-variables))\n"
 "    (define exit\n"
 "      (case-lambda\n"
 "        (() (travel-to! '()) (%exit #t))\n"
@@ -967,7 +1034,19 @@ static const char *const e18[] = {
 "    (define emergency-exit (case-lambda (() (%exit #t)) ((obj) (%exit obj))))))\n"
 "",
 0};
-static const char *const e19[] = {
+static const char *const e21[] = {
+";; (scheme read) -- R7RS 6.13.2: the shared runtime reader (rt_read.c), linked only into\n"
+";; programs that call read (spec \302\2473.1, \302\2479.1), together with the symbol table. Reader errors\n"
+";; satisfy read-error?.\n"
+"(define-library (scheme read)\n"
+"  (import (shikra primitives) (only (scheme base) current-input-port))\n"
+"  (export read)\n"
+"  (begin\n"
+"    (define read\n"
+"      (case-lambda (() (%read (current-input-port))) ((p) (%read p))))))\n"
+"",
+0};
+static const char *const e22[] = {
 ";; (scheme repl) -- REPL only (spec \302\2473.1): the environment of the REPL session (in a program\n"
 ";; run by the interpreter: an open top level importing the REPL's default libraries).\n"
 "(define-library (scheme repl)\n"
@@ -977,7 +1056,19 @@ static const char *const e19[] = {
 "    (define (interaction-environment) (%interaction-environment))))\n"
 "",
 0};
-static const char *const e20[] = {
+static const char *const e23[] = {
+";; (scheme time) -- R7RS 6.14. current-second is POSIX time (UTC, not TAI) as a flonum;\n"
+";; jiffies are nanoseconds of the monotonic clock (an exact integer).\n"
+"(define-library (scheme time)\n"
+"  (import (shikra primitives))\n"
+"  (export current-second current-jiffy jiffies-per-second)\n"
+"  (begin\n"
+"    (define (current-second) (%current-second))\n"
+"    (define (current-jiffy) (%current-jiffy))\n"
+"    (define (jiffies-per-second) 1000000000)))\n"
+"",
+0};
+static const char *const e24[] = {
 ";; (scheme write) -- R7RS 6.13.3. write and display label cycles only (so they terminate on\n"
 ";; circular data), write-shared labels all shared pairs and vectors, write-simple none\n"
 ";; (DESIGN.md \"M5 as built\", datum labels in rt_io.c).\n"
@@ -995,7 +1086,7 @@ static const char *const e20[] = {
 "      (case-lambda ((x) (%write-simple x (current-output-port))) ((x p) (%write-simple x p))))))\n"
 "",
 0};
-static const char *const e21[] = {
+static const char *const e25[] = {
 ";; (shikra dynamic) -- internal: the walk over the dynamic state that every non-local jump\n"
 ";; performs (spec \302\2478.4, R7RS 6.10). Shared by call/cc and guard in (scheme base) and by exit\n"
 ";; in (scheme process-context); plain Scheme on %primitives, so both engines use it.\n"
@@ -1038,7 +1129,7 @@ static const char *const e21[] = {
 "                      (%set-winders! w))))))))))\n"
 "",
 0};
-static const char *const e22[] = {
+static const char *const e26[] = {
 "/* prims.def -- the table of %primitives (DESIGN.md \302\2472, \302\2476). X-macro: define PRIM, include.\n"
 " *\n"
 " *   PRIM(NAME, WHO, CFN, ARITY, ARGS, RES, FLAGS)\n"
@@ -1216,8 +1307,18 @@ static const char *const e22[] = {
 "PRIM(\"%ceiling\", \"ceiling\", rt_ceiling, 1, \"n\", 'n', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%round\", \"round\", rt_round, 1, \"n\", 'n', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%truncate\", \"truncate\", rt_truncate, 1, \"n\", 'n', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%exp\", \"exp\", rt_exp, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%log\", \"log\", rt_log, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%sin\", \"sin\", rt_sin, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%cos\", \"cos\", rt_cos, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%tan\", \"tan\", rt_tan, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%asin\", \"asin\", rt_asin, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%acos\", \"acos\", rt_acos, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%atan\", \"atan\", rt_atan, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%atan2\", \"atan\", rt_atan2, 2, \"nn\", 'd', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%sqrt\", \"sqrt\", rt_sqrt, 1, \"n\", 'd', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%number->string\", \"number->string\", rt_number_to_string, 2, \"nf\", 's', PF_ALLOC | PF_FAIL)\n"
-"PRIM(\"%string->number\", \"string->number\", rt_string_to_number, 2, \"sf\", 'a', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%string->number\", \"string->number\", rt_string_to_number, 2, \"sf\", 'a', PF_ALLOC | PF_FAIL)\n",
 "\n"
 "/* ports and I/O */\n"
 "PRIM(\"%stdin-port\", \"current-input-port\", rt_stdin_port, 0, \"\", 'a', PF_PURE)\n"
@@ -1226,7 +1327,7 @@ static const char *const e22[] = {
 "PRIM(\"%port?\", \"port?\", rt_port_p, 1, \"a\", 'b', PF_PURE)\n"
 "PRIM(\"%input-port?\", \"input-port?\", rt_input_port_p, 1, \"a\", 'b', PF_PURE)\n"
 "PRIM(\"%output-port?\", \"output-port?\", rt_output_port_p, 1, \"a\", 'b', PF_PURE)\n"
-"PRIM(\"%textual-port?\", \"textual-port?\", rt_textual_port_p, 1, \"a\", 'b', PF_PURE)\n",
+"PRIM(\"%textual-port?\", \"textual-port?\", rt_textual_port_p, 1, \"a\", 'b', PF_PURE)\n"
 "PRIM(\"%binary-port?\", \"binary-port?\", rt_binary_port_p, 1, \"a\", 'b', PF_PURE)\n"
 "PRIM(\"%input-port-open?\", \"input-port-open?\", rt_input_port_open_p, 1, \"a\", 'b', PF_FAIL)\n"
 "PRIM(\"%output-port-open?\", \"output-port-open?\", rt_output_port_open_p, 1, \"a\", 'b', PF_FAIL)\n"
@@ -1238,6 +1339,10 @@ static const char *const e22[] = {
 "PRIM(\"%get-output-bytevector\", \"get-output-bytevector\", rt_get_output_bytevector, 1, \"a\", 'u', PF_ALLOC | PF_FAIL)\n"
 "PRIM(\"%open-input-file\", \"open-input-file\", rt_open_input_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%open-output-file\", \"open-output-file\", rt_open_output_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
+"PRIM(\"%open-binary-input-file\", \"open-binary-input-file\", rt_open_binary_input_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
+"PRIM(\"%open-binary-output-file\", \"open-binary-output-file\", rt_open_binary_output_file, 1, \"s\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
+"PRIM(\"%file-exists?\", \"file-exists?\", rt_file_exists_p, 1, \"s\", 'b', PF_FAIL | PF_EFFECT)\n"
+"PRIM(\"%delete-file\", \"delete-file\", rt_delete_file, 1, \"s\", 'a', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%close-port\", \"close-port\", rt_close_port, 1, \"a\", 'a', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%read-char\", \"read-char\", rt_read_char, 1, \"a\", 'a', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%peek-char\", \"peek-char\", rt_peek_char, 1, \"a\", 'a', PF_FAIL | PF_EFFECT)\n"
@@ -1248,7 +1353,7 @@ static const char *const e22[] = {
 "PRIM(\"%peek-u8\", \"peek-u8\", rt_peek_u8, 1, \"a\", 'a', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%u8-ready?\", \"u8-ready?\", rt_u8_ready_p, 1, \"a\", 'b', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%read-bytevector!\", \"read-bytevector!\", rt_read_bytevector_x, 4, \"uaff\", 'a', PF_FAIL | PF_EFFECT)\n"
-"PRIM(\"%read\", \"read\", rt_read, 1, \"a\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n"
+"PRIM(\"%read\", \"read\", rt_read, 1, \"a\", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT)\n",
 "PRIM(\"%write-char\", \"write-char\", rt_write_char, 2, \"ca\", 'a', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%write-string\", \"write-string\", rt_write_string, 2, \"sa\", 'a', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%write-u8\", \"write-u8\", rt_write_u8, 2, \"fa\", 'a', PF_FAIL | PF_EFFECT)\n"
@@ -1260,11 +1365,18 @@ static const char *const e22[] = {
 "PRIM(\"%newline\", \"newline\", rt_newline, 1, \"a\", 'a', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%flush-output-port\", \"flush-output-port\", rt_flush_output_port, 1, \"a\", 'a', PF_FAIL | PF_EFFECT)\n"
 "PRIM(\"%eof-object\", \"eof-object\", rt_eof_object, 0, \"\", 'a', PF_PURE)\n"
-"PRIM(\"%eof-object?\", \"eof-object?\", rt_eof_object_p, 1, \"a\", 'b', PF_PURE)\n",
+"PRIM(\"%eof-object?\", \"eof-object?\", rt_eof_object_p, 1, \"a\", 'b', PF_PURE)\n"
 "PRIM(\"%exit\", \"exit\", rt_exit_o, 1, \"a\", 'a', PF_EFFECT)\n"
+"\n"
+"/* system interface: (scheme process-context), (scheme time) */\n"
+"PRIM(\"%command-line\", \"command-line\", rt_command_line, 0, \"\", 'l', PF_ALLOC)\n"
+"PRIM(\"%get-environment-variable\", \"get-environment-variable\", rt_get_environment_variable, 1, \"s\", 'a', PF_ALLOC | PF_FAIL)\n"
+"PRIM(\"%get-environment-variables\", \"get-environment-variables\", rt_get_environment_variables, 0, \"\", 'l', PF_ALLOC)\n"
+"PRIM(\"%current-second\", \"current-second\", rt_current_second, 0, \"\", 'd', PF_ALLOC | PF_EFFECT)\n"
+"PRIM(\"%current-jiffy\", \"current-jiffy\", rt_current_jiffy, 0, \"\", 'f', PF_EFFECT)\n"
 "",
 0};
-static const char *const e23[] = {
+static const char *const e27[] = {
 "/* rt.h -- Shikra runtime: value representation and runtime API (spec \302\2476, DESIGN.md \302\2473-\302\2475).\n"
 " *\n"
 " * Two lives (DESIGN.md \302\2473):\n"
@@ -1471,6 +1583,18 @@ static const char *const e23[] = {
 "RT_FN int rt_sys_close(int fd);\n"
 "RT_FN int rt_sys_ready(int fd);                      /* 1 if a read would not block */\n"
 "RT_FN double rt_sys_pow(double x, double y);         /* libm pow: (scheme base) expt */\n"
+"RT_FN double rt_sys_exp(double x);                   /* libm, (scheme inexact) */\n"
+"RT_FN double rt_sys_log(double x);\n"
+"RT_FN double rt_sys_sin(double x);\n"
+"RT_FN double rt_sys_cos(double x);\n"
+"RT_FN double rt_sys_tan(double x);\n"
+"RT_FN double rt_sys_asin(double x);\n"
+"RT_FN double rt_sys_acos(double x);\n"
+"RT_FN double rt_sys_atan2(double y, double x);\n"
+"RT_FN double rt_sys_sqrt(double x);\n"
+"RT_FN int rt_sys_exists(const char *path);           /* 1 if the file exists */\n"
+"RT_FN int rt_sys_remove(const char *path);           /* 0 on success */\n"
+"RT_FN char **rt_sys_environ(void);                   /* NULL-terminated \"NAME=value\" strings */\n"
 "RT_FN RT_NORETURN void rt_sys_exit(int code);\n"
 "RT_FN void *rt_sys_mem(size_t n);                    /* zeroed memory from the OS; NULL on failure */\n"
 "RT_FN void rt_sys_free(void *p, size_t n);           /* return rt_sys_mem(n) memory (collector only) */\n"
@@ -1490,7 +1614,7 @@ static const char *const e23[] = {
 "RT_FN int64_t rt_sys_clock_ns(int monotonic);        /* realtime or monotonic nanoseconds */\n"
 "RT_FN void rt_memcpy(void *d, const void *s, size_t n);\n"
 "RT_FN void rt_memmove(void *d, const void *s, size_t n);\n"
-"RT_FN void rt_memset(void *d, int c, size_t n);\n"
+"RT_FN void rt_memset(void *d, int c, size_t n);\n",
 "RT_FN int rt_memcmp(const void *a, const void *b, size_t n);\n"
 "RT_FN size_t rt_strlen(const char *s);\n"
 "\n"
@@ -1499,7 +1623,7 @@ static const char *const e23[] = {
 " * object start), headered objects elsewhere. The inline fast paths are add, compare, store;\n"
 " * rt_alloc_slow refills the stream from free lines and may collect first. Collection\n"
 " * happens only inside allocation (or rt_gc_collect), so callers must initialise every field\n"
-" * of a fresh object before the next allocation. Roots: the C stack and registers\n",
+" * of a fresh object before the next allocation. Roots: the C stack and registers\n"
 " * (conservative: any word pointing at or into an object), registered ranges, immortal\n"
 " * objects. A program that never allocates never references rt_alloc_slow, so the\n"
 " * collector is dropped by dead-code elimination (spec \302\2479.1). */\n"
@@ -1538,7 +1662,7 @@ static const char *const e23[] = {
 "/* Literal pairs (spec \302\2473.2): the generated code puts every quoted pair in one static const\n"
 " * array, so set-car!/set-cdr! detect a literal with one subtraction and one comparison.\n"
 " * RT_NLITPAIRS and RT_NSTATIC_SYMS are emitted before this header (program mode). */\n"
-"#if defined(SHIKRA_PROGRAM) && RT_NLITPAIRS > 0\n"
+"#if defined(SHIKRA_PROGRAM) && RT_NLITPAIRS > 0\n",
 "static const rt_pair rt_lit_pairs[RT_NLITPAIRS];\n"
 "#define RT_LITPAIR(x) ((uintptr_t)((const char *)(x) - 1 - (const char *)rt_lit_pairs) < sizeof rt_lit_pairs)\n"
 "#elif !defined(SHIKRA_PROGRAM)\n"
@@ -1552,9 +1676,14 @@ static const char *const e23[] = {
 "static const obj rt_static_syms[RT_NSTATIC_SYMS]; /* entered into the symbol table when it is created */\n"
 "#endif\n"
 "\n"
-"/* ---- initialisation and exit (rt_core.c) ---- */\n",
+"/* ---- initialisation and exit (rt_core.c) ---- */\n"
 "RT_FN void rt_init(int argc, char **argv, void *stack_base);\n"
 "RT_FN RT_NORETURN void rt_exit(int code); /* flushes the standard ports */\n"
+"RT_FN obj rt_command_line(void);\n"
+"RT_FN obj rt_get_environment_variable(obj name);\n"
+"RT_FN obj rt_get_environment_variables(void);\n"
+"RT_FN obj rt_current_second(void);  /* POSIX time in seconds, a flonum */\n"
+"RT_FN obj rt_current_jiffy(void);   /* monotonic nanoseconds */\n"
 "RT_EXTVAR int rt_argc;\n"
 "RT_EXTVAR char **rt_argv;\n"
 "#ifdef SHIKRA_PROGRAM\n"
@@ -1597,7 +1726,7 @@ static const char *const e23[] = {
 "RT_FN obj rt_make_vector(obj k, obj fill);\n"
 "RT_FN obj rt_vector_n(intptr_t n, obj fill); /* unchecked n */\n"
 "RT_FN obj rt_list_to_vector(obj l);\n"
-"RT_FN obj rt_vector_to_list(obj v, obj start, obj end);\n"
+"RT_FN obj rt_vector_to_list(obj v, obj start, obj end);\n",
 "RT_FN intptr_t rt_check_range(obj start, obj end, intptr_t len, intptr_t *e, const char *who); /* -> start */\n"
 "RT_FN obj rt_make_bytevector(obj k, obj fill);\n"
 "RT_FN obj rt_bytevector_copy(obj bv, obj start, obj end);\n"
@@ -1614,7 +1743,7 @@ static const char *const e23[] = {
 "RT_FN obj rt_make_error_object(obj kind, obj message, obj irritants);\n"
 "RT_FN obj rt_error_object_p(obj x);\n"
 "RT_FN obj rt_error_object_message(obj x);\n"
-"RT_FN obj rt_error_object_irritants(obj x);\n",
+"RT_FN obj rt_error_object_irritants(obj x);\n"
 "RT_FN obj rt_file_error_p(obj x);\n"
 "RT_FN obj rt_read_error_p(obj x);\n"
 "RT_FN obj rt_make_values(obj list);\n"
@@ -1654,7 +1783,7 @@ static const char *const e23[] = {
 "RT_FN obj rt_append2(obj a, obj b);\n"
 "RT_FN obj rt_uncaught_o(obj e);\n"
 "/* Multiple values spread into a known receiver (normalize.c, call-with-values fallback). */\n"
-"RT_FN obj rt_values_check(obj v, obj nreq, obj rest); /* raises unless v has nreq (or more) values */\n"
+"RT_FN obj rt_values_check(obj v, obj nreq, obj rest); /* raises unless v has nreq (or more) values */\n",
 "RT_FN obj rt_values_ref(obj v, obj i);\n"
 "RT_FN obj rt_values_tail(obj v, obj i);               /* list of the values from i on */\n"
 "\n"
@@ -1669,7 +1798,7 @@ static const char *const e23[] = {
 "RT_FN obj rt_winders_set(obj w);\n"
 "RT_FN obj rt_handlers_get(void);\n"
 "RT_FN obj rt_handlers_set(obj h);\n"
-"RT_FN obj rt_parameter_binding(obj cell); /* innermost frame for cell, else cell; cdr = value */\n",
+"RT_FN obj rt_parameter_binding(obj cell); /* innermost frame for cell, else cell; cdr = value */\n"
 "RT_FN obj rt_continuation_live_p(obj k);  /* #f only for a dead tier-2 escape */\n"
 "#ifdef SHIKRA_PROGRAM\n"
 "/* The compiled engine's %call/cc (tier 2): calls f with an escape procedure that restores\n"
@@ -1717,7 +1846,7 @@ static const char *const e23[] = {
 "RT_FN obj rt_quotient(obj a, obj b);\n"
 "RT_FN obj rt_remainder(obj a, obj b);\n"
 "RT_FN obj rt_modulo(obj a, obj b);\n"
-"RT_FN obj rt_floor_quotient(obj a, obj b);\n"
+"RT_FN obj rt_floor_quotient(obj a, obj b);\n",
 "RT_FN obj rt_neg(obj x);\n"
 "RT_FN obj rt_abs(obj x);\n"
 "RT_FN obj rt_expt(obj a, obj b);\n"
@@ -1731,6 +1860,16 @@ static const char *const e23[] = {
 "RT_FN obj rt_nan_p(obj x);\n"
 "RT_FN obj rt_infinite_p(obj x);\n"
 "RT_FN obj rt_finite_p(obj x);\n"
+"RT_FN obj rt_exp(obj x);\n"
+"RT_FN obj rt_log(obj x);\n"
+"RT_FN obj rt_sin(obj x);\n"
+"RT_FN obj rt_cos(obj x);\n"
+"RT_FN obj rt_tan(obj x);\n"
+"RT_FN obj rt_asin(obj x);\n"
+"RT_FN obj rt_acos(obj x);\n"
+"RT_FN obj rt_atan(obj x);\n"
+"RT_FN obj rt_atan2(obj y, obj x);\n"
+"RT_FN obj rt_sqrt(obj x);\n"
 "RT_FN obj rt_number_to_string(obj n, obj radix);\n"
 "RT_FN obj rt_string_to_number(obj s, obj radix);\n"
 "/* Parse number syntax (R7RS 7.1.1, Shikra subset). Returns 0 and sets *out on success,\n"
@@ -1738,7 +1877,7 @@ static const char *const e23[] = {
 "RT_FN int rt_parse_number(const char *s, size_t n, int radix, obj *out);\n"
 "RT_FN size_t rt_format_double(double d, char *out); /* >= 32 bytes; no NUL */\n"
 "\n"
-"/* Generic arithmetic: inline fixnum fast path, out-of-line general case. */\n",
+"/* Generic arithmetic: inline fixnum fast path, out-of-line general case. */\n"
 "RT_INLINE obj rt_add(obj a, obj b) {\n"
 "    intptr_t r;\n"
 "    if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) && !rt_add_ovf((intptr_t)a, (intptr_t)b, &r)) return RT_O(r);\n"
@@ -1775,10 +1914,14 @@ static const char *const e23[] = {
 "RT_FN obj rt_get_output_bytevector(obj port);\n"
 "RT_FN obj rt_open_input_file(obj path);  /* raises a file error */\n"
 "RT_FN obj rt_open_output_file(obj path);\n"
+"RT_FN obj rt_open_binary_input_file(obj path);\n"
+"RT_FN obj rt_open_binary_output_file(obj path);\n"
+"RT_FN obj rt_file_exists_p(obj path);\n"
+"RT_FN obj rt_delete_file(obj path);\n"
 "RT_FN obj rt_close_port(obj port);\n"
 "RT_FN int rt_port_getc(obj port);  /* next code point or -1; tracks line/col */\n"
 "RT_FN int rt_port_peekc(obj port);\n"
-"RT_FN void rt_port_write(obj port, const char *s, size_t n);\n"
+"RT_FN void rt_port_write(obj port, const char *s, size_t n);\n",
 "RT_FN void rt_port_putc(obj port, int cp);\n"
 "RT_FN void rt_port_puts(obj port, const char *s);\n"
 "RT_FN void rt_flush(obj port);\n"
@@ -1807,7 +1950,7 @@ static const char *const e23[] = {
 "RT_FN obj rt_write_char(obj c, obj port);\n"
 "RT_FN obj rt_write_string(obj s, obj port);\n"
 "RT_FN obj rt_write(obj x, obj port);\n"
-"RT_FN obj rt_write_shared(obj x, obj port);\n",
+"RT_FN obj rt_write_shared(obj x, obj port);\n"
 "RT_FN obj rt_write_simple(obj x, obj port);\n"
 "RT_FN obj rt_display(obj x, obj port);\n"
 "RT_FN obj rt_newline(obj port);\n"
@@ -1846,7 +1989,7 @@ static const char *const e23[] = {
 "}\n"
 "RT_INLINE obj rt_pair_p(obj x) { return RT_BOOL(rt_is_pair(x)); }\n"
 "RT_INLINE obj rt_null_p(obj x) { return RT_BOOL(x == RT_NIL); }\n"
-"RT_INLINE obj rt_eq_p(obj a, obj b) { return RT_BOOL(a == b); }\n"
+"RT_INLINE obj rt_eq_p(obj a, obj b) { return RT_BOOL(a == b); }\n",
 "RT_INLINE obj rt_boolean_p(obj x) { return RT_BOOL(x == RT_TRUE || x == RT_FALSE); }\n"
 "RT_INLINE obj rt_symbol_p(obj x) { return RT_BOOL(rt_is_symbol(x)); }\n"
 "RT_INLINE obj rt_procedure_p(obj x) { return RT_BOOL(rt_is_proc(x)); }\n"
@@ -1863,7 +2006,7 @@ static const char *const e23[] = {
 "}\n"
 "RT_INLINE obj rt_vector_set(obj v, obj k, obj x) {\n"
 "    RT_CHECK(rt_is_vector(v) && !(RT_HFLAGS(v) & RT_F_RO), \"vector-set!\", \"mutable vector\", v);\n"
-"    if (RT_UNLIKELY(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v))) rt_range_error(\"vector-set!\", k);\n",
+"    if (RT_UNLIKELY(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v))) rt_range_error(\"vector-set!\", k);\n"
 "    RT_VEC(v)[RT_FIXVAL(k)] = x;\n"
 "    return RT_UNSPEC;\n"
 "}\n"
@@ -1888,7 +2031,7 @@ static const char *const e23[] = {
 "    return RT_VEC(r)[1 + RT_FIXVAL(k)]; /* k is a compiler-generated constant */\n"
 "}\n"
 "RT_INLINE obj rt_record_set(obj r, obj rtd, obj k, obj v) {\n"
-"    if (RT_UNLIKELY(!rt_is_type(r, RT_T_RECORD) || RT_VEC(r)[0] != rtd)) rt_record_error(r, rtd);\n"
+"    if (RT_UNLIKELY(!rt_is_type(r, RT_T_RECORD) || RT_VEC(r)[0] != rtd)) rt_record_error(r, rtd);\n",
 "    RT_VEC(r)[1 + RT_FIXVAL(k)] = v;\n"
 "    return RT_UNSPEC;\n"
 "}\n"
@@ -1907,7 +2050,7 @@ static const char *const e23[] = {
 "#endif /* SHIKRA_RT_H */\n"
 "",
 0};
-static const char *const e24[] = {
+static const char *const e28[] = {
 "/* rt_core.c -- initialisation, the error path, and the core data objects\n"
 " * (pairs, symbols, vectors, bytevectors, boxes, records, error objects, values,\n"
 " * equivalence). All primitives are leaves: they never call Scheme code.\n"
@@ -1955,9 +2098,36 @@ static const char *const e24[] = {
 "    rt_exit(code == RT_FALSE ? 1 : rt_is_fix(code) ? (int)RT_FIXVAL(code) : 0);\n"
 "}\n"
 "\n"
+"/* ---- system interface: (scheme process-context), (scheme time) ---- */\n"
+"RT_FN obj rt_command_line(void) {\n"
+"    obj l = RT_NIL;\n"
+"    int i;\n"
+"    for (i = rt_argc - 1; i >= 0; i--) l = rt_cons(rt_cstring(rt_argv[i]), l);\n"
+"    return l;\n"
+"}\n"
+"RT_FN obj rt_get_environment_variable(obj name) {\n"
+"    const char *v;\n"
+"    RT_CHECK(rt_is_string(name), \"get-environment-variable\", \"string\", name);\n"
+"    v = rt_sys_getenv(RT_STR(name)->buf);\n"
+"    return v ? rt_cstring(v) : RT_FALSE;\n"
+"}\n"
+"RT_FN obj rt_get_environment_variables(void) {\n"
+"    char **e = rt_sys_environ();\n"
+"    obj l = RT_NIL, k;\n"
+"    size_t n;\n"
+"    for (; e && *e; e++) {\n"
+"        for (n = 0; (*e)[n] && (*e)[n] != '='; n++) {}\n"
+"        k = rt_make_string_n(*e, n);\n"
+"        l = rt_cons(rt_cons(k, rt_cstring((*e)[n] ? *e + n + 1 : \"\")), l);\n"
+"    }\n"
+"    return rt_reverse(l);\n"
+"}\n"
+"RT_FN obj rt_current_second(void) { return rt_make_flonum((double)rt_sys_clock_ns(0) / 1e9); }\n"
+"RT_FN obj rt_current_jiffy(void) { return RT_FIX(rt_sys_clock_ns(1)); } /* nanoseconds */\n"
+"\n"
 "/* ---- error path ---- */\n"
 "RT_FN obj rt_make_error(int kind, obj message, obj irritants, obj loc) {\n"
-"    rt_vector *e = (rt_vector *)rt_alloc(RT_HDR(RT_T_ERROR, kind, 3), 4 * sizeof(obj));\n"
+"    rt_vector *e = (rt_vector *)rt_alloc(RT_HDR(RT_T_ERROR, kind, 3), 4 * sizeof(obj));\n",
 "    e->v[0] = message;\n"
 "    e->v[1] = irritants;\n"
 "    e->v[2] = loc;\n"
@@ -1996,7 +2166,7 @@ static const char *const e24[] = {
 "    rt_port_putc(p, '\\n');\n"
 "}\n"
 "\n"
-"RT_FN void rt_error(const char *who, const char *msg, obj irritants) {\n",
+"RT_FN void rt_error(const char *who, const char *msg, obj irritants) {\n"
 "    obj m = rt_open_output_string();\n"
 "    if (who) { rt_port_puts(m, who); rt_port_puts(m, \": \"); }\n"
 "    rt_port_puts(m, msg);\n"
@@ -2055,7 +2225,7 @@ static const char *const e24[] = {
 "    return 0;\n"
 "}\n"
 "/* ---- address tables: entries [a, b, value] keyed by one or two object addresses, open\n"
-" * addressing over a raw heap buffer (write's datum labels, equal? on cycles). The buffer is\n"
+" * addressing over a raw heap buffer (write's datum labels, equal? on cycles). The buffer is\n",
 " * reached from the caller's C stack, so it survives a collection; the keyed objects stay\n"
 " * reachable from the caller's arguments, and the collector never moves objects. ---- */\n"
 "RT_FN intptr_t *rt_addrtab_get(rt_addrtab *t, obj a, obj b, int insert) {\n"
@@ -2074,7 +2244,7 @@ static const char *const e24[] = {
 "    h = (RT_W(a) * 0x9E3779B97F4A7C15u) ^ (RT_W(b) * 0xC2B2AE3D27D4EB4Fu);\n"
 "    for (i = (intptr_t)(h >> 24) & (t->cap - 1);; i = (i + 1) & (t->cap - 1)) {\n"
 "        e = t->e + 3 * i;\n"
-"        if (e[0] == RT_W(a) && e[1] == RT_W(b)) return (intptr_t *)&e[2];\n",
+"        if (e[0] == RT_W(a) && e[1] == RT_W(b)) return (intptr_t *)&e[2];\n"
 "        if (!e[0]) {\n"
 "            if (!insert) return 0;\n"
 "            e[0] = RT_W(a);\n"
@@ -2120,7 +2290,7 @@ static const char *const e24[] = {
 "            int r;\n"
 "            if (n != RT_HLEN(b)) return 0;\n"
 "            if (n == 0) return 1;\n"
-"            for (i = 0; i < n - 1; i++) if ((r = core_equal(RT_VEC(a)[i], RT_VEC(b)[i], budget, seen)) != 1) return r;\n"
+"            for (i = 0; i < n - 1; i++) if ((r = core_equal(RT_VEC(a)[i], RT_VEC(b)[i], budget, seen)) != 1) return r;\n",
 "            a = RT_VEC(a)[n - 1]; b = RT_VEC(b)[n - 1];\n"
 "            continue;\n"
 "        }\n"
@@ -2151,7 +2321,7 @@ static const char *const e24[] = {
 "static void core_symadd(obj sym);\n"
 "static obj *core_symslot(const char *s, size_t n) {\n"
 "    intptr_t mask, i;\n"
-"    if (!core_symtab) { /* first use: create the table and enter the program's static symbols */\n",
+"    if (!core_symtab) { /* first use: create the table and enter the program's static symbols */\n"
 "        core_symtab = rt_vector_n(256, RT_FALSE);\n"
 "#if defined(SHIKRA_PROGRAM) && RT_NSTATIC_SYMS > 0\n"
 "        for (mask = 0; mask < RT_NSTATIC_SYMS; mask++) core_symadd(rt_static_syms[mask]);\n"
@@ -2202,7 +2372,7 @@ static const char *const e24[] = {
 "\n"
 "/* ---- vectors, bytevectors, boxes ---- */\n"
 "RT_FN obj rt_vector_n(intptr_t n, obj fill) {\n"
-"    rt_vector *v = (rt_vector *)rt_alloc(RT_HDR(RT_T_VECTOR, 0, n), sizeof(obj) * (size_t)(n + 1));\n"
+"    rt_vector *v = (rt_vector *)rt_alloc(RT_HDR(RT_T_VECTOR, 0, n), sizeof(obj) * (size_t)(n + 1));\n",
 "    intptr_t i;\n"
 "    for (i = 0; i < n; i++) v->v[i] = fill;\n"
 "    return RT_TAGPTR(v);\n"
@@ -2223,7 +2393,7 @@ static const char *const e24[] = {
 "    intptr_t s = rt_is_fix(start) ? RT_FIXVAL(start) : -1;\n"
 "    *e = end == RT_DEFAULT ? len : rt_is_fix(end) ? RT_FIXVAL(end) : -1;\n"
 "    if (start == RT_DEFAULT) s = 0;\n"
-"    if (s < 0 || s > len) rt_range_error(who, start);\n",
+"    if (s < 0 || s > len) rt_range_error(who, start);\n"
 "    if (*e < s || *e > len) rt_range_error(who, end);\n"
 "    return s;\n"
 "}\n"
@@ -2271,7 +2441,7 @@ static const char *const e24[] = {
 "    return RT_TAGPTR(b);\n"
 "}\n"
 "\n"
-"/* ---- promises: [state], state = (done? . value) or (#f . thunk) (R7RS 4.2.5) ---- */\n"
+"/* ---- promises: [state], state = (done? . value) or (#f . thunk) (R7RS 4.2.5) ---- */\n",
 "RT_FN obj rt_make_promise(obj done, obj value) {\n"
 "    obj st = rt_cons(done, value);\n"
 "    rt_vector *p = (rt_vector *)rt_alloc(RT_HDR(RT_T_PROMISE, 0, 1), 2 * sizeof(obj));\n"
@@ -2293,7 +2463,7 @@ static const char *const e24[] = {
 "    RT_CHECK(rt_is_vector(fields), \"make-record-type\", \"vector\", fields);\n"
 "    t = (rt_vector *)rt_alloc(RT_HDR(RT_T_RTD, 0, 2), 3 * sizeof(obj));\n"
 "    t->v[0] = name;\n"
-"    t->v[1] = fields;\n",
+"    t->v[1] = fields;\n"
 "    return RT_TAGPTR(t);\n"
 "}\n"
 "RT_FN obj rt_make_record(obj rtd) {\n"
@@ -2339,7 +2509,7 @@ static const char *const e24[] = {
 "    return RT_TAGPTR(v);\n"
 "}\n"
 "RT_FN obj rt_make_values(obj l) {\n"
-"    obj v = rt_list_to_vector(l);\n"
+"    obj v = rt_list_to_vector(l);\n",
 "    RT_HDRREF(v) = (RT_HDRREF(v) & ~(uintptr_t)0xFF) | RT_T_VALUES;\n"
 "    return v;\n"
 "}\n"
@@ -2363,7 +2533,7 @@ static const char *const e24[] = {
 "    if (n > core_argcap) { /* the old buffer stays a root range: clear it */\n"
 "        obj *b = (obj *)rt_sys_mem(sizeof(obj) * (size_t)(2 * n));\n"
 "        if (!b) rt_error(0, \"out of memory\", RT_NIL);\n"
-"        rt_gc_add_roots(b, b + 2 * n);\n",
+"        rt_gc_add_roots(b, b + 2 * n);\n"
 "        rt_memset(rt_args, 0, sizeof(obj) * (size_t)core_argcap);\n"
 "        rt_args = b;\n"
 "        core_argcap = 2 * n;\n"
@@ -2413,7 +2583,7 @@ static const char *const e24[] = {
 "static intptr_t core_nvalues(obj v) { return rt_is_type(v, RT_T_VALUES) ? RT_HLEN(v) : 1; }\n"
 "RT_FN obj rt_values_check(obj v, obj nreq, obj rest) {\n"
 "    intptr_t n = core_nvalues(v);\n"
-"    if (rest == RT_FALSE ? n != RT_FIXVAL(nreq) : n < RT_FIXVAL(nreq))\n"
+"    if (rest == RT_FALSE ? n != RT_FIXVAL(nreq) : n < RT_FIXVAL(nreq))\n",
 "        rt_error(\"call-with-values\", \"wrong number of values for the receiver\", rt_cons(RT_FIX(n), RT_NIL));\n"
 "    return RT_UNSPEC;\n"
 "}\n"
@@ -2432,7 +2602,7 @@ static const char *const e24[] = {
 "RT_FN obj rt_handlers_set(obj h) { rt_handlers = h; return RT_UNSPEC; }\n"
 "RT_FN obj rt_parameter_binding(obj cell) {\n"
 "    obj w;\n"
-"    RT_CHECK(rt_is_pair(cell), \"parameter\", \"parameter cell\", cell);\n",
+"    RT_CHECK(rt_is_pair(cell), \"parameter\", \"parameter cell\", cell);\n"
 "    for (w = rt_winders; rt_is_pair(w); w = RT_CDR(w))\n"
 "        if (RT_CAR(RT_CAR(w)) == cell) return RT_CAR(w);\n"
 "    return cell;\n"
@@ -2482,14 +2652,14 @@ static const char *const e24[] = {
 "#endif\n"
 "RT_FN obj rt_continuation_live_p(obj k) {\n"
 "#ifdef SHIKRA_PROGRAM\n"
-"    if (rt_is_proc(k) && RT_PROC(k)->code == core_cont_code) return RT_BOOL(RT_PROC(k)->free[0] != RT_FALSE);\n"
+"    if (rt_is_proc(k) && RT_PROC(k)->code == core_cont_code) return RT_BOOL(RT_PROC(k)->free[0] != RT_FALSE);\n",
 "#endif\n"
 "    (void)k;\n"
 "    return RT_TRUE;\n"
 "}\n"
 "",
 0};
-static const char *const e25[] = {
+static const char *const e29[] = {
 "/* rt_gc.c -- allocation and collection (spec \302\2477, DESIGN.md \302\2475 and \"M2 as built\").\n"
 " * One interface (the rt_alloc / rt_cons fast paths in rt.h, rt_alloc_slow, roots, immortal\n"
 " * mode, rt_gc_collect), two collectors chosen by a config macro:\n"
@@ -3015,7 +3185,7 @@ static const char *const e25[] = {
 "#endif\n"
 "",
 0};
-static const char *const e26[] = {
+static const char *const e30[] = {
 "/* rt_io.c -- ports and the printer (write/display).\n"
 " * A port is a fixed-field object (rt_port in rt.h) over either an OS descriptor (with a\n"
 " * byte buffer) or an in-memory buffer (RT_PF_STRING: string and bytevector ports).\n"
@@ -3087,20 +3257,33 @@ static const char *const e26[] = {
 "    rt_memcpy(RT_PTR(bv, rt_bytevector)->b, RT_PORT(port)->buf, (size_t)RT_PORT(port)->len);\n"
 "    return bv;\n"
 "}\n"
-"static obj io_open_file(obj path, int mode, const char *who) {\n"
+"/* (scheme file): every failure raises a file error (file-error?) \"who: cannot ... file\" path. */\n"
+"static RT_NORETURN void io_file_error(const char *who, const char *msg, obj path) {\n"
+"    obj m = rt_open_output_string();\n"
+"    rt_port_puts(m, who);\n"
+"    rt_port_puts(m, msg);\n"
+"    rt_raise(rt_make_error(RT_ERR_FILE, rt_get_output_string(m), rt_cons(path, RT_NIL), RT_FALSE));\n"
+"}\n"
+"static obj io_open_file(obj path, int mode, int binary, const char *who) {\n"
 "    int fd;\n"
 "    RT_CHECK(rt_is_string(path), who, \"string\", path);\n"
 "    fd = rt_sys_open(RT_STR(path)->buf, mode);\n"
-"    if (fd < 0) {\n"
-"        obj m = rt_open_output_string();\n"
-"        rt_port_puts(m, who);\n"
-"        rt_port_puts(m, \": cannot open file\");\n"
-"        rt_raise(rt_make_error(RT_ERR_FILE, rt_get_output_string(m), rt_cons(path, RT_NIL), RT_FALSE));\n"
-"    }\n"
-"    return rt_make_fd_port(fd, mode == RT_O_READ ? RT_PF_IN : RT_PF_OUT, path);\n"
+"    if (fd < 0) io_file_error(who, \": cannot open file\", path);\n"
+"    return rt_make_fd_port(fd, (mode == RT_O_READ ? RT_PF_IN : RT_PF_OUT) | binary, path);\n"
 "}\n"
-"RT_FN obj rt_open_input_file(obj path) { return io_open_file(path, RT_O_READ, \"open-input-file\"); }\n"
-"RT_FN obj rt_open_output_file(obj path) { return io_open_file(path, RT_O_WRITE, \"open-output-file\"); }\n"
+"RT_FN obj rt_open_input_file(obj path) { return io_open_file(path, RT_O_READ, 0, \"open-input-file\"); }\n"
+"RT_FN obj rt_open_output_file(obj path) { return io_open_file(path, RT_O_WRITE, 0, \"open-output-file\"); }\n"
+"RT_FN obj rt_open_binary_input_file(obj path) { return io_open_file(path, RT_O_READ, RT_PF_BINARY, \"open-binary-input-file\"); }\n"
+"RT_FN obj rt_open_binary_output_file(obj path) { return io_open_file(path, RT_O_WRITE, RT_PF_BINARY, \"open-binary-output-file\"); }\n"
+"RT_FN obj rt_file_exists_p(obj path) {\n"
+"    RT_CHECK(rt_is_string(path), \"file-exists?\", \"string\", path);\n"
+"    return RT_BOOL(rt_sys_exists(RT_STR(path)->buf));\n"
+"}\n"
+"RT_FN obj rt_delete_file(obj path) {\n"
+"    RT_CHECK(rt_is_string(path), \"delete-file\", \"string\", path);\n"
+"    if (rt_sys_remove(RT_STR(path)->buf) != 0) io_file_error(\"delete-file\", \": cannot delete file\", path);\n"
+"    return RT_UNSPEC;\n"
+"}\n"
 "\n"
 "static void io_flush(rt_port *p) {\n"
 "    if (p->fd >= 0 && p->len > 0) rt_sys_write((int)p->fd, p->buf, (size_t)p->len);\n"
@@ -3124,7 +3307,7 @@ static const char *const e26[] = {
 "    if (RT_HFLAGS(port) & RT_PF_OUT) io_flush(p);\n"
 "    if (p->fd > 2) rt_sys_close((int)p->fd);\n"
 "    RT_SETFLAGS(port, RT_HFLAGS(port) & ~RT_PF_OPEN);\n"
-"    for (l = &rt_ports; rt_is_pair(*l); l = &RT_CDR(*l))\n"
+"    for (l = &rt_ports; rt_is_pair(*l); l = &RT_CDR(*l))\n",
 "        if (RT_CAR(*l) == port) { *l = RT_CDR(*l); break; }\n"
 "    return RT_UNSPEC;\n"
 "}\n"
@@ -3139,7 +3322,7 @@ static const char *const e26[] = {
 "    if (!(RT_HFLAGS(port) & RT_PF_OPEN)) rt_error(who, \"port is closed\", rt_cons(port, RT_NIL));\n"
 "    return RT_PORT(port);\n"
 "}\n"
-"RT_FN obj rt_input_port_p(obj x) { return RT_BOOL(rt_is_port(x) && (RT_HFLAGS(x) & RT_PF_IN)); }\n",
+"RT_FN obj rt_input_port_p(obj x) { return RT_BOOL(rt_is_port(x) && (RT_HFLAGS(x) & RT_PF_IN)); }\n"
 "RT_FN obj rt_output_port_p(obj x) { return RT_BOOL(rt_is_port(x) && (RT_HFLAGS(x) & RT_PF_OUT)); }\n"
 "RT_FN obj rt_textual_port_p(obj x) { return RT_BOOL(rt_is_port(x) && !(RT_HFLAGS(x) & RT_PF_BINARY)); }\n"
 "RT_FN obj rt_binary_port_p(obj x) { return RT_BOOL(rt_is_port(x) && (RT_HFLAGS(x) & RT_PF_BINARY)); }\n"
@@ -3192,7 +3375,7 @@ static const char *const e26[] = {
 "}\n"
 "RT_FN obj rt_read_char(obj port) {\n"
 "    int c;\n"
-"    io_check(port, RT_PF_IN, \"read-char\");\n"
+"    io_check(port, RT_PF_IN, \"read-char\");\n",
 "    c = rt_port_getc(port);\n"
 "    return c < 0 ? RT_EOF : RT_CHAR(c);\n"
 "}\n"
@@ -3218,7 +3401,7 @@ static const char *const e26[] = {
 "    int c;\n"
 "    if (n < 0) rt_type_error(\"read-string\", \"nonnegative exact integer\", k);\n"
 "    io_check(port, RT_PF_IN, \"read-string\");\n"
-"    if (n == 0) return rt_make_string_n(\"\", 0);\n",
+"    if (n == 0) return rt_make_string_n(\"\", 0);\n"
 "    if ((c = rt_port_getc(port)) < 0) return RT_EOF;\n"
 "    buf = rt_open_output_string();\n"
 "    do rt_port_putc(buf, c);\n"
@@ -3259,7 +3442,7 @@ static const char *const e26[] = {
 "    if (RT_HFLAGS(port) & RT_PF_STRING) {\n"
 "        if ((size_t)(p->cap - p->len) < n) {\n"
 "            intptr_t cap = 2 * p->cap > p->len + (intptr_t)n ? 2 * p->cap : p->len + (intptr_t)n;\n"
-"            char *nb = (char *)rt_alloc_raw((size_t)cap);\n"
+"            char *nb = (char *)rt_alloc_raw((size_t)cap);\n",
 "            p = RT_PORT(port);\n"
 "            rt_memcpy(nb, p->buf, (size_t)p->len);\n"
 "            p->buf = nb;\n"
@@ -3280,7 +3463,7 @@ static const char *const e26[] = {
 "    char b[4];\n"
 "    rt_port_write(port, b, (size_t)rt_utf8_encode(b, c));\n"
 "}\n"
-"RT_FN void rt_port_puts(obj port, const char *s) { rt_port_write(port, s, rt_strlen(s)); }\n",
+"RT_FN void rt_port_puts(obj port, const char *s) { rt_port_write(port, s, rt_strlen(s)); }\n"
 "\n"
 "/* ---- printer ---- */\n"
 "static void io_fix(obj port, intptr_t v) {\n"
@@ -3316,11 +3499,21 @@ static const char *const e26[] = {
 "    rt_port_write(port, s + run, (size_t)(n - run));\n"
 "    rt_port_putc(port, q);\n"
 "}\n"
+"/* A symbol is written without bars unless it would read back as something else: a number,\n"
+" * or what a reader with complex numbers takes for one (+i, -i, and anything beginning with\n"
+" * +inf.0, -inf.0, +nan.0 or -nan.0, in any case). */\n"
+"static int io_ci(const char *s, intptr_t n, const char *lit) {\n"
+"    intptr_t i;\n"
+"    for (i = 0; lit[i]; i++) if (i >= n || (s[i] | 0x20) != lit[i]) return 0;\n"
+"    return 1;\n"
+"}\n"
 "static int io_sym_plain(const char *s, intptr_t n) {\n"
 "    obj dummy;\n"
 "    intptr_t i;\n"
-"    if (n == 0 || s[0] == '#' || (n == 1 && s[0] == '.')) return 0;\n"
+"    if (n == 0 || s[0] == '#' || (n == 1 && s[0] == '.')) return 0;\n",
 "    if (rt_parse_number(s, (size_t)n, 10, &dummy) != -1) return 0;\n"
+"    if ((s[0] == '+' || s[0] == '-') && ((n == 2 && (s[1] | 0x20) == 'i') || io_ci(s + 1, n - 1, \"inf.0\") || io_ci(s + 1, n - 1, \"nan.0\")))\n"
+"        return 0;\n"
 "    for (i = 0; i < n; i++) {\n"
 "        unsigned char c = (unsigned char)s[i];\n"
 "        const char *d;\n"
@@ -3345,7 +3538,7 @@ static const char *const e26[] = {
 " * (write-shared). The printer then writes #n= before the first occurrence of a marked object\n"
 " * and #n# for every later one. write-simple and the scalar fast paths skip the pre-pass. */\n"
 "#define IO_SEEN 1\n"
-"#define IO_OPEN 2  /* on the current depth-first path */\n",
+"#define IO_OPEN 2  /* on the current depth-first path */\n"
 "#define IO_LABEL 4 /* needs a label; label number + 1 from bit 3 on once written */\n"
 "typedef struct { rt_addrtab t; intptr_t next; } io_labels;\n"
 "static int io_compound(obj x) { return rt_is_pair(x) || (rt_is_vector(x) && RT_HLEN(x) > 0); }\n"
@@ -3383,7 +3576,7 @@ static const char *const e26[] = {
 "    intptr_t *v = L ? rt_addrtab_get(&L->t, x, 0, 0) : 0;\n"
 "    return v && (*v & IO_LABEL) ? v : 0;\n"
 "}\n"
-"/* Writes #n# and returns 1 if x already has a label; writes #n= first if it gets one now. */\n"
+"/* Writes #n# and returns 1 if x already has a label; writes #n= first if it gets one now. */\n",
 "static int io_label(io_labels *L, obj x, obj port) {\n"
 "    intptr_t *v = io_marked(L, x);\n"
 "    if (!v) return 0;\n"
@@ -3417,7 +3610,7 @@ static const char *const e26[] = {
 "    if (!rt_is_heap(x)) {\n"
 "        rt_port_puts(port, x == RT_TRUE ? \"#t\" : x == RT_FALSE ? \"#f\" : x == RT_NIL ? \"()\" : x == RT_EOF ? \"#<eof>\"\n"
 "                         : x == RT_UNSPEC ? \"#<unspecified>\" : x == RT_UNDEF ? \"#<undefined>\"\n"
-"                         : x == RT_DEFAULT ? \"#<default>\" : \"#<immediate>\");\n",
+"                         : x == RT_DEFAULT ? \"#<default>\" : \"#<immediate>\");\n"
 "        return;\n"
 "    }\n"
 "    switch (RT_HTYPE(x)) {\n"
@@ -3453,7 +3646,7 @@ static const char *const e26[] = {
 "    case RT_T_RTD: rt_port_puts(port, \"#<record-type \"); io_print(RT_VEC(x)[0], port, 0, 0); rt_port_putc(port, '>'); return;\n"
 "    case RT_T_ERROR: rt_port_puts(port, \"#<error \"); rt_print(RT_VEC(x)[0], port, 1); rt_port_putc(port, '>'); return;\n"
 "    case RT_T_PORT: rt_port_puts(port, \"#<port>\"); return;\n"
-"    case RT_T_PROMISE: rt_port_puts(port, \"#<promise>\"); return;\n"
+"    case RT_T_PROMISE: rt_port_puts(port, \"#<promise>\"); return;\n",
 "    case RT_T_BOX: rt_port_puts(port, \"#<box>\"); return;\n"
 "    case RT_T_VALUES: rt_port_puts(port, \"#<values>\"); return;\n"
 "    default: rt_port_puts(port, \"#<object>\"); return;\n"
@@ -3486,7 +3679,7 @@ static const char *const e26[] = {
 "RT_FN obj rt_write_u8(obj b, obj port) {\n"
 "    char c;\n"
 "    if (!rt_is_fix(b) || (uintptr_t)RT_FIXVAL(b) > 255) rt_type_error(\"write-u8\", \"byte\", b);\n"
-"    io_check(port, RT_PF_OUT | RT_PF_BINARY, \"write-u8\");\n",
+"    io_check(port, RT_PF_OUT | RT_PF_BINARY, \"write-u8\");\n"
 "    c = (char)RT_FIXVAL(b);\n"
 "    rt_port_write(port, &c, 1);\n"
 "    return RT_UNSPEC;\n"
@@ -3520,10 +3713,10 @@ static const char *const e26[] = {
 "    return RT_UNSPEC;\n"
 "}\n"
 "RT_FN obj rt_newline(obj port) { io_check(port, RT_PF_OUT, \"newline\"); rt_port_putc(port, '\\n'); return RT_UNSPEC; }\n"
-"RT_FN obj rt_flush_output_port(obj port) { io_check(port, RT_PF_OUT | IO_ANY, \"flush-output-port\"); rt_flush(port); return RT_UNSPEC; }\n"
+"RT_FN obj rt_flush_output_port(obj port) { io_check(port, RT_PF_OUT | IO_ANY, \"flush-output-port\"); rt_flush(port); return RT_UNSPEC; }\n",
 "",
 0};
-static const char *const e27[] = {
+static const char *const e31[] = {
 "/* rt_num.c -- numbers: 63-bit fixnums and boxed IEEE doubles (spec \302\2473.2, \302\2476.2).\n"
 " * Fixnum overflow raises an error and never wraps. No rationals: (/ 1 3) is a flonum,\n"
 " * (/ 6 3) is the exact 2. No libm and no libc: rounding is done by hand, and float\n"
@@ -3712,14 +3905,27 @@ static const char *const e27[] = {
 "RT_FN obj rt_infinite_p(obj x) { double d = num_d(x, \"infinite?\"); return RT_BOOL(d == NUM_INF || d == -NUM_INF); }\n"
 "RT_FN obj rt_finite_p(obj x) { double d = num_d(x, \"finite?\"); return RT_BOOL(d - d == 0); }\n"
 "\n"
-"/* ---- decimal conversion (spec \302\2479.1 \"Float printing and parsing\"; DESIGN.md \"M5 as built\") ----\n"
+"/* ---- (scheme inexact): through the platform layer (rt_sys.c) ---- */\n"
+"#define NUM_MATH1(name, who, f) RT_FN obj name(obj x) { return rt_make_flonum(f(num_d(x, who))); }\n"
+"NUM_MATH1(rt_exp, \"exp\", rt_sys_exp)\n"
+"NUM_MATH1(rt_log, \"log\", rt_sys_log)\n"
+"NUM_MATH1(rt_sin, \"sin\", rt_sys_sin)\n"
+"NUM_MATH1(rt_cos, \"cos\", rt_sys_cos)\n"
+"NUM_MATH1(rt_tan, \"tan\", rt_sys_tan)\n"
+"NUM_MATH1(rt_asin, \"asin\", rt_sys_asin)\n"
+"NUM_MATH1(rt_acos, \"acos\", rt_sys_acos)\n"
+"NUM_MATH1(rt_sqrt, \"sqrt\", rt_sys_sqrt)\n"
+"RT_FN obj rt_atan(obj x) { return rt_make_flonum(rt_sys_atan2(num_d(x, \"atan\"), 1.0)); }\n"
+"RT_FN obj rt_atan2(obj y, obj x) { return rt_make_flonum(rt_sys_atan2(num_d(y, \"atan\"), num_d(x, \"atan\"))); }\n"
+"\n"
+"/* ---- decimal conversion (spec \302\2479.1 \"Float printing and parsing\"; DESIGN.md \"M5 as built\") ----\n",
 " * Both directions are exact, on small fixed-size big integers (32-bit limbs, up to 4160 bits:\n"
 " * enough for every double and for the 780 significant digits that parsing keeps).\n"
 " * Printing: Burger & Dybvig's free-format algorithm -- the shortest digit string that reads\n"
 " * back to the same double (a tie in the last digit rounds up), with the decimal exponent\n"
 " * estimated from the bit length. Parsing: the number is an exact ratio num/den; its 54\n"
 " * leading quotient bits plus a sticky bit round to nearest even, into the subnormal range\n"
-" * too. Digits beyond the 780th only set the sticky bit (a point halfway between two doubles\n",
+" * too. Digits beyond the 780th only set the sticky bit (a point halfway between two doubles\n"
 " * has at most 767 significant digits). */\n"
 "#define NUM_BN 130\n"
 "#define NUM_MAXDIG 780\n"
@@ -3780,7 +3986,7 @@ static const char *const e27[] = {
 "}\n"
 "static RT_NOINLINE void bn_add(num_big *r, const num_big *a, const num_big *b) { /* r = a + b (r may be a) */\n"
 "    int i, n = a->n > b->n ? a->n : b->n;\n"
-"    uint64_t c = 0;\n"
+"    uint64_t c = 0;\n",
 "    for (i = 0; i < n; i++) { c += (uint64_t)(i < a->n ? a->d[i] : 0) + (i < b->n ? b->d[i] : 0); r->d[i] = (uint32_t)c; c >>= 32; }\n"
 "    r->n = n;\n"
 "    if (c) r->d[r->n++] = (uint32_t)c;\n"
@@ -3793,7 +3999,7 @@ static const char *const e27[] = {
 "    char dig[20], *o = out;\n"
 "    uint64_t bits = num_dbits(d), f = bits & 0xFFFFFFFFFFFFFu;\n"
 "    int be = (int)(bits >> 52) & 0x7FF, e, w, k, n = 0, i, x, even, lo, hi;\n"
-"    int64_t est;\n",
+"    int64_t est;\n"
 "    if (d != d) { rt_memcpy(out, \"+nan.0\", 6); return 6; }\n"
 "    if (bits >> 63) *o++ = '-';\n"
 "    if (be == 0x7FF) { if (o == out) *o++ = '+'; rt_memcpy(o, \"inf.0\", 5); return (size_t)(o - out) + 5; }\n"
@@ -3854,7 +4060,7 @@ static const char *const e27[] = {
 "    *o++ = k - 1 < 0 ? '-' : '+';\n"
 "    x = k - 1 < 0 ? 1 - k : k - 1;\n"
 "    n = x >= 100 ? 3 : x >= 10 ? 2 : 1;\n"
-"    for (i = n - 1; i >= 0; i--) { o[i] = (char)('0' + x % 10); x /= 10; }\n"
+"    for (i = n - 1; i >= 0; i--) { o[i] = (char)('0' + x % 10); x /= 10; }\n",
 "    return (size_t)(o + n - out);\n"
 "}\n"
 "\n"
@@ -3869,7 +4075,7 @@ static const char *const e27[] = {
 "        char *p = buf + sizeof buf;\n"
 "        do { *--p = \"0123456789abcdef\"[u % (uintptr_t)r]; u /= (uintptr_t)r; } while (u);\n"
 "        if (v < 0) *--p = '-';\n"
-"        return rt_make_string_n(p, (size_t)(buf + sizeof buf - p));\n",
+"        return rt_make_string_n(p, (size_t)(buf + sizeof buf - p));\n"
 "    }\n"
 "    RT_CHECK(rt_is_flo(x), \"number->string\", \"number\", x);\n"
 "    if (r != 10) rt_error(\"number->string\", \"inexact numbers are printed in radix 10 only\", rt_cons(x, RT_NIL));\n"
@@ -3923,7 +4129,7 @@ static const char *const e27[] = {
 "    int d = c >= '0' && c <= '9' ? c - '0' : (c | 0x20) >= 'a' && (c | 0x20) <= 'f' ? (c | 0x20) - 'a' + 10 : 99;\n"
 "    return d < radix ? d : -1;\n"
 "}\n"
-"static int num_ci(const char *s, const char *lit) { /* s has at least strlen(lit) chars */\n"
+"static int num_ci(const char *s, const char *lit) { /* s has at least strlen(lit) chars */\n",
 "    for (; *lit; s++, lit++) if ((*s | 0x20) != *lit) return 0;\n"
 "    return 1;\n"
 "}\n"
@@ -3932,7 +4138,7 @@ static const char *const e27[] = {
 " * cap (radix 10: a power of ten each; other radices: the number is too large), *sticky whether\n"
 " * any of them was nonzero. With frac, digits after a decimal point: each kept one lowers *dexp. */\n"
 "static const char *num_digits(const char *s, const char *e, int radix, int frac, char *dig, int *nd,\n"
-"                              long *dexp, int *sticky, uint64_t *mant, int *ovf, int *ndig) {\n",
+"                              long *dexp, int *sticky, uint64_t *mant, int *ovf, int *ndig) {\n"
 "    int d;\n"
 "    for (; s < e && (d = num_digit(*s, radix)) >= 0; s++, ++*ndig) {\n"
 "        if (*mant > (UINT64_MAX - (uint64_t)d) / (uint64_t)radix) *ovf = 1;\n"
@@ -3985,7 +4191,7 @@ static const char *const e27[] = {
 "        if (!ndd || s != e) return -1;\n"
 "        if (!nden) return -2;\n"
 "        if (exactness != 'i') { /* both parts must be exact integers Shikra can represent */\n"
-"            if (ovf || dovf || mant > (uint64_t)RT_FIX_MAX + (uint64_t)neg || dm > (uint64_t)RT_FIX_MAX) return -2;\n"
+"            if (ovf || dovf || mant > (uint64_t)RT_FIX_MAX + (uint64_t)neg || dm > (uint64_t)RT_FIX_MAX) return -2;\n",
 "            if (mant % dm == 0) { mant /= dm; goto exact; }\n"
 "        }\n"
 "        if (exactness == 'e' || ovf == 2 || dsticky || (radix != 10 && ddexp)) return -2;\n"
@@ -3998,7 +4204,7 @@ static const char *const e27[] = {
 "    v = ovf == 2 ? NUM_INF : num_convert(dig, nd, 0, 0, radix, dexp + ex, sticky);\n"
 "    if (exactness == 'e') {\n"
 "        if (num_trunc(v) != v || !(v < NUM_2P62)) return -2;\n"
-"        mant = (uint64_t)v;\n",
+"        mant = (uint64_t)v;\n"
 "        ovf = 0;\n"
 "        goto exact;\n"
 "    }\n"
@@ -4036,7 +4242,7 @@ static const char *const e27[] = {
 "}\n"
 "",
 0};
-static const char *const e28[] = {
+static const char *const e32[] = {
 "/* rt_read.c -- the datum reader (R7RS \302\2477.1.2 lexical syntax), shared by the compiler,\n"
 " * the REPL and compiled programs that use (scheme read). Leaf code: no Scheme calls.\n"
 " * Tool mode additionally records file:line:column for every pair it creates. */\n"
@@ -4391,7 +4597,7 @@ static const char *const e28[] = {
 "}\n"
 "",
 0};
-static const char *const e29[] = {
+static const char *const e33[] = {
 "/* rt_str.c -- strings (UTF-8 with an ASCII fast path, spec \302\2473.2/\302\2476.1) and chars.\n"
 " * A string is [hdr][chars][bytes][buf]; buf is a NUL-terminated UTF-8 buffer that may be\n"
 " * replaced by string-set! when a character's encoded width changes. RT_F_ASCII is kept\n"
@@ -4673,7 +4879,7 @@ static const char *const e29[] = {
 "}\n"
 "",
 0};
-static const char *const e30[] = {
+static const char *const e34[] = {
 "/* rt_sys.c -- platform layer. The ONLY runtime file that calls libc or the OS\n"
 " * (DESIGN.md \302\2473). Everything else goes through the rt_sys_* / rt_mem* functions. */\n"
 "#ifndef SHIKRA_RT_H\n"
@@ -4694,6 +4900,7 @@ static const char *const e30[] = {
 "#include <string.h>\n"
 "#include <time.h>\n"
 "#include <sys/mman.h>\n"
+"#include <sys/stat.h>\n"
 "#include <poll.h>\n"
 "#include <math.h>\n"
 "#ifndef MAP_ANONYMOUS\n"
@@ -4722,8 +4929,24 @@ static const char *const e30[] = {
 "    p.revents = 0;\n"
 "    return poll(&p, 1, 0) != 0; /* readable, at end of file, or in error: a read will not block */\n"
 "}\n"
-"/* Math needed by (scheme base) (expt on flonums). M6 supplies its own pow. */\n"
+"/* Math: (scheme base) expt on flonums, (scheme inexact). One function per libm function, so a\n"
+" * program links only those it uses; M6 (no libc) supplies its own implementations of exactly\n"
+" * these (DESIGN.md \"M5 as built\", platform layer). atan of one argument is atan2(x, 1). */\n"
 "RT_FN double rt_sys_pow(double x, double y) { return pow(x, y); }\n"
+"RT_FN double rt_sys_exp(double x) { return exp(x); }\n"
+"RT_FN double rt_sys_log(double x) { return log(x); }\n"
+"RT_FN double rt_sys_sin(double x) { return sin(x); }\n"
+"RT_FN double rt_sys_cos(double x) { return cos(x); }\n"
+"RT_FN double rt_sys_tan(double x) { return tan(x); }\n"
+"RT_FN double rt_sys_asin(double x) { return asin(x); }\n"
+"RT_FN double rt_sys_acos(double x) { return acos(x); }\n"
+"RT_FN double rt_sys_atan2(double y, double x) { return atan2(y, x); }\n"
+"RT_FN double rt_sys_sqrt(double x) { return sqrt(x); }\n"
+"/* Files and the environment ((scheme file), (scheme process-context)). */\n"
+"RT_FN int rt_sys_exists(const char *path) { struct stat st; return stat(path, &st) == 0; }\n"
+"RT_FN int rt_sys_remove(const char *path) { return unlink(path); }\n"
+"extern char **environ;\n"
+"RT_FN char **rt_sys_environ(void) { return environ; }\n",
 "RT_FN void rt_sys_exit(int code) { exit(code); }\n"
 "RT_FN void *rt_sys_mem(size_t n) {\n"
 "    void *p = mmap(0, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);\n"
@@ -4743,7 +4966,7 @@ static const char *const e30[] = {
 "RT_FN size_t rt_strlen(const char *s) { return strlen(s); }\n"
 "\n"
 "/* Non-local exits. The setjmp lives in rt_sys_catch, whose frame stays active while fn\n"
-" * runs; returning 1 after a throw restores the caller's callee-saved registers. */\n",
+" * runs; returning 1 after a throw restores the caller's callee-saved registers. */\n"
 "#ifdef RT_BUILTIN_SETJMP\n"
 "RT_FN int rt_sys_catch(rt_jmpbuf *b, void (*fn)(void *), void *arg) {\n"
 "    if (__builtin_setjmp(b->w)) return 1;\n"
@@ -4790,20 +5013,24 @@ const embed_file embed_files[] = {
     {"lib/scheme/case-lambda.sld", e13},
     {"lib/scheme/cxr.sld", e14},
     {"lib/scheme/eval.sld", e15},
-    {"lib/scheme/lazy.sld", e16},
-    {"lib/scheme/load.sld", e17},
-    {"lib/scheme/process-context.sld", e18},
-    {"lib/scheme/repl.sld", e19},
-    {"lib/scheme/write.sld", e20},
-    {"lib/shikra/dynamic.sld", e21},
-    {"src/prims.def", e22},
-    {"src/rt.h", e23},
-    {"src/rt_core.c", e24},
-    {"src/rt_gc.c", e25},
-    {"src/rt_io.c", e26},
-    {"src/rt_num.c", e27},
-    {"src/rt_read.c", e28},
-    {"src/rt_str.c", e29},
-    {"src/rt_sys.c", e30},
+    {"lib/scheme/file.sld", e16},
+    {"lib/scheme/inexact.sld", e17},
+    {"lib/scheme/lazy.sld", e18},
+    {"lib/scheme/load.sld", e19},
+    {"lib/scheme/process-context.sld", e20},
+    {"lib/scheme/read.sld", e21},
+    {"lib/scheme/repl.sld", e22},
+    {"lib/scheme/time.sld", e23},
+    {"lib/scheme/write.sld", e24},
+    {"lib/shikra/dynamic.sld", e25},
+    {"src/prims.def", e26},
+    {"src/rt.h", e27},
+    {"src/rt_core.c", e28},
+    {"src/rt_gc.c", e29},
+    {"src/rt_io.c", e30},
+    {"src/rt_num.c", e31},
+    {"src/rt_read.c", e32},
+    {"src/rt_str.c", e33},
+    {"src/rt_sys.c", e34},
     {0, 0}
 };
