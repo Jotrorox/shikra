@@ -377,6 +377,18 @@ static obj run(intptr_t argc) {
             goto tcall;
         case OP_ENV: SYNC(); acc = environment(acc); break;
         case OP_INTERENV: SYNC(); acc = interaction(); break;
+        case OP_CCALL: {
+            obj av[16];
+            int i = pc[0], j;
+            n = pc[1];
+            pc += 2;
+            SYNC();
+            for (j = 0; j < n - 1; j++) av[j] = sp[j - (n - 1)];
+            if (n > 0) av[n - 1] = acc;
+            acc = ffi_call(i, n, av);
+            if (n > 1) sp -= n - 1;
+            break;
+        }
         case OP_HALT: SYNC(); return acc;
         default: die("interpreter: bad opcode %d", (int)pc[-1]);
         }

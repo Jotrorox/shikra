@@ -32,6 +32,7 @@ enum {
     PI_VALUES,         /* (%values x ...) */
     PI_CWV,            /* (%call-with-values producer consumer) */
     PI_CALLCC,         /* (%call/cc f) */
+    PI_CCALL,          /* (%c-call '(name "c-name" (arg-type ...) result-type) arg ...): define-c, spec §10 */
     PI_EVAL,           /* (%eval expr env)            REPL only: the interpreter implements */
     PI_ENVIRONMENT,    /* (%environment import-sets)  these three; the compiler rejects them */
     PI_INTERENV,       /* (%interaction-environment)  (DESIGN.md §11 M3) */
@@ -52,6 +53,7 @@ enum {
     K_LET_SYNTAX, K_LETREC_SYNTAX, K_SYNTAX_RULES, K_SYNTAX_ERROR, K_DEFINE_RECORD_TYPE,
     K_CASE_LAMBDA, K_LET_VALUES, K_LETSTAR_VALUES, K_DEFINE_VALUES, K_INCLUDE, K_INCLUDE_CI,
     K_COND_EXPAND, K_DELAY, K_DELAY_FORCE, K_FEATURES,
+    K_ASSUME, K_DEFINE_C, /* (shikra assume), (shikra ffi): spec §10 */
     K_ELSE, K_ARROW, K_ELLIPSIS, K_UNDERSCORE, K_UNQUOTE, K_UNQUOTE_SPLICING, NKEYWORDS
 };
 extern const char *const keyword_names[NKEYWORDS];

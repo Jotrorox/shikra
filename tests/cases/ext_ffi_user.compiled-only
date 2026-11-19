@@ -1,0 +1,1 @@
+the C functions live in a user C file linked into compiled programs; the interpreter can only call functions of its own process (DESIGN.md "Extensions as built")

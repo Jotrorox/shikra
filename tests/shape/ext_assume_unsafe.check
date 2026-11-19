@@ -1,0 +1,11 @@
+# --unsafe: the assumption is trusted: no check is emitted (unreachable), the facts are used
+flags --unsafe --keep inc --keep head --keep scale
+all
+no rt_assume_failed
+fn P_main__inc[(]
+has RT_UNREACHABLE
+no rt_add[(]
+fn P_main__head[(]
+no rt_car[(]
+fn P_main__scale[(]
+no rt_(add|mul)[(]

@@ -28,6 +28,7 @@ const prim_info prim_table[NPRIMS_ALL] = {
     {"%values", "values", 0, -1, "", 'a', PF_ALLOC},
     {"%call-with-values", "call-with-values", 0, 2, "xx", 'a', PF_FAIL | PF_EFFECT},
     {"%call/cc", "call-with-current-continuation", 0, 1, "x", 'a', PF_FAIL | PF_EFFECT},
+    {"%c-call", "define-c", 0, -1, "", 'a', PF_ALLOC | PF_FAIL | PF_EFFECT},
     {"%eval", "eval", 0, 2, "aa", 'a', PF_FAIL | PF_EFFECT},
     {"%environment", "environment", 0, 1, "l", 'a', PF_FAIL | PF_EFFECT},
     {"%interaction-environment", "interaction-environment", 0, 0, "", 'a', 0},
@@ -38,7 +39,7 @@ const char *const keyword_names[NKEYWORDS] = {
     "cond", "case", "and", "or", "when", "unless", "do", "quasiquote", "define-syntax",
     "let-syntax", "letrec-syntax", "syntax-rules", "syntax-error", "define-record-type",
     "case-lambda", "let-values", "let*-values", "define-values", "include", "include-ci",
-    "cond-expand", "delay", "delay-force", "%features",
+    "cond-expand", "delay", "delay-force", "%features", "assume", "define-c",
     "else", "=>", "...", "_", "unquote", "unquote-splicing"};
 
 /* ---- pointer map ---- */

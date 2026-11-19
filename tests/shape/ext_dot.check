@@ -1,0 +1,17 @@
+flags --keep dot
+# dot is kept as a first-class procedure (a, b of unknown type): one f64vector check per vector
+# where it enters, the loads are rt_f64ref (bounds-checked in safe mode) into doubles, the sum a
+# double; nothing is allocated or boxed.
+fn P_main__dot[(]
+has double[[:space:]]v_s_
+loops 1
+count 2 rt_f64ref[(]
+count 2 rt_f64chk[(]
+no rt_fxchk
+no rt_make_flonum
+no rt_alloc
+no rt_f64vector_ref[(]
+# its copy inlined into the program body, where a and b are proven f64vectors: no check at all
+fn P_init[(]
+no rt_f64chk
+no rt_make_flonum[(]v_t

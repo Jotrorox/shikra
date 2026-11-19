@@ -297,6 +297,16 @@ static obj rd_item1(rd_t *r, intptr_t *line, intptr_t *col) {
             }
             return v;
         }
+#ifdef RT_HAVE_EXT
+        if (rd_tokis(r, "#f64") && rt_port_peekc(port) == '(') { /* (shikra f64vector), SRFI 4 */
+            obj l;
+            rt_port_getc(port);
+            l = rd_list(r, *line, *col, 0);
+            for (x = l; x != RT_NIL; x = RT_CDR(x))
+                if (!rt_is_num(RT_CAR(x))) rd_error(r, *line, *col, "f64vector element is not a real number");
+            return rt_list_to_f64vector(l);
+        }
+#endif
         return rd_number_or_symbol(r, *line, *col);
     }
 }

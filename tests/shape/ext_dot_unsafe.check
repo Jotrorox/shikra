@@ -1,0 +1,8 @@
+flags --unsafe --keep dot
+# with --unsafe the same loop (the bounds check inside rt_f64ref is compiled out)
+fn P_main__dot[(]
+has double[[:space:]]v_s_
+loops 1
+count 2 rt_f64ref[(]
+no rt_make_flonum
+no rt_alloc

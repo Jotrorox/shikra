@@ -302,6 +302,9 @@ static int core_equal(obj a, obj b, core_eq *q, int depth) {
             return RT_STR(a)->bytes == RT_STR(b)->bytes &&
                    rt_memcmp(RT_STR(a)->buf, RT_STR(b)->buf, (size_t)RT_STR(a)->bytes) == 0;
         case RT_T_BYTEVECTOR:
+#ifdef RT_HAVE_EXT
+        case RT_T_F64VECTOR: /* element-wise eqv?: the same IEEE bits */
+#endif
             return RT_HLEN(a) == RT_HLEN(b) &&
                    rt_memcmp(RT_PTR(a, rt_bytevector)->b, RT_PTR(b, rt_bytevector)->b, (size_t)RT_HLEN(a)) == 0;
         case RT_T_VECTOR: {

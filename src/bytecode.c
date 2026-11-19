@@ -358,6 +358,17 @@ static void comp_prim(cfun *f, obj x, int p, int tail) {
         return;
     case PI_ENVIRONMENT: comp(f, RT_CAR(args), 0); emit(f, OP_ENV); break;
     case PI_INTERENV: emit(f, OP_INTERENV); break;
+    case PI_CCALL: { /* define-c: resolved now, i.e. when the definition is compiled */
+        int i = ffi_resolve(CADR(RT_CAR(args)), x);
+        n--;
+        for (l = RT_CDR(args); l != RT_NIL; l = RT_CDR(l)) {
+            comp(f, RT_CAR(l), 0);
+            if (RT_CDR(l) != RT_NIL) push(f);
+        }
+        op2(f, OP_CCALL, i, n);
+        if (n > 1) depth(f, -(n - 1));
+        break;
+    }
     default:
         for (l = args; l != RT_NIL; l = RT_CDR(l)) {
             comp(f, RT_CAR(l), 0);
@@ -375,7 +386,7 @@ static void comp_prim(cfun *f, obj x, int p, int tail) {
 static obj literal(obj x) {
     obj y = x;
     for (; rt_is_pair(y); y = RT_CDR(y)) literal(RT_CAR(y));
-    if (rt_is_string(y) || rt_is_vector(y) || rt_is_bytevector(y)) {
+    if (rt_is_string(y) || rt_is_vector(y) || rt_is_bytevector(y) || rt_is_type(y, RT_T_F64VECTOR)) {
         RT_SETFLAGS(y, RT_HFLAGS(y) | RT_F_RO);
         if (rt_is_vector(y)) {
             intptr_t i;

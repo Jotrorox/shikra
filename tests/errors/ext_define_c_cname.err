@@ -1,0 +1,1 @@
+ext_define_c_cname.scm:2:1: error: define-c: "f-g" is not a C identifier

@@ -22,6 +22,7 @@ static uint64_t num_dbits(double d) { union { uint64_t u; double d; } x; x.d = d
 static double num_d(obj x, const char *who) {
     if (rt_is_fix(x)) return (double)RT_FIXVAL(x);
     RT_CHECK(rt_is_flo(x), who, "number", x);
+    (void)who;
     return RT_FLO(x);
 }
 static RT_NORETURN void num_overflow(const char *who, obj a, obj b) { rt_fx_overflow(who, a, b); }

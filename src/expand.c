@@ -43,6 +43,7 @@ obj append2(obj a, obj b) {
 #define CDDR(x) RT_CDR(RT_CDR(x))
 #define CADDR(x) RT_CAR(CDDR(x))
 #define CDDDR(x) RT_CDR(CDDR(x))
+#define CADDDR(x) RT_CAR(CDDDR(x))
 static obj vec_list(obj v) { return rt_vector_to_list(v, RT_DEFAULT, RT_DEFAULT); }
 const char *dstr(obj x) {
     obj p = rt_open_output_string();
@@ -403,7 +404,8 @@ static obj expand_list(obj l, frame *env) {
     return rt_reverse(out);
 }
 static int self_evaluating(obj x) {
-    return rt_is_num(x) || rt_is_string(x) || rt_is_char(x) || x == RT_TRUE || x == RT_FALSE || rt_is_vector(x) || rt_is_bytevector(x);
+    return rt_is_num(x) || rt_is_string(x) || rt_is_char(x) || x == RT_TRUE || x == RT_FALSE || rt_is_vector(x) || rt_is_bytevector(x) ||
+           rt_is_type(x, RT_T_F64VECTOR);
 }
 
 static binding *repl_autodefine(frame *env, obj id) {
@@ -677,6 +679,52 @@ static obj rw_define_values(obj x) {
     return rt_cons(kw(K_BEGIN), append2(rt_reverse(defs), L1(L3(kp(PI_CWV), thunk(CADDR(x)), rt_cons(kw(K_LAMBDA), rt_cons(tf, rt_reverse(sets)))))));
 }
 
+/* (shikra assume), SRFI 145: (assume e msg ...) = (let ((v e)) (if v v (%assume-failed (list msg ...)))).
+ * %assume-failed never returns, so the analysis refines after it as after an if on e; with
+ * --unsafe it is not emitted (DESIGN.md "Extensions as built"). */
+static obj rw_assume(obj x) {
+    obj v = fresh("v"), msgs = kquote(RT_NIL), l;
+    if (need(x, 2, -1, "assume") < 2) cerror(x, "malformed assume: (assume expression message ...)");
+    for (l = rt_reverse(CDDR(x)); l != RT_NIL; l = RT_CDR(l)) msgs = L3(kp(PI_rt_cons), RT_CAR(l), msgs);
+    return L3(kw(K_LET), L1(L2(v, CADR(x))), L4(kw(K_IF), v, v, L2(kp(PI_rt_assume_failed), msgs)));
+}
+/* (shikra ffi): (define-c name "c-name" (arg-type ...) result-type) defines name as
+ * (lambda (a ...) (%c-call '(name "c-name" (arg-type ...) result-type) a ...)). */
+static const char *const ffi_types[] = {"int", "long", "double", "float", "bool", "char", "string", "pointer", "void", 0};
+static int ffi_type(obj t) {
+    int i;
+    t = strip_syntax(t);
+    if (!rt_is_symbol(t)) return -1;
+    for (i = 0; ffi_types[i]; i++) if (t == sym(ffi_types[i])) return i;
+    return -1;
+}
+static obj rw_define_c(obj x, obj *name) {
+    obj l, params = RT_NIL, types = RT_NIL, call;
+    if (list_len(x) != 5 || !is_ident(CADR(x)) || !rt_is_string(CADDR(x)) || list_len(CADDDR(x)) < 0)
+        cerror(x, "malformed define-c: (define-c name \"c-name\" (arg-type ...) result-type)");
+    {
+        const char *c = RT_STR(CADDR(x))->buf;
+        int i, ok = c[0] && !(c[0] >= '0' && c[0] <= '9');
+        for (i = 0; c[i]; i++) ok &= c[i] == '_' || (c[i] >= '0' && c[i] <= '9') || ((c[i] | 32) >= 'a' && (c[i] | 32) <= 'z');
+        if (!ok) cerror(x, "define-c: \"%s\" is not a C identifier", c);
+    }
+    for (l = CADDDR(x); l != RT_NIL; l = RT_CDR(l)) {
+        int t = ffi_type(RT_CAR(l));
+        if (t < 0) cerror(x, "define-c: unknown argument type %s (int long double float bool char string pointer)", dstr(RT_CAR(l)));
+        if (t == 8) cerror(x, "define-c: void is only allowed as the result type");
+        types = rt_cons(strip_syntax(RT_CAR(l)), types);
+        params = rt_cons(fresh("a"), params);
+    }
+    if (ffi_type(RT_CAR(RT_CDR(CDDDR(x)))) < 0)
+        cerror(x, "define-c: unknown result type %s (int long double float bool char string pointer void)", dstr(RT_CAR(RT_CDR(CDDDR(x)))));
+    if (list_len(params) > 16) cerror(x, "define-c: at most 16 arguments");
+    params = rt_reverse(params);
+    *name = CADR(x);
+    call = rt_cons(kp(PI_CCALL), rt_cons(kquote(L4(strip_id(CADR(x)), strip_syntax(CADDR(x)), rt_reverse(types),
+                                                     strip_syntax(RT_CAR(RT_CDR(CDDDR(x)))))), params));
+    return L3(kw(K_LAMBDA), params, setloc(call, x));
+}
+
 static obj include_forms(obj x, int ci) {
     obj l, out = RT_NIL;
     need(x, 2, -1, ci ? "include-ci" : "include");
@@ -805,7 +853,8 @@ static obj expand_core(int k, obj x, frame *env) {
         for (l = CDDR(x); l != RT_NIL; l = RT_CDR(l)) { rt_port_putc(p, ' '); rt_print(strip_syntax(RT_CAR(l)), p, 1); }
         cerror(x, "%s", RT_STR(rt_get_output_string(p))->buf);
     }
-    case K_DEFINE: case K_DEFINE_SYNTAX: case K_DEFINE_RECORD_TYPE: case K_DEFINE_VALUES:
+    case K_ASSUME: return expand(setloc(rw_assume(x), x), env);
+    case K_DEFINE: case K_DEFINE_SYNTAX: case K_DEFINE_RECORD_TYPE: case K_DEFINE_VALUES: case K_DEFINE_C:
         cerror(x, "%s is only allowed at the top level or at the beginning of a body", keyword_names[k]);
     case K_SYNTAX_RULES: cerror(x, "syntax-rules is only valid as a macro transformer");
     case K_FEATURES: need(x, 1, 1, "%features"); return setloc(L2(S_quote, rt_reverse(front_features())), x);
@@ -932,6 +981,11 @@ static void scan_form(scanner *s, obj x) {
             goto done;
         }
         case K_DEFINE_VALUES: scan_form(s, setloc(rw_define_values(x), x)); goto done;
+        case K_DEFINE_C: {
+            obj name, lam = setloc(rw_define_c(x, &name), x);
+            add_item(s, 1, define_name(s, name, x), lam, x);
+            goto done;
+        }
         case K_INCLUDE: case K_INCLUDE_CI: scan_list(s, include_forms(x, b->id == K_INCLUDE_CI)); goto done;
         case K_COND_EXPAND: scan_list(s, cond_expand_select(x)); goto done;
         default: break;

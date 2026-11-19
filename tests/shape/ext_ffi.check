@@ -1,0 +1,9 @@
+# the prototype under its private name, a direct call, doubles throughout, no box
+flags --keep g
+all
+has ^extern[[:space:]]double[[:space:]]rt_c_hypot[(]double,[[:space:]]double[)]
+fn P_main__g[(]
+loops 1
+has rt_c_hypot[(]
+no rt_make_flonum
+no rt_ffi_dbl

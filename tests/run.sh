@@ -3,7 +3,8 @@
 #   reader    tests/reader/NAME.scm: `shikra debug-read` output must equal NAME.out and
 #             read back to itself; or, with NAME.err, fail with stderr containing it;
 #             plus: every tests/r7rs/*.scm and chibi/*.sld must read without error
-#   unit      C-level runtime tests (tests/unit/rt_unit.c, tool mode)
+#   unit      C-level runtime tests (tests/unit/rt_unit.c, tool mode); tests/unit/flmath.scm: accuracy
+#             of (shikra flonum)'s math functions against the host libm
 #   amalg     program-mode self-check: rt.h + stand-in program + rt_*.c as ONE TU with
 #             SHIKRA_PROGRAM, -Wall -Wextra -Werror; output must match
 #   compiled  tests/cases/NAME.scm built with `shikra build`, stdout == NAME.out,
@@ -101,6 +102,10 @@ run_unit() {
         "$TMP/math_unit" > "$TMP/math.out"; then ok
     else bad "tests/unit/math_unit.c"; grep -v '^math_unit:' "$TMP/math.out"; fi
     grep '^math_unit:' "$TMP/math.out"
+    # (shikra flonum)'s own math functions against the host libm, 10^5 arguments per range (extensions)
+    if $SHIKRA build -w tests/unit/flmath.scm -o "$TMP/flmath" && "$TMP/flmath" 100000 > "$TMP/flmath.out" &&
+        tail -1 "$TMP/flmath.out" | grep -qx 'flmath: ok'; then ok
+    else bad "tests/unit/flmath.scm"; grep FAIL "$TMP/flmath.out"; fi
 }
 
 run_amalg() {

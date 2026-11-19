@@ -1,0 +1,1 @@
+ext_define_c_result.scm:2:1: error: define-c: unknown result type size_t (int long double float bool char string pointer void)

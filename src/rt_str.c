@@ -66,7 +66,7 @@ RT_FN obj rt_make_string_n(const char *s, size_t n) {
 }
 RT_FN obj rt_cstring(const char *s) { return rt_make_string_n(s, rt_strlen(s)); }
 
-static void str_check_char(obj c, const char *who) { RT_CHECK(rt_is_char(c), who, "char", c); }
+static void str_check_char(obj c, const char *who) { RT_CHECK(rt_is_char(c), who, "char", c); (void)c; (void)who; }
 
 RT_FN obj rt_make_string(obj k, obj c) {
     char enc[4];
@@ -94,6 +94,7 @@ static intptr_t str_offset(rt_string *s, intptr_t k) {
 }
 static intptr_t str_index(obj s, obj k, intptr_t limit, const char *who) {
     RT_CHECK(rt_is_string(s), who, "string", s);
+    (void)s;
     if (!rt_is_fix(k) || RT_FIXVAL(k) < 0 || RT_FIXVAL(k) >= limit) rt_range_error(who, k);
     return RT_FIXVAL(k);
 }
@@ -128,6 +129,7 @@ static char *str_gap(obj s, intptr_t da, intptr_t db, intptr_t n) {
 }
 static void str_mut(obj s, const char *who) {
     RT_CHECK(rt_is_string(s) && !(RT_HFLAGS(s) & RT_F_RO), who, "mutable string", s);
+    (void)s; (void)who;
 }
 
 RT_FN obj rt_string_set(obj s, obj k, obj c) {
@@ -352,6 +354,7 @@ static obj str_case(obj s, int m, const char *who) {
     obj out;
     intptr_t i;
     size_t l;
+    (void)who;
     int c, prev = 0, k, n, buf[3];
     RT_CHECK(rt_is_string(s), who, "string", s);
     if (RT_STR(s)->chars == RT_STR(s)->bytes) { /* ASCII */

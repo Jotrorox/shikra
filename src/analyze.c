@@ -66,7 +66,30 @@ int ir_const_type(obj x) {
     if (rt_is_symbol(x)) return T_SYMBOL;
     if (rt_is_vector(x)) return T_VECTOR;
     if (rt_is_bytevector(x)) return T_BYTEVECTOR;
+    if (rt_is_type(x, RT_T_F64VECTOR)) return T_F64;
     return T_OTHER;
+}
+/* ---- define-c descriptors: (name "c-name" (arg-type ...) result-type) ---- */
+int ir_ffi_type(obj s) {
+    static const char *const names[] = {"int", "long", "double", "float", "bool", "char", "string", "pointer", "void", 0};
+    int i;
+    for (i = 0; names[i]; i++) if (s == sym(names[i])) return i;
+    return -1;
+}
+int ir_ccall_type(ir_node *p, int i) {
+    obj d = p->u.prim.args[0]->u.value, l = RT_CAR(RT_CDR(RT_CDR(d)));
+    if (i < 0) return ir_ffi_type(RT_CAR(RT_CDR(RT_CDR(RT_CDR(d)))));
+    while (i-- > 0) l = RT_CDR(l);
+    return ir_ffi_type(RT_CAR(l));
+}
+const char *ir_ccall_letters(ir_node *p) {
+    static const char lt[] = "ffnnbcsf";
+    char *b = (char *)arena_alloc(&compiler_arena, (size_t)p->u.prim.n + 1);
+    int i;
+    b[0] = 'a';
+    for (i = 1; i < p->u.prim.n; i++) b[i] = lt[ir_ccall_type(p, i - 1)];
+    b[p->u.prim.n] = 0;
+    return b;
 }
 int ir_atom_type(ir_node *a) {
     if (a->kind == IR_CONST) return ir_const_type(a->u.value);
@@ -303,16 +326,17 @@ static int letter(char c) {
     case 'u': return T_BYTEVECTOR;
     case 'x': return T_PROC;
     case 'r': return T_RECORD;
+    case 'w': return T_F64;
     default: return T_TOP;
     }
 }
 static const char *type_name(int t) {
     static const char *const names[] = {"a fixnum", "a flonum", "a character", "#t", "#f", "a pair", "the empty list",
         "a string", "a symbol", "a vector", "a bytevector", "a procedure", "a record", "the eof object", "the unspecified value",
-        "a port", "a port", "a port", "a port", "a pair", "a pair", "a pair", "a record type", "undefined", "an object"};
+        "a port", "a port", "a port", "a port", "a pair", "a pair", "a pair", "a record type", "undefined", "an object", "an f64vector"};
     int i;
     if ((t & ~T_BOOL) == 0 && t == T_BOOL) return "a boolean";
-    for (i = 0; i < 25; i++) if (t & (1 << i)) return names[i];
+    for (i = 0; i < 26; i++) if (t & (1 << i)) return names[i];
     return "nothing";
 }
 static const char *letter_name(char c) {
@@ -331,6 +355,7 @@ static const char *letter_name(char c) {
     case 'u': return "a bytevector";
     case 'x': return "a procedure";
     case 'r': return "a record";
+    case 'w': return "an f64vector";
     default: return "?";
     }
 }
@@ -351,6 +376,8 @@ static int pred_mask(int op, int *exact) {
     case PI_rt_exact_integer_p: return T_FIX;
     case PI_rt_eof_object_p: return T_EOF;
     case PI_rt_port_p: return T_PORTS;
+    case PI_rt_flonum_p: return T_FLO;
+    case PI_rt_f64vector_p: return T_F64;
     case PI_rt_input_port_p: case PI_rt_output_port_p: case PI_rt_textual_port_p: case PI_rt_binary_port_p:
         *exact = 0;
         return T_PORTS;
@@ -420,6 +447,7 @@ static void diagnose(ir_node *n, int local, const char *fmt, const char *a, cons
 static aval prim(ir_node *p, env *e, env **out, env *s, ir_var *dst) {
     int op = p->u.prim.op, n = p->u.prim.n, i, ok, t;
     const prim_info *pi = &prim_table[op];
+    const char *letters = op == PI_CCALL ? ir_ccall_letters(p) : pi->args;
     aval a[6];
     ir_node **x = p->u.prim.args;
     for (i = 0; i < n && i < 6; i++) {
@@ -433,7 +461,7 @@ static aval prim(ir_node *p, env *e, env **out, env *s, ir_var *dst) {
     }
     if (rec) p->spec &= ~(S_OK(0) | S_OK(1) | S_OK(2) | S_OK(3) | S_OK(4) | S_OK(5) | S_NOOVF);
     for (i = 0; i < n && i < 6; i++) { /* checked arguments */
-        int m = letter(pi->args[i]);
+        int m = letter(letters[i]);
         if (op == PI_rt_record_ref || op == PI_rt_record_set) {
             if (i == 0 && (a[0].t & T_RECORD) && a[1].r > 0 && a[0].r == a[1].r && !(a[0].t & ~T_RECORD)) { if (rec) p->spec |= S_OK(0); }
             if (i == 0) {
@@ -451,21 +479,25 @@ static aval prim(ir_node *p, env *e, env **out, env *s, ir_var *dst) {
         if (!(a[i].t & m)) {
             if (rec) {
                 char want[64];
-                snprintf(want, sizeof want, "%s: expected %s", pi->who, letter_name(pi->args[i]));
+                snprintf(want, sizeof want, "%s: expected %s", op == PI_CCALL ? idname(RT_CAR(x[0]->u.value)) : pi->who, letter_name(letters[i]));
                 diagnose(p, !(a[i].lt & m), "%s, but the argument is always %s", want, type_name(a[i].t));
             }
             return NONE; /* always raises */
         }
-        if (ok && pi->args[i] != 'l' && rec) p->spec |= S_OK(i);
+        if (ok && letters[i] != 'l' && rec) p->spec |= S_OK(i);
         if (!ok) *out = refine(*out, s++, x[i], mask(m));
     }
-    for (i = 0; i < n; i++) if (leaks(op, i)) escape(a[i]);
+    for (i = 0; i < n; i++) if (leaks(op, i)) escape(i < 6 ? a[i] : av_of(x[i], e));
     if (rec) /* the primitives that make a flonum out of no flonum (spec §9.1: float printer) */
         switch (op) {
         case PI_rt_div: case PI_rt_expt: case PI_rt_inexact: case PI_rt_exp: case PI_rt_log: case PI_rt_sin: case PI_rt_cos:
         case PI_rt_tan: case PI_rt_asin: case PI_rt_acos: case PI_rt_atan: case PI_rt_atan2: case PI_rt_sqrt:
         case PI_rt_current_second: case PI_rt_string_to_number: case PI_rt_read: flo_src = 1; break;
-        default: break;
+        default: /* extensions: flonums and f64vectors made from exact numbers, C doubles */
+            if ((op >= PI_rt_fx_add && op < NPRIMS && (pi->res == 'd' || pi->res == 'w')) ||
+                (op == PI_CCALL && (ir_ccall_type(p, -1) == FT_DOUBLE || ir_ccall_type(p, -1) == FT_FLOAT)))
+                flo_src = 1;
+            break;
         }
     t = letter(pi->res);
     switch (op) {
@@ -540,7 +572,11 @@ static aval prim(ir_node *p, env *e, env **out, env *s, ir_var *dst) {
         }
         return mask(T_UNSPEC);
     }
-    case PI_rt_uncaught_o: case PI_rt_exit_o: return NONE; /* never return */
+    case PI_rt_uncaught_o: case PI_rt_exit_o: case PI_rt_assume_failed: return NONE; /* never return */
+    case PI_CCALL: {
+        static const int rt_[] = {T_FIX, T_FIX, T_FLO, T_FLO, T_BOOL, T_CHAR, T_STRING | T_FALSE, T_FIX, T_UNSPEC};
+        return mask(rt_[ir_ccall_type(p, -1)]);
+    }
     case PI_rt_read_char: case PI_rt_peek_char: return mask(T_CHAR | T_EOF);
     case PI_rt_read_line: case PI_rt_read_string: return mask(T_STRING | T_EOF);
     case PI_rt_read_u8: case PI_rt_peek_u8: return mask(T_FIX | T_EOF);
@@ -688,9 +724,10 @@ static void walk_if(ir_node **slot, env *e) {
                 et = refine(et, &s[k++], x[1], a0);
                 if (singleton(a1.t)) ee = refine(ee, &s[k++], x[0], minus(top(), a1.t));
                 else if (singleton(a0.t)) ee = refine(ee, &s[k++], x[1], minus(top(), a0.t));
-            } else if (op == PI_rt_lt || op == PI_rt_gt || op == PI_rt_num_le || op == PI_rt_num_ge) {
+            } else if (op == PI_rt_lt || op == PI_rt_gt || op == PI_rt_num_le || op == PI_rt_num_ge ||
+                       op == PI_rt_fx_lt || op == PI_rt_fx_gt || op == PI_rt_fx_le || op == PI_rt_fx_ge) {
                 static const int rel[4] = {REL_LT, REL_GT, REL_LE, REL_GE}, neg[4] = {REL_GE, REL_LE, REL_GT, REL_LT}, flip[4] = {REL_GT, REL_GE, REL_LT, REL_LE};
-                int i = op == PI_rt_lt ? 0 : op == PI_rt_gt ? 1 : op == PI_rt_num_le ? 2 : 3;
+                int i = op == PI_rt_lt || op == PI_rt_fx_lt ? 0 : op == PI_rt_gt || op == PI_rt_fx_gt ? 1 : op == PI_rt_num_le || op == PI_rt_fx_le ? 2 : 3;
                 et = relate(et, &s[k++], x[0], rel[i], x[1]);
                 ee = relate(ee, &s[k++], x[0], neg[i], x[1]);
                 et = relate(et, &s[k++], x[1], flip[rel[i]], x[0]);
@@ -764,6 +801,8 @@ static void noovf(ir_node *p, env *e) {
     ir_node **x = p->u.prim.args;
     int op = p->u.prim.op;
     intptr_t c;
+    if (op == PI_rt_fx_add) op = PI_rt_add;
+    if (op == PI_rt_fx_sub) op = PI_rt_sub;
     if ((op != PI_rt_add && op != PI_rt_sub) || !(p->spec & S_OK(0)) || !(p->spec & S_OK(1))) return;
     if ((ir_atom_type(x[0]) & ~T_FIX) || (ir_atom_type(x[1]) & ~T_FIX)) return;
     if (x[1]->kind == IR_CONST && rt_is_fix(x[1]->u.value)) {
@@ -775,7 +814,7 @@ static void noovf(ir_node *p, env *e) {
 }
 static int small_result(int op) { /* lengths, character codes, bytes */
     return op == PI_rt_length || op == PI_rt_string_length || op == PI_rt_vector_length || op == PI_rt_bytevector_length ||
-           op == PI_rt_char_to_integer || op == PI_rt_bytevector_u8_ref;
+           op == PI_rt_char_to_integer || op == PI_rt_bytevector_u8_ref || op == PI_rt_f64vector_length;
 }
 static void annotate(ir_node *r, env *e) { /* refined types of the atoms of an rhs */
     int i;
@@ -1408,7 +1447,9 @@ static int float_slot(ir_node *r, int i) {
     ir_node **a = r->u.prim.args;
     t0 = n > 0 ? ir_atom_type(a[0]) : 0;
     t1 = n > 1 ? ir_atom_type(a[1]) : 0;
-    (void)i;
+    if (op == PI_CCALL) return i > 0 && (ir_ccall_type(r, i - 1) == FT_DOUBLE || ir_ccall_type(r, i - 1) == FT_FLOAT);
+    if (op >= PI_rt_fx_add && op < NPRIMS) /* extensions (emit.c ext_special): flonum and real arguments */
+        return (prim_table[op].args[i] == 'd' || prim_table[op].args[i] == 'n') && op != PI_rt_make_f64vector && op != PI_rt_list_to_f64vector;
     switch (op) {
     case PI_rt_add: case PI_rt_sub: case PI_rt_mul: case PI_rt_div:
         return only_t(t0, T_NUM) && only_t(t1, T_NUM) && ((t0 | t1) & T_FLO) && (only_t(t0, T_FLO) || only_t(t1, T_FLO));
@@ -1424,6 +1465,8 @@ static int float_slot(ir_node *r, int i) {
 }
 static int raw_dbl(ir_node *r) { /* the specialised form yields a raw double */
     int op = r->u.prim.op;
+    if (op == PI_CCALL) return ir_ccall_type(r, -1) == FT_DOUBLE || ir_ccall_type(r, -1) == FT_FLOAT;
+    if (op >= PI_rt_fx_add && op < NPRIMS) return prim_table[op].res == 'd';
     if (op == PI_rt_lt || op == PI_rt_gt || op == PI_rt_num_le || op == PI_rt_num_ge || op == PI_rt_num_eq) return 0;
     return float_slot(r, 0);
 }

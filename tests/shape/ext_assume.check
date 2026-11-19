@@ -1,0 +1,11 @@
+# safe mode: the check stays (rt_assume_failed), and what follows it is specialised: x + 1 on a
+# tagged fixnum, car without a type check
+flags --keep inc --keep head
+fn P_main__inc[(]
+has rt_assume_failed[(]
+has rt_fxadd[(]
+no rt_add[(]
+fn P_main__head[(]
+has rt_assume_failed[(]
+has RT_CAR[(]
+no rt_car[(]
