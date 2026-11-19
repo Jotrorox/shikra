@@ -2174,3 +2174,22 @@ programs around call/cc (escapes through helpers, loops, map, traced dynamic-win
 guard; stored continuations used as escapes; bounded re-entries, also into map and
 dynamic-wind; assigned locals), compared between the interpreter and four compiled modes.
 `SHIKRA_TRACE=1` prints each site's tier, `SHIKRA_TRACE=2` also the first reason each escapes.
+
+**Numbers** (Apple M5, macOS 27.3, Apple clang; machine shared with other work, load ~9 during the
+timings, so they are compared interleaved).
+- Gate: tests/r7rs/base.scm compiled `658 tests, 658 passed, 0 failed` at -O2, -O0, -Os, -O0 with
+  the trampoline, under stress at -O2 and -O0 (collection at every allocation), and with
+  `--cc gcc-16` at -O2, -O0 and -O0 with the trampoline. Its only tier-3 site is the 6.10
+  re-entry example; the other 14 sites of the file and the test framework's guard stay tier 2.
+- ctak and fibc (r7rs-benchmarks): every site tier 2 (ctak 5, fibc 2), binaries identical in size
+  and symbols; ctak 1.73 s vs 1.74 s, fibc 1.03 s vs 1.03 s (M4-2 binary vs this one, best of three,
+  interleaved; 1.56 s / 0.89 s on the quiet machine before the change).
+- Generators: 10^6 values from a re-entrant generator (two captures and two re-entries per value)
+  take 0.26 s at -O2 (0.60 s at -O0; the interpreter 0.68 s) and peak at 2.6 MB RSS, the same as
+  10^7 values (2.8 s): each capture copies a ~300-byte stack, old copies are garbage.
+- reentry_deep: 1,000 re-entries of a 10^4-frame stack, 0.08 s.
+- Compile time: `emit-c` of tests/r7rs/base.scm 176 → 214 ms (machine loaded; the classification
+  plus one rebuild round for the boxing of assigned variables, since the file has a tier-3 site);
+  programs without tier-3 sites pay only the classification.
+- tests/fuzz.sh: 300 gen3 programs (seeds 41-340) and 300 gen/gen2 programs (seeds 5000-5149):
+  no failure.
