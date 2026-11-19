@@ -1,0 +1,15 @@
+;; Symbols (R7RS 6.5).
+(export symbol? symbol->string string->symbol symbol=?)
+(begin
+  (define (symbol? x) (%symbol? x))
+  (define (symbol->string s) (%symbol->string s))
+  (define (string->symbol s) (%string->symbol s))
+  (define (symbol=? a b . rest)
+    (let loop ((a a) (b b) (rest rest))
+      (if (%symbol? a)
+          (if (%symbol? b)
+              (if (%eq? a b)
+                  (if (%null? rest) #t (loop b (%car rest) (%cdr rest)))
+                  #f)
+              (type-error "symbol=?" "symbol" b))
+          (type-error "symbol=?" "symbol" a)))))

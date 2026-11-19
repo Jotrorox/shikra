@@ -1,0 +1,17 @@
+;; Equivalence predicates and booleans (R7RS 6.1, 6.3).
+(export eq? eqv? equal? not boolean? boolean=?)
+(begin
+  (define (eq? a b) (%eq? a b))
+  (define (eqv? a b) (%eqv? a b))
+  (define (equal? a b) (%equal? a b))
+  (define (not x) (if x #f #t))
+  (define (boolean? x) (%boolean? x))
+  (define (boolean=? a b . rest)
+    (let loop ((a a) (b b) (rest rest))
+      (if (%boolean? a)
+          (if (%boolean? b)
+              (if (%eq? a b)
+                  (if (%null? rest) #t (loop b (%car rest) (%cdr rest)))
+                  #f)
+              (type-error "boolean=?" "boolean" b))
+          (type-error "boolean=?" "boolean" a)))))

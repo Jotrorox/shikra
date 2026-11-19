@@ -1,12 +1,27 @@
-/* main.c -- the shikra driver (spec §11). M0 part A: commands and flags are parsed;
- * the commands themselves are stubs. Hidden: `shikra debug-read FILE`. */
+/* main.c -- the shikra driver (spec §11). Commands: build, run, check, emit-c (repl and size
+ * are M3/M4 stubs). Hidden debugging commands:
+ *   debug-read FILE     the reader's datums
+ *   debug-expand FILE   every top-level core form of the program and its libraries, with
+ *                       renaming stripped (as the REPL's ,expand prints them)
+ *   debug-core FILE     the same with unique names (locals "x.12", globals "lib/id:name")
+ *   debug-ir FILE       the IR after tree shaking and normalization */
 #include "rt.h" /* first: it sets the POSIX feature-test macros */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include "util.h"
+#include "front.h"
+#include "ir.h"
 
-typedef enum { CMD_BUILD, CMD_RUN, CMD_REPL, CMD_CHECK, CMD_EMIT_C, CMD_SIZE, CMD_DEBUG_READ } command;
+typedef enum {
+    CMD_BUILD, CMD_RUN, CMD_REPL, CMD_CHECK, CMD_EMIT_C, CMD_SIZE,
+    CMD_DEBUG_READ, CMD_DEBUG_EXPAND, CMD_DEBUG_CORE, CMD_DEBUG_IR
+} command;
 
 typedef struct {
     command cmd;
@@ -22,17 +37,21 @@ typedef struct {
     const char *target;     /* --target, NULL = host */
     const char **incdirs;   /* -I, in order */
     int nincdirs;
+    char **args;            /* run: arguments for the program */
+    int nargs;
 } options;
 
 static const struct { const char *name; command cmd; } commands[] = {
     {"build", CMD_BUILD}, {"run", CMD_RUN}, {"repl", CMD_REPL}, {"check", CMD_CHECK},
-    {"emit-c", CMD_EMIT_C}, {"size", CMD_SIZE}, {"debug-read", CMD_DEBUG_READ}, {0, CMD_BUILD}};
+    {"emit-c", CMD_EMIT_C}, {"size", CMD_SIZE}, {"debug-read", CMD_DEBUG_READ},
+    {"debug-expand", CMD_DEBUG_EXPAND}, {"debug-core", CMD_DEBUG_CORE}, {"debug-ir", CMD_DEBUG_IR},
+    {0, CMD_BUILD}};
 
 static void usage(FILE *f) {
     fputs("usage: shikra <command> [flags] [file]\n"
           "commands:\n"
           "  build main.scm -o app   compile a program to a native executable\n"
-          "  run main.scm            build at -O0 into a cache directory and run it\n"
+          "  run main.scm [args]     build at -O0 into a cache directory and run it\n"
           "  repl [main.scm]         start the interactive interpreter\n"
           "  check main.scm          expand and analyse only; report errors\n"
           "  emit-c main.scm         print the generated C\n"
@@ -74,8 +93,10 @@ static void parse_args(int argc, char **argv, options *o) {
     for (k = 0; commands[k].name && strcmp(commands[k].name, argv[1]); k++) {}
     if (!commands[k].name) { fprintf(stderr, "shikra: unknown command '%s'\n", argv[1]); usage(stderr); exit(2); }
     o->cmd = commands[k].cmd;
+    if (o->cmd == CMD_RUN) o->opt = '0';
     for (i = 2; i < argc; i++) {
         const char *a = argv[i];
+        if (o->cmd == CMD_RUN && o->input) { o->args = argv + i; o->nargs = argc - i; break; }
         if (!strcmp(a, "-O0") || !strcmp(a, "-O2") || !strcmp(a, "-Os")) o->opt = a[2];
         else if (!strcmp(a, "-O")) {
             if (i + 1 >= argc || strlen(argv[i + 1]) != 1 || !strchr("02s", argv[i + 1][0])) die("-O takes 0, 2 or s");
@@ -113,11 +134,203 @@ static int debug_read(const char *path) {
     rt_exit(0);
 }
 
+static char *dir_of(const char *path) {
+    const char *s = strrchr(path, '/');
+    char *d;
+    if (!s) return arena_strdup(&compiler_arena, ".");
+    d = arena_strndup(&compiler_arena, path, (size_t)(s - path));
+    return *d ? d : arena_strdup(&compiler_arena, "/");
+}
+
+static library *run_front(const options *o) {
+    front_opts fo;
+    fo.progdir = dir_of(o->input);
+    fo.incdirs = o->incdirs;
+    fo.nincdirs = o->nincdirs;
+    fo.unicode_full = o->unicode_full;
+    fo.target = o->target;
+    compile_errors_init();
+    front_init(&fo);
+    return front_load_program(o->input);
+}
+
+static void gen_c(const options *o, sbuf *out) {
+    emit_opts eo;
+    ir_program *p;
+    run_front(o);
+    p = ir_build(front_order);
+    eo.unsafe = o->unsafe;
+    eo.debug = o->debug;
+    eo.gc_bump = o->gc_bump;
+    eo.unicode_full = o->unicode_full;
+    eo.gc_stress = o->gc_stress;
+    emit_c(p, &eo, out);
+}
+
+static void mkdirs(const char *path) {
+    char *p = arena_strdup(&compiler_arena, path), *s;
+    for (s = p + 1; *s; s++)
+        if (*s == '/') { *s = 0; mkdir(p, 0777); *s = '/'; }
+    if (mkdir(p, 0777) != 0 && errno != EEXIST) die("cannot create directory %s", p);
+}
+static const char *cache_dir(void) {
+    const char *x = getenv("XDG_CACHE_HOME"), *h = getenv("HOME");
+    sbuf b = {0};
+    const char *r;
+    if (x && *x) sb_printf(&b, "%s/shikra", x);
+    else if (h && *h) sb_printf(&b, "%s/.cache/shikra", h);
+    else sb_printf(&b, "/tmp/shikra-%ld", (long)getuid());
+    mkdirs(b.s);
+    r = arena_strdup(&compiler_arena, b.s);
+    sb_free(&b);
+    return r;
+}
+static void write_text(const char *path, const sbuf *s) {
+    FILE *f = fopen(path, "wb");
+    if (!f || fwrite(s->s, 1, s->len, f) != s->len || fclose(f) != 0) die("cannot write %s", path);
+}
+
+/* The C compiler command line (spec §11.1 flags; DESIGN.md §11 M0 part B). */
+static char **cc_argv(const options *o, const char *cfile, const char *out) {
+    char **av = (char **)xmalloc(sizeof(char *) * 64), *cc = arena_strdup(&compiler_arena, o->cc), *t;
+    int n = 0, darwin;
+    static char optflag[4] = "-O2";
+    for (t = strtok(cc, " \t"); t && n < 40; t = strtok(NULL, " \t")) av[n++] = t;
+    if (!n) die("--cc is empty");
+    optflag[2] = o->opt;
+#ifdef __APPLE__
+    darwin = 1;
+#else
+    darwin = 0;
+#endif
+    if (o->target) {
+        static char tflag[256];
+        snprintf(tflag, sizeof tflag, "--target=%s", o->target);
+        av[n++] = tflag;
+        darwin = strstr(o->target, "darwin") || strstr(o->target, "apple");
+    }
+    av[n++] = "-std=c99";
+    av[n++] = optflag;
+    av[n++] = "-ffunction-sections";
+    av[n++] = "-fdata-sections";
+    if (o->debug) av[n++] = "-g";
+    av[n++] = darwin ? "-Wl,-dead_strip" : "-Wl,--gc-sections";
+    av[n++] = "-o";
+    av[n++] = (char *)out;
+    av[n++] = (char *)cfile;
+    av[n] = NULL;
+    return av;
+}
+static int run_cc(const options *o, const char *cfile, const char *out) {
+    char **av = cc_argv(o, cfile, out);
+    pid_t pid;
+    int st;
+    fflush(stdout);
+    if ((pid = fork()) < 0) die("fork failed");
+    if (pid == 0) {
+        execvp(av[0], av);
+        fprintf(stderr, "shikra: cannot run C compiler '%s'\n", av[0]);
+        _exit(127);
+    }
+    if (waitpid(pid, &st, 0) < 0) die("waitpid failed");
+    return WIFEXITED(st) && WEXITSTATUS(st) == 0;
+}
+
+static const char *default_output(const char *input) {
+    const char *b = strrchr(input, '/'), *dot;
+    b = b ? b + 1 : input;
+    dot = strrchr(b, '.');
+    return dot && dot != b ? arena_strndup(&compiler_arena, b, (size_t)(dot - b)) : arena_strdup(&compiler_arena, "a.out");
+}
+
+static int cmd_build(const options *o) {
+    sbuf c = {0}, cf = {0};
+    const char *out = o->output ? o->output : default_output(o->input);
+    gen_c(o, &c);
+    sb_printf(&cf, "%s/build-%ld.c", cache_dir(), (long)getpid());
+    write_text(cf.s, &c);
+    if (!run_cc(o, cf.s, out)) {
+        fprintf(stderr, "shikra: C compilation failed; generated C kept in %s\n", cf.s);
+        return 1;
+    }
+    remove(cf.s);
+    return 0;
+}
+
+static int cmd_run(const options *o) {
+    sbuf c = {0}, bin = {0}, tmp = {0};
+    unsigned long long h = 14695981039346656037ull;
+    size_t i;
+    char **av;
+    const char *dir;
+    gen_c(o, &c);
+    sb_printf(&c, "/* cc: %s -O%c */\n", o->cc, o->opt); /* the key covers compiler and flags */
+    for (i = 0; i < c.len; i++) h = (h ^ (unsigned char)c.s[i]) * 1099511628211ull;
+    dir = cache_dir();
+    sb_printf(&bin, "%s/run-%016llx", dir, h);
+    if (access(bin.s, X_OK) != 0) { /* build under a private name, then rename atomically */
+        sbuf cf = {0};
+        sb_printf(&cf, "%s/run-%016llx-%ld.c", dir, h, (long)getpid());
+        sb_printf(&tmp, "%s/run-%016llx-%ld.tmp", dir, h, (long)getpid());
+        write_text(cf.s, &c);
+        if (!run_cc(o, cf.s, tmp.s)) {
+            fprintf(stderr, "shikra: C compilation failed; generated C kept in %s\n", cf.s);
+            return 1;
+        }
+        remove(cf.s);
+        if (rename(tmp.s, bin.s) != 0) die("cannot rename %s", tmp.s);
+    }
+    av = (char **)xmalloc(sizeof(char *) * (size_t)(o->nargs + 2));
+    av[0] = (char *)o->input;
+    for (i = 0; i < (size_t)o->nargs; i++) av[i + 1] = o->args[i];
+    av[o->nargs + 1] = NULL;
+    fflush(stdout);
+    execv(bin.s, av);
+    die("cannot execute %s", bin.s);
+}
+
+static void print_core(int raw) {
+    library *l;
+    obj f;
+    for (l = front_order; l; l = l->next) {
+        rt_port_puts(rt_stdout, ";; ");
+        if (l->name == RT_FALSE) rt_port_puts(rt_stdout, "program");
+        else rt_print(l->name, rt_stdout, 1);
+        rt_port_putc(rt_stdout, '\n');
+        for (f = l->core; f != RT_NIL; f = RT_CDR(f)) {
+            unparse(RT_CAR(f), rt_stdout, raw);
+            rt_port_putc(rt_stdout, '\n');
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     options o;
+    sbuf c = {0};
     parse_args(argc, argv, &o);
     rt_init(argc, argv, (void *)&argc);
-    if (o.cmd == CMD_DEBUG_READ) return debug_read(o.input);
-    fprintf(stderr, "shikra: '%s' is not implemented yet\n", argv[1]);
+    switch (o.cmd) {
+    case CMD_DEBUG_READ: return debug_read(o.input);
+    case CMD_DEBUG_EXPAND: case CMD_DEBUG_CORE:
+        run_front(&o);
+        print_core(o.cmd == CMD_DEBUG_CORE);
+        rt_exit(0);
+    case CMD_DEBUG_IR:
+        run_front(&o);
+        ir_print(ir_build(front_order), rt_stdout);
+        rt_exit(0);
+    case CMD_CHECK:
+        run_front(&o);
+        ir_build(front_order);
+        return 0;
+    case CMD_EMIT_C:
+        gen_c(&o, &c);
+        fwrite(c.s, 1, c.len, stdout);
+        return 0;
+    case CMD_BUILD: return cmd_build(&o);
+    case CMD_RUN: return cmd_run(&o);
+    case CMD_REPL: case CMD_SIZE: break;
+    }
+    fprintf(stderr, "shikra: '%s' is not implemented yet (%s)\n", argv[1], o.cmd == CMD_REPL ? "milestone M3" : "milestone M4");
     return 1;
 }

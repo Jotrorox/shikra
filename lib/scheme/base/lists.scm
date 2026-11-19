@@ -1,0 +1,68 @@
+;; Pairs and lists (R7RS 6.4). map and for-each are in control.scm.
+(export cons car cdr set-car! set-cdr! pair? null? list? caar cadr cdar cddr
+        list make-list length append reverse list-tail list-ref list-set! list-copy
+        memq memv member assq assv assoc)
+(begin
+  (define (cons a b) (%cons a b))
+  (define (car p) (%car p))
+  (define (cdr p) (%cdr p))
+  (define (set-car! p x) (%set-car! p x))
+  (define (set-cdr! p x) (%set-cdr! p x))
+  (define (pair? x) (%pair? x))
+  (define (null? x) (%null? x))
+  (define (list? x) (%list? x))
+  (define (caar p) (%car (%car p)))
+  (define (cadr p) (%car (%cdr p)))
+  (define (cdar p) (%cdr (%car p)))
+  (define (cddr p) (%cdr (%cdr p)))
+  (define (list . xs) xs)
+  (define make-list
+    (case-lambda
+      ((k) (make-list k #f))
+      ((k fill)
+       (let loop ((i 0) (acc '()))
+         (if (%>= i k) acc (loop (%+ i 1) (%cons fill acc)))))))
+  (define (length l) (%length l))
+  (define append
+    (case-lambda
+      (() '())
+      ((a) a)
+      ((a b) (%append2 a b))
+      ((a . rest)
+       (let loop ((a a) (rest rest))
+         (if (%null? rest) a (%append2 a (loop (%car rest) (%cdr rest))))))))
+  (define (reverse l) (%reverse l))
+  (define (list-tail l k)
+    (if (%= k 0) l (list-tail (%cdr l) (%- k 1))))
+  (define (list-ref l k) (%car (list-tail l k)))
+  (define (list-set! l k x) (%set-car! (list-tail l k) x))
+  (define (list-copy l)
+    (let loop ((l l) (acc '()))
+      (if (%pair? l)
+          (loop (%cdr l) (%cons (%car l) acc))
+          (let rev ((acc acc) (tail l))
+            (if (%null? acc) tail (rev (%cdr acc) (%cons (%car acc) tail)))))))
+  (define (memq x l)
+    (let loop ((l l))
+      (cond ((%null? l) #f) ((%eq? x (%car l)) l) (else (loop (%cdr l))))))
+  (define (memv x l)
+    (let loop ((l l))
+      (cond ((%null? l) #f) ((%eqv? x (%car l)) l) (else (loop (%cdr l))))))
+  (define member
+    (case-lambda
+      ((x l) (let loop ((l l))
+               (cond ((%null? l) #f) ((%equal? x (%car l)) l) (else (loop (%cdr l))))))
+      ((x l same?) (let loop ((l l))
+                     (cond ((%null? l) #f) ((same? x (%car l)) l) (else (loop (%cdr l))))))))
+  (define (assq x al)
+    (let loop ((al al))
+      (cond ((%null? al) #f) ((%eq? x (%car (%car al))) (%car al)) (else (loop (%cdr al))))))
+  (define (assv x al)
+    (let loop ((al al))
+      (cond ((%null? al) #f) ((%eqv? x (%car (%car al))) (%car al)) (else (loop (%cdr al))))))
+  (define assoc
+    (case-lambda
+      ((x al) (let loop ((al al))
+                (cond ((%null? al) #f) ((%equal? x (%car (%car al))) (%car al)) (else (loop (%cdr al))))))
+      ((x al same?) (let loop ((al al))
+                      (cond ((%null? al) #f) ((same? x (%car (%car al))) (%car al)) (else (loop (%cdr al)))))))))
