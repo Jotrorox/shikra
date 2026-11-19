@@ -202,12 +202,14 @@ programs. Never linked into compiled programs.
 ## 9. Tests
 
 ```
-tests/run.sh [compiled|interp|stress|expand|all]   driver used by `make test`
+tests/run.sh [compiled|r7rs|interp|stress|expand|all]   driver used by `make test`
 tests/cases/NAME.scm + NAME.out             program + expected stdout (+ NAME.exit,
-                                            + NAME.err: expected stderr substring)
+                                            + NAME.err: expected stderr substring,
+                                            + NAME.in: stdin, else /dev/null)
 tests/errors/NAME.scm + NAME.err            expected compile diagnostics (substring)
 tests/expand/NAME.scm + NAME.out            core forms as `,expand` prints them
 tests/r7rs/                                 adapted Chibi r7rs-tests, split by library
+tests/r7rs/expected/FILE.ENGINE             pinned summary line + failing tests (r7rs mode)
 ```
 
 Every feature lands with a test. From M3 on, every case runs under both
@@ -249,6 +251,9 @@ engines and the outputs must be identical.
 - *A literal `call-with-values` receiver given a provably wrong number of values is a
   compile error* (M1 part A), like a known call with the wrong argument count (§11.3):
   `(call-with-values (lambda () (values 1 2 3)) (lambda (a b) a))`.
+- *No exact rationals beyond `/`* (M1 part B): `expt` with a negative exact exponent follows
+  `/` (flonum unless it divides); `string->number`/the reader give `#f`/a read error for ratio
+  parts outside the fixnum range. See "M1 part B, Decisions" for the remaining small choices.
 - *Hello world on macOS arm64 is 69 KB*, not ~50 KB (§9.4, M1 part A): `raise` is always
   linked (runtime errors are raised through it) and `display` reads the
   `current-output-port` parameter; the text grew by ~2.5 KB but crossed a 16 KB page. M4's
@@ -358,7 +363,7 @@ literal outside the fixnum range or `#e1.5` is a read error ("cannot be represen
 **Ports.** stdin/stdout/stderr (`rt_stdin` ...), 4 KB buffers; stderr flushes after
 each write and flushes stdout first; reading stdin flushes stdout; `rt_exit` flushes
 both. String ports in both directions; `rt_open_input_file/output_file` exist (raise
-FILE errors). Textual only so far; `RT_PF_BINARY` is reserved.
+FILE errors). Binary and bytevector ports: M1 part B.
 
 **Open issues / known gaps**
 - Float printing/parsing is interim (`TODO(M5)` in rt_num.c): double-double scaling.
@@ -367,7 +372,7 @@ FILE errors). Textual only so far; `RT_PF_BINARY` is reserved.
   digits, so it is not guaranteed correctly rounded.
 - `equal?` and `write` do not terminate on circular data (M5: union-find equal?,
   write-shared/datum labels in rt_print).
-- Only the standard ports are flushed at exit; unclosed file output ports are not.
+- (Fixed in M1 part B: every open output port is flushed at exit.)
 - `exact`/integer division on flonums outside ±2^62 raise an error.
 - The collector is bump-only; `--gc` is parsed but ignored until M2. The tool has
   no Immix either, so `rt_gc_set_immortal` is a no-op.
@@ -597,7 +602,7 @@ expand (1), compiled (16 programs, each also compiled with `-Wall -Wextra -Werro
 errors (24 diagnostics). `tests/run.sh compiled` alone takes ~5 s.
 Debugging: `shikra debug-expand|debug-core|debug-ir|emit-c FILE`.
 
-**R7RS suite status** (at the end of M0; see M1 part A for the current state).
+**R7RS suite status** (at the end of M0; see M1 part B for the current state).
 `shikra check tests/r7rs/base.scm` stopped at the shim's first `guard` (`tests/r7rs/chibi/test.sld:153:7: error: guard is not implemented yet
 (milestone M1)`). In a scratch copy with the M1 features stubbed (`guard`,
 `parameterize`, `call/cc`, `dynamic-wind`, exception handlers, `expt`,
@@ -606,9 +611,8 @@ compiles and runs into section 6.10; every failure before that is a test of a st
 procedure.
 
 **Known gaps / next steps**
-- M1 (the control items are done in part A): `command-line`, binary ports, `features`, and the procedures the primitives cannot express yet (`expt`,
-  `numerator`, `denominator`, `rationalize`); `(scheme char)` and the other optional
-  libraries do not exist yet.
+- (M1 items done in parts A and B.) `command-line` and the other optional libraries
+  (`(scheme char)` ...) are M5.
 - M4 (performance): every variable is a C local of type `obj`, every primitive is the
   checked runtime call, named-let loops are separate C functions entered by a direct
   call (not contified), closures for local procedures with free variables are
@@ -754,7 +758,7 @@ emergency_exit; tests/errors values_count, malformed_guard, malformed_parameteri
 test`: 123 checks. The `__builtin_setjmp` path was also checked with
 `--cc "cc -arch x86_64"` (Rosetta).
 
-**R7RS suite status.** `shikra check tests/r7rs/base.scm` stops at the first identifier of
+**R7RS suite status** (superseded by M1 part B). `shikra check tests/r7rs/base.scm` stopped at the first identifier of
 the data/ports half: `expt`, `numerator`, `denominator`, `rationalize`, `binary-port?`,
 `open-input-bytevector`, `open-output-bytevector`, `input-port-open?`, `output-port-open?`,
 `char-ready?`, `read-u8`, `u8-ready?`, `read-bytevector`, `read-bytevector!`, `write-u8`,
@@ -768,5 +772,131 @@ procedure, `(string->number "#x4000000000000001/3e1")`, or the R7RS 6.10 re-entr
 - Tier 2 capture costs an `rt_call_cc` frame, two closures, and a rest list per invocation.
 - An after thunk that escapes during `travel-to!` abandons the rest of the original jump
   (the winders list is consistent at every step; R7RS leaves this unspecified).
-- Ports other than the standard ones are not flushed by `exit` (M0 gap; ports half).
-- `call-with-port` and the binary/bytevector ports are the next engineer's.
+- (Done in M1 part B: flushing open ports at exit, `call-with-port`, binary/bytevector ports.)
+
+### M1 part B (the data half of `(scheme base)`: numbers, strings, bytevectors, ports)
+
+**File map** (runtime +225 lines → ~2,695 in `rt.h` + `rt_*.c`, plus 214 in `prims.def`;
+compiler +7; Scheme library +100 → ~910)
+
+```
+src/rt_io.c     binary + bytevector ports, io_check (direction x textual/binary), port state
+                predicates, read-string, char-ready?/u8-ready?, read-u8/peek-u8/read-bytevector!,
+                write-u8/write-bytevector, rt_ports + rt_flush_all (flush at exit)
+src/rt_str.c    str_gap (variable-width replacement), string-copy!, string-fill!
+src/rt_num.c    rt_neg, rt_abs, rt_expt; string->number range rule for ratio parts
+src/rt_core.c   rt_check_range (shared start/end check), bytevector-copy!
+src/rt_sys.c    rt_sys_pow (libm), rt_sys_ready (poll)
+src/expand.c    keyword %features: expands to the quoted feature list (library.c)
+lib/scheme/base/*.scm   expt numerator denominator rationalize features call-with-port, all
+                port procedures, check-range / range-error helpers (errors.scm)
+tests/r7rs/expected/base.compiled   the pinned gate result
+```
+
+**Gate.** `tests/r7rs/base.scm` compiled prints `658 tests, 657 passed, 1 failed`; the failure is
+the R7RS 6.10 `dynamic-wind` re-entry example (tier 3, M5), which reports `error:
+"re-entrant continuation not supported yet (milestone M5)"`. `tests/run.sh r7rs` (part of
+`make test`) builds each file of `r7rs_files` under each engine of `r7rs_engines` and compares
+the last line plus every `FAIL:`/`ERROR:` report with its "expected"/"but got" lines against
+`tests/r7rs/expected/FILE.ENGINE`, so a regression, a different error, or an unexpected pass
+all fail; it also checks the generated C with `-Wall -Wextra -Werror`. M3 adds `interp` to
+`r7rs_engines` (expected file `base.interp`, identical to `base.compiled`), M5 adds the other
+files.
+
+**Scheme vs. C.** C primitives are the leaf operations that need the representation or are hot:
+the port machinery (every read/write primitive takes an explicit port and exact bounds),
+`string-copy!`/`string-fill!` (byte surgery on UTF-8), `bytevector-copy!` (memmove),
+`read-string` (buffer loop), `expt`/`abs`/negation (overflow detection with the right name).
+Everything with optional arguments, defaults (`current-input-port`), procedure arguments or
+folding is Scheme: `call-with-port`, `read-bytevector` (allocate, `%read-bytevector!`, trim),
+`numerator`/`denominator` (scale a flonum by powers of two until integral),
+`rationalize` (simplest rational between x-y and x+y, continued-fraction recursion in the
+arguments' exactness), `features` (`list-copy` of `(%features)`), the list/vector procedures
+with range checks (`check-range`, `range-error` in errors.scm raise the same messages as the
+runtime: "who: index out of range" / "who: expected ...").
+
+**Ports.** One `rt_port` layout for everything (rt.h). Kinds: OS descriptor (fd >= 0, 4 KB
+buffer) or in-memory (`RT_PF_STRING`: the buffer is the data; an input port copies its string
+or bytevector when opened, an output port grows by doubling). Orthogonally textual (UTF-8
+decoded/encoded in rt_io.c) or binary (`RT_PF_BINARY`, raw bytes) -- never both; the standard
+ports are textual. `io_check(port, want, who)` validates direction, kind (or `IO_ANY`, used by
+`flush-output-port`) and openness, so using the wrong kind or a closed port raises "who:
+expected binary input port" / "who: port is closed". Reads across the buffer end: `io_ensure`
+moves the unread tail to the front and refills, so a multi-byte character or a line can span
+refills (tested through stdin with `tests/cases/ports_stdin.in`, also piped in 1000-byte
+writes). `read-bytevector!` loops until the range is full or end of file. `char-ready?` /
+`u8-ready?`: true when bytes are buffered, for in-memory ports, or when `poll` says a read will
+not block (data or end of file). OS output ports other than stdout/stderr are kept on
+`rt_ports` (a GC root, unlinked by `close-port`); `rt_exit` (normal end, `exit`,
+`emergency-exit`, uncaught error) flushes stdout, then every port on that list, then stderr.
+`close-input-port`/`close-output-port` check the direction; closing twice is harmless.
+
+**String mutation** (spec 3.2). Strings keep `{chars, bytes, buf}` with `RT_F_ASCII` meaning
+`chars == bytes`. ASCII strings index in O(1) everywhere (`str_offset` returns k). Non-ASCII
+strings find a byte offset by a linear scan from the start. `str_gap(s, da, db, n)` replaces the
+byte range [da, db) with room for n bytes: in place when the size is equal, else into a fresh
+buffer (old buffer untouched, so a source inside the same string stays valid), recomputing
+the ASCII flag. `string-set!`, `string-copy!` and `string-fill!` all go through it, so each
+call moves the string's bytes at most once (a non-ASCII `string-copy!` of n characters is
+O(length), not n calls of `string-set!`), and a string that becomes ASCII again regains the
+fast path.
+
+**Numbers.** `expt`: exact base and exponent >= 0 by squaring with overflow checks ("expt:
+fixnum overflow"); a negative exact exponent gives 1/b^-e as a flonum (exact for bases 1 and
+-1; `(expt 0 -1)` raises), the same rule as `/`; anything inexact goes to `rt_sys_pow`. Unary
+`-` and `abs` are primitives so that the most negative fixnum raises an overflow naming them,
+and `(- 0.0)` is `-0.0`. `string->number` returns `#f` (never raises) for any text that is not
+a number Shikra can represent: an exact integer outside the fixnum range, a ratio with either
+part outside it (`"#x4000000000000001/3e1"`), `#e` of a non-integer, complex syntax. A ratio
+whose parts fit is exact when it divides, else a flonum (as the reader, M0). Fixnum/flonum
+comparison is exact (M0, `num_cmp_id`). `max`/`min` check their arguments and are inexact
+if any argument is.
+
+**What M6 must supply for math** (no libc): `rt_sys_pow` (IEEE `pow`, needed by `expt` on
+flonums) -- a correctly rounded or at least faithful `pow` (exp2/log2 based), and `poll` for
+`rt_sys_ready` as a system call. Rounding (`floor` `ceiling` `round` `truncate`) and integer
+square roots are done without libm already. M5's `(scheme inexact)` will add `exp log sin cos
+tan asin acos atan sqrt` to the same platform layer.
+
+**Decisions / deviations**
+- *Error names inside library procedures*: when a library procedure delegates to a primitive
+  of another name, the error names the primitive: `string-copy`, `write-string` and
+  `string->utf8` ranges report `substring`, char comparisons report `char->integer`,
+  `string->vector`/`vector->string` report `string->list`/`list->string`, `floor-remainder`
+  reports `modulo`, `truncate-*` report `quotient`/`remainder`, `utf8->string` ranges report
+  `bytevector-copy`, `square`/`lcm` overflow reports `*`, defaults computed with
+  `string-length`/`bytevector-length` report those on a wrong-type argument. The message still
+  names a real procedure the call reached; fixing it needs a `who` argument on the shared
+  primitives (M4 could pass it as a constant).
+- *Ports are textual or binary, not both*; the standard ports are textual (R7RS allows either).
+- *`char-ready?` with a partial UTF-8 sequence buffered* may answer `#t` and then block until
+  the rest of the character arrives.
+- *`numerator`/`denominator` of an infinity or NaN raise* ("expected rational number"); R7RS
+  leaves them undefined. `(expt x y)` with a negative flonum base and non-integral exponent
+  is `+nan.0` (no complex numbers).
+- *`number->string` of a flonum in radix 2, 8 or 16 raises* (R7RS allows an error for inexact
+  numbers in other radices).
+- *Flonum output*: positional notation for 1e-7 <= |x| < 1e21 (`0.0000001`,
+  `100000000000000000000.0`), exponent notation otherwise (`1e21`, `1.5e-10`); digits are the
+  interim shortest-round-trip of M0 (M5).
+- *`rt_ports` keeps unclosed file ports reachable* until exit (they must be flushed); a
+  program that opens many file ports without closing them keeps their buffers. M2 may make
+  the list weak if that matters.
+
+**Tests** (tests/cases, each self-checking through `(util check)` unless noted):
+`strings_utf8` (width-changing `string-set!`, `string-copy!` both directions and overlapping,
+`string-fill!`, ASCII fast path regained), `ports_memory` (byte round trips, binary reads at
+end of file, kinds and states, `call-with-port`, errors), `ports_stdin` (+ `.in`: reads across
+the 4 KB buffer; output compared with values computed independently), `numbers_edges`
+(overflow errors of `+ - * abs quotient / expt exact`, `exact-integer-sqrt`, flonum printing
+of `1.0 1e21 -0.0 +inf.0 +nan.0` ..., exact mixed comparison), `string_to_number`
+(rejections), `error_names` (63 error situations); rt_unit: `rt_ports` bookkeeping and the
+flush at exit (run.sh checks the file afterwards). `make test`: 138 checks.
+
+**Known gaps**
+- `string-ref` on non-ASCII strings is O(n) per call, so an index loop over such a string is
+  quadratic (spec 3.2 allows it); `string-for-each`/`string->list` are linear. A cached
+  (index, offset) cursor would fix the common sequential case.
+- `utf8->string` of invalid UTF-8 substitutes U+FFFD instead of raising.
+- `(scheme file)` (and so `open-binary-input-file` etc.), `read`, `write-shared` are M5;
+  file ports already exist in the runtime and are flushed at exit.
