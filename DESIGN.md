@@ -2103,7 +2103,12 @@ Most differences are libm's: the arguments where they differ were re-evaluated w
 arithmetic (`math_unit -dump | python3 tools/mathcheck.py`, 300-bit rationals; results below), e.g. macOS
 `tan(1.0381590199329658)` is 2.48 ulp off (Shikra 0.52), `tan(1.0)` 0.72 ulp (Shikra 0.28, the
 correctly rounded 1.5574077246549023), and macOS acos/asin round the wrong way in ~15% / 2% of these
-ranges. The test's limit is 2 ulp against the host libm (4 for tan, because of macOS's tan).
+ranges. True error over the arguments where Shikra and macOS libm differ (sampled: every 50th
+difference plus all over 1.5 ulp; tan every 10th of those): max Shikra / libm in ulps -- exp
+0.512 / 0.509, log 0.498 / 0.502, sin 0.509 / 0.720, cos 0.558 / 0.747, tan 0.529 / 2.384, asin
+0.500 / 0.624, acos 0.500 / 0.878, atan2 0.500 / 0.587, pow 0.572 / 0.502 (pow checked with Python's
+`decimal` at 60 digits). The test's limit is 2 ulp against the host libm (4 for tan, because of
+macOS's tan).
 Identities that hold exactly: `(exp 1)` = 2.718281828459045, `(* 4 (atan 1))` = pi, `(expt 2. 3)`
 = 8., `(expt 4 .5)` = 2., `(sqrt 16)` = 4, log 8 / log 2 = 3, log 4096 / log 2 = 12, `(log (exp 1))`
 = 1, `(acos -1)` = pi, `(sin 1e22)` = -0.8522008497671888.
