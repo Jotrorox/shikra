@@ -48,7 +48,10 @@ typedef struct {
     int nincdirs;
     char **args;            /* run: arguments for the program */
     int nargs;
+    int size_all, size_tsv; /* size: --all (every procedure), --tsv (machine-readable) */
 } options;
+
+int size_command(const char *path, int all, int tsv); /* size.c */
 
 static const struct { const char *name; command cmd; } commands[] = {
     {"build", CMD_BUILD}, {"run", CMD_RUN}, {"repl", CMD_REPL}, {"check", CMD_CHECK},
@@ -116,6 +119,8 @@ static void parse_args(int argc, char **argv, options *o) {
         else if (!strcmp(a, "--gc-stress")) o->gc_stress = 1;
         else if (!strcmp(a, "--no-musttail")) o->no_musttail = 1;
         else if (!strcmp(a, "-w")) o->nowarn = 1;
+        else if (o->cmd == CMD_SIZE && !strcmp(a, "--all")) o->size_all = 1;
+        else if (o->cmd == CMD_SIZE && !strcmp(a, "--tsv")) o->size_tsv = 1;
         else if ((v = flag_value(argc, argv, &i, "--keep"))) o->keep[o->nkeep++] = v;
         else if ((v = flag_value(argc, argv, &i, "--gc"))) {
             if (!strcmp(v, "bump")) o->gc_bump = 1;
@@ -206,10 +211,11 @@ static void mkdirs(const char *path) {
     if (mkdir(p, 0777) != 0 && errno != EEXIST) die("cannot create directory %s", p);
 }
 static const char *cache_dir(void) {
-    const char *x = getenv("XDG_CACHE_HOME"), *h = getenv("HOME");
+    const char *x = getenv("XDG_CACHE_HOME"), *h = getenv("HOME"), *e = getenv("SHIKRA_CACHE_DIR");
     sbuf b = {0};
     const char *r;
-    if (x && *x) sb_printf(&b, "%s/shikra", x);
+    if (e && *e) sb_puts(&b, e);
+    else if (x && *x) sb_printf(&b, "%s/shikra", x);
     else if (h && *h) sb_printf(&b, "%s/.cache/shikra", h);
     else sb_printf(&b, "/tmp/shikra-%ld", (long)getuid());
     mkdirs(b.s);
@@ -369,8 +375,7 @@ int main(int argc, char **argv) {
         if (o.cmd == CMD_REPL) return repl_main(o.input, &io);
         return interp_main(o.input, &io, o.nargs, o.args);
     }
-    case CMD_SIZE: break;
+    case CMD_SIZE: return size_command(o.input, o.size_all, o.size_tsv);
     }
-    fprintf(stderr, "shikra: '%s' is not implemented yet (milestone M4)\n", argv[1]);
     return 1;
 }

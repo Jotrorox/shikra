@@ -1,5 +1,5 @@
 #!/bin/sh
-# tests/run.sh [all|reader|unit|amalg|expand|compiled|r7rs|interp|stress]   (DESIGN.md §9)
+# tests/run.sh [all|reader|unit|amalg|expand|compiled|r7rs|interp|stress|shape|size|...]   (DESIGN.md §9)
 #   reader    tests/reader/NAME.scm: `shikra debug-read` output must equal NAME.out and
 #             read back to itself; or, with NAME.err, fail with stderr containing it;
 #             plus: every tests/r7rs/*.scm and chibi/*.sld must read without error
@@ -48,6 +48,9 @@ SHIKRA=./shikra
 CC=${CC:-cc}
 TMP=tests/tmp
 mkdir -p "$TMP"
+# the cache directory of build/run (and the expansion cache) stays inside the tree
+SHIKRA_CACHE_DIR=$(pwd)/$TMP/cache
+export SHIKRA_CACHE_DIR
 pass=0
 fail=0
 skip=0
@@ -334,6 +337,46 @@ run_shape() {
     done
 }
 
+# run_size (M4-3): `shikra size` (spec §9.3, §11). For programs built here and for the committed
+# ELF fixtures (tests/size/*.elf, see tests/size/README): the report has the expected headings,
+# its total equals the file size, and the --tsv rows add up to the file size. A stripped binary
+# and one not built by shikra are refused with a clear message. Hello world is pinned at 52 KB
+# or less on macOS arm64 (spec §9.3: about 50 KB, the format floor).
+size_check() { # $1 binary, $2 what
+    fsz=$(wc -c < "$1" | tr -d ' ')
+    if $SHIKRA size "$1" > "$TMP/size.out" 2> "$TMP/size.err" && grep -q '^program ' "$TMP/size.out" &&
+        grep -q '^(runtime) ' "$TMP/size.out" && grep -q '^format overhead ' "$TMP/size.out" &&
+        [ "$(sed -n 's/^total = file size  *//p' "$TMP/size.out" | tr -d ,)" = "$fsz" ]; then ok
+    else bad "shikra size $2"; head -5 "$TMP/size.err"; tail -5 "$TMP/size.out"; fi
+    if $SHIKRA size --tsv "$1" > "$TMP/size.tsv" &&
+        [ "$(awk -F '\t' '$5 == "yes" && $1 != "total" { s += $4 } END { print s }' "$TMP/size.tsv")" = "$fsz" ]; then ok
+    else bad "shikra size --tsv $2 (rows do not add up to $fsz)"; fi
+}
+run_size() {
+    for c in hello fib records libraries stdlib; do
+        [ -f "tests/cases/$c.scm" ] || continue
+        for lev in 2 s; do
+            if $SHIKRA build -O$lev -w "tests/cases/$c.scm" -o "$TMP/sz_$c" 2> "$TMP/size.err"; then size_check "$TMP/sz_$c" "$c -O$lev"
+            else bad "size: build $c"; head -3 "$TMP/size.err"; fi
+        done
+    done
+    for f in tests/size/*.elf; do size_check "$f" "$f"; done
+    if [ "$(uname -s)-$(uname -m)" = Darwin-arm64 ]; then
+        $SHIKRA build tests/cases/hello.scm -o "$TMP/sz_hello" 2> /dev/null
+        hsz=$(wc -c < "$TMP/sz_hello" | tr -d ' ')
+        if [ "$hsz" -le 52000 ]; then ok; else bad "hello world is $hsz bytes (spec §9.3: about 50 KB; pinned at 52,000)"; fi
+    fi
+    cp "$TMP/sz_hello" "$TMP/sz_stripped" && strip "$TMP/sz_stripped" 2> /dev/null
+    if ! $SHIKRA size "$TMP/sz_stripped" > /dev/null 2> "$TMP/size.err" && grep -q 'stripped' "$TMP/size.err"; then ok
+    else bad "shikra size of a stripped binary: expected an error"; cat "$TMP/size.err"; fi
+    printf 'int main(void) { return 0; }\n' > "$TMP/sz_c.c"
+    if $CC "$TMP/sz_c.c" -o "$TMP/sz_c" && ! $SHIKRA size "$TMP/sz_c" > /dev/null 2> "$TMP/size.err" &&
+        grep -q 'not built by shikra' "$TMP/size.err"; then ok
+    else bad "shikra size of a C program: expected an error"; cat "$TMP/size.err"; fi
+    if ! $SHIKRA size tests/cases/hello.scm > /dev/null 2> "$TMP/size.err" && grep -q 'not a 64-bit' "$TMP/size.err"; then ok
+    else bad "shikra size of a non-binary: expected an error"; cat "$TMP/size.err"; fi
+}
+
 # run_stress: cases and r7rs files with a collection at every allocation, at -O2 and -O0.
 run_stress() {
     for opt in 2 0; do
@@ -372,9 +415,10 @@ gcc) opt=2; run_cases gcc
     ( opt=0; ulimit -s 65520 2> /dev/null; run_cases gcctramp; echo "$pass $fail" > "$TMP/gcc.count" ); set -- $(cat "$TMP/gcc.count"); pass=$1 fail=$2
     opt= ;;
 shape) run_shape ;;
-all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_cases interp; run_repl; run_tramp
+size) run_size ;;
+all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_size; run_cases interp; run_repl; run_tramp
     run_stress ;;
-*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape]"; exit 2 ;;
+*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape|size]"; exit 2 ;;
 esac
 if [ "$skip" -gt 0 ]; then echo "tests: $pass passed, $fail failed, $skip skipped (see above)"
 else echo "tests: $pass passed, $fail failed"; fi
