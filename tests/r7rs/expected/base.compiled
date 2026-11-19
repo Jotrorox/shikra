@@ -1,4 +1,1 @@
-658 tests, 657 passed, 1 failed
-ERROR: (let ((path (quote ())) (c #f)) (let ((add (lambda (s) (set! path (cons s path))))) (dynamic-wind (lambda () (add (quote connect))) (lambda () (add (call-with-current-continuation (lambda (c0) (set! c c0) (quote talk1))))) (lambda () (add (quote disconnect)))) (if (< (length path) 4) (c (quote talk2)) (reverse path))))
-expected (connect talk1 disconnect connect talk2 disconnect)
-but got error: "re-entrant continuation not supported yet (milestone M5)"
+658 tests, 658 passed, 0 failed

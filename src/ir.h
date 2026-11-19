@@ -43,9 +43,10 @@ enum { R_OBJ, R_FIX, R_DBL, R_MV };
  * fixnum result cannot overflow; atoms: N_FAR the value came through a user procedure's
  * parameter or result (diagnostics: interprocedural); any node: N_LIB copied from a standard
  * library procedure (its location is the call's); CALL: N_DISC known only through the analysis
- * (the callee's free variables need not be in scope here: never inlined unless it has none). */
+ * (the callee's free variables need not be in scope here: never inlined unless it has none);
+ * CALL of CTL_CALLCC: N_TIER3 the continuation may be invoked after the call/cc returned. */
 #define S_OK(i) (1 << (i))
-enum { S_NOOVF = 1 << 6, N_FAR = 1 << 8, N_LIB = 1 << 9, N_DISC = 1 << 10 };
+enum { S_NOOVF = 1 << 6, N_FAR = 1 << 8, N_LIB = 1 << 9, N_DISC = 1 << 10, N_TIER3 = 1 << 11 };
 
 enum {
     V_GLOBAL = 1,   /* top-level variable (C global or static closure) */
@@ -182,6 +183,7 @@ typedef struct {
     int no_handlers;       /* no exception handler can be installed: errors print and exit */
     int no_flonums;        /* no flonum can exist at run time (no float printer, §9.1) */
     int std_open;          /* the standard ports are never closed (unchecked writes to them) */
+    int tier3;             /* call/cc sites classified tier 3 (spec §8.2, §9.1: stack copying linked) */
     int warn;              /* report warnings */
 } ir_program;
 
@@ -225,6 +227,15 @@ void ir_finish(ir_program *p);
 int ir_analyze(ir_program *p, int last);
 void ir_represent(ir_program *p);
 int ir_atom_type(ir_node *a); /* T_* type of an atom at its use (T_TOP if unknown) */
+/* call/cc sites (spec §8.2): after the final ir_analyze, an escape analysis of every %call/cc
+ * continuation marks the sites whose k may be invoked after the call/cc returned (N_TIER3,
+ * p->tier3). Assigned C locals of procedures that may be on the stack during a tier-3 capture
+ * must live in boxes (a copied frame would bring back old values): returns 1 if it added such
+ * variables to the normalizer's boxing set (the IR must then be rebuilt), else 0. */
+int ir_classify_callcc(ir_program *p);
+/* Normalizer: variables named in this set are boxed when assigned, and the optimizer leaves their
+ * boxes alone (filled by ir_classify_callcc). */
+extern pmap ir_forcebox;
 int ir_const_type(obj x);
 
 /* Back end (emit.c): the complete C translation unit (DESIGN.md §3). */

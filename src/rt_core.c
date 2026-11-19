@@ -22,6 +22,9 @@ RT_VAR intptr_t rt_tr_argc;
 #endif
 static RT_UNUSED obj *core_symtab, *core_symend; /* open addressing; 0 = empty slot */
 static RT_UNUSED intptr_t core_symcount;
+#if defined(SHIKRA_PROGRAM) && defined(RT_TIER3)
+static char *core_base; /* rt_init's stack base: tier 3 copies the stack from a capture up to it */
+#endif
 
 RT_FN void rt_init(int argc, char **argv, void *stack_base) {
     rt_argc = argc;
@@ -30,6 +33,9 @@ RT_FN void rt_init(int argc, char **argv, void *stack_base) {
      * on first use), so a program that never allocates links no collector (spec §9.1).
      * Every runtime global that holds an obj is a root range: */
     rt_gc_init(stack_base);
+#ifdef RT_TIER3
+    core_base = (char *)stack_base;
+#endif
     rt_gc_add_dynamic_roots(&core_symtab, &core_symend);
     rt_gc_add_roots(core_argbuf, core_argbuf + RT_ARGBUF);
     rt_gc_add_roots(&rt_winders, &rt_winders + 1);
@@ -623,25 +629,34 @@ RT_FN obj rt_parameter_binding(obj cell) {
     return cell;
 }
 
-/* ---- the compiled engine's escapes: %call/cc, tier 2 (spec §8.2) ----
+/* ---- the compiled engine's escapes: %call/cc, tiers 2 and 3 (spec §8.2) ----
  * A capture is a core_cont frame on the C stack (jump buffer, saved winders and handler
- * lists) plus a heap procedure k (3 words) whose free[0] points at the frame (a raw word
- * that looks like a fixnum) or is #f once the frame is gone. core_conts lists the live
- * frames, innermost first, so a jump can mark every frame it discards as dead. Invoking k
- * first walks the winders back to the capture's (rt_engine_travel: after/before thunks),
- * so base's call/cc needs no escape procedure in compiled code (M4-1). Tier 3 (M5) adds a
- * heap copy of the stack segment for k instead of #f. */
+ * lists) plus a heap procedure k whose free[0] points at the frame (a raw word that looks
+ * like a fixnum) while the frame is live on the current stack, else #f. core_conts lists the
+ * live frames, innermost first, so a jump can mark every frame it discards as dead. Invoking
+ * a live k first walks the winders back to the capture's (rt_engine_travel: after/before
+ * thunks), so base's call/cc needs no escape procedure in compiled code (M4-1). A tier-2 k
+ * (1 free slot) can only be invoked while live: the compiler proved it (escape analysis), and
+ * a dead one raises (safe-mode guard). A tier-3 k (RT_TIER3, rt_call_cc3) also keeps the frame
+ * address (free[1]) and a heap copy of the C stack from its frame to the stack base (free[2]):
+ * invoked when dead, it is re-entered (DESIGN.md "Tier 3 continuations as built"). */
 #ifdef SHIKRA_PROGRAM
 typedef struct core_cont { rt_jmpbuf jb; struct core_cont *prev; obj winders, handlers, f, k, val; } core_cont;
 static core_cont *core_conts;
+#ifdef RT_TIER3
+static RT_NORETURN void core_reenter(obj self, obj v);
+#define CORE_DEAD(self, v) do { if ((RT_PROC(self)->hdr >> 16) > 1) core_reenter(self, v); \
+        rt_error(0, "tier-2 continuation called after its extent (bug)", RT_NIL); } while (0)
+#else
+#define CORE_DEAD(self, v) rt_error(0, "tier-2 continuation called after its extent (bug)", RT_NIL)
+#endif
 static obj core_cont_code(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3) {
     core_cont *c = (core_cont *)(void *)RT_PROC(self)->free[0], *t;
     obj v = argc == 1 ? a0 : rt_make_values(rt_rest_list(argc, 0, a0, a1, a2, a3));
-    if ((obj)(void *)c == RT_FALSE) rt_error(0, "re-entrant continuation not supported yet (milestone M5)", RT_NIL);
+    if ((obj)(void *)c == RT_FALSE) CORE_DEAD(self, v);
     if (c->winders != rt_winders) { /* after thunks may escape, or end the capture's extent */
         rt_engine_travel(c->winders);
-        if ((obj)(void *)(c = (core_cont *)(void *)RT_PROC(self)->free[0]) == RT_FALSE)
-            rt_error(0, "re-entrant continuation not supported yet (milestone M5)", RT_NIL);
+        if ((obj)(void *)(c = (core_cont *)(void *)RT_PROC(self)->free[0]) == RT_FALSE) CORE_DEAD(self, v);
     }
     for (t = core_conts; t != c; t = t->prev) RT_PROC(t->k)->free[0] = RT_FALSE;
     core_conts = c;
@@ -670,10 +685,76 @@ RT_FN obj rt_call_cc(obj f) {
     RT_PROC(c.k)->free[0] = RT_FALSE;
     return c.val;
 }
+#ifdef RT_TIER3
+/* Tier 3. The stack grows down on every target (checked at each capture). The copy is a heap
+ * object scanned conservatively, like the stack (rt_gc.c); lo is the address it came from. */
+typedef struct { uintptr_t hdr; char *lo; uintptr_t w[]; } core_stack;
+static void core_callcc3_run(void *p) {
+    core_cont *c = (core_cont *)p;
+    char *lo = (char *)((uintptr_t)&p & ~(uintptr_t)15); /* in this frame: below rt_sys_catch's */
+    size_t n = (size_t)(core_base - lo) & ~(size_t)7;
+    core_stack *s;
+    if (lo >= core_base) rt_error("call/cc", "tier 3 needs a downward-growing C stack", RT_NIL);
+    s = (core_stack *)rt_alloc(RT_HDR(RT_T_CONT, 0, sizeof(char *) + n), sizeof(core_stack) + n);
+    s->lo = lo;
+    rt_memcpy(s->w, lo, n); /* the jump buffer (registers) is in c, inside the copy */
+    RT_PROC(c->k)->free[2] = RT_TAGPTR(s);
+    c->val = RT_NT(RT_PROC(c->f)->code(c->f, 1, c->k, 0, 0, 0));
+}
+RT_FN obj rt_call_cc3(obj f) {
+    core_cont c;
+    RT_CALLABLE(f);
+    c.prev = core_conts;
+    c.winders = rt_winders;
+    c.handlers = rt_handlers;
+    c.f = f;
+    c.val = RT_UNSPEC;
+    c.k = rt_make_proc(core_cont_code, 3);
+    RT_PROC(c.k)->free[0] = RT_PROC(c.k)->free[1] = (obj)(void *)&c;
+    core_conts = &c;
+    /* re-entered (or escaped to) with other winders: the before thunks run here, on the restored stack */
+    if (rt_sys_catch(&c.jb, core_callcc3_run, &c) && c.winders != rt_winders) rt_engine_travel(c.winders);
+    core_conts = c.prev;
+    RT_PROC(c.k)->free[0] = RT_FALSE;
+    return c.val;
+}
+/* Grow the stack until this frame lies below the copy's region, then copy it back: the frames
+ * of the current stack die, those of the copy (tier-2 frames included) come back to life, and
+ * the capture's rt_sys_catch returns 1. The recursive call is not a tail call (pad is read
+ * after it), so each level really takes stack space. */
+static RT_NOINLINE int core_rewind(obj self, obj v) {
+    volatile char pad[512];
+    core_stack *s = RT_PTR(RT_PROC(self)->free[2], core_stack);
+    core_cont *c, *t;
+    pad[0] = 0;
+    if ((uintptr_t)pad + sizeof pad + 1024 > (uintptr_t)s->lo) return core_rewind(self, v) + pad[0];
+    for (t = core_conts; t; t = t->prev) RT_PROC(t->k)->free[0] = RT_FALSE;
+    rt_memcpy(s->lo, s->w, (size_t)RT_HLEN(RT_TAGPTR(s)) - sizeof(char *));
+    core_conts = c = (core_cont *)(void *)RT_PROC(self)->free[1];
+    for (t = c; t; t = t->prev) RT_PROC(t->k)->free[0] = (obj)(void *)t;
+    c->val = v;
+    rt_handlers = c->handlers; /* rt_winders stays the common tail: rt_call_cc3 rewinds */
+    rt_sys_throw(&c->jb);
+}
+/* Re-entry: the after thunks run on the current stack, down to the winders the current and
+ * the captured list share (R7RS 6.10); the frame image in the copy holds the captured lists. */
+static void core_reenter(obj self, obj v) {
+    core_stack *s = RT_PTR(RT_PROC(self)->free[2], core_stack);
+    core_cont *img = (core_cont *)(void *)((char *)s->w + ((char *)RT_PROC(self)->free[1] - s->lo));
+    obj a = rt_winders, b = img->winders;
+    intptr_t na = RT_FIXVAL(rt_length(a)), nb = RT_FIXVAL(rt_length(b));
+    for (; na > nb; na--) a = RT_CDR(a);
+    for (; nb > na; nb--) b = RT_CDR(b);
+    for (; a != b; a = RT_CDR(a)) b = RT_CDR(b);
+    if (a != rt_winders) rt_engine_travel(a);
+    core_rewind(self, v);
+    rt_sys_exit(70); /* not reached */
+}
+#endif
 #endif
 RT_FN obj rt_continuation_live_p(obj k) {
 #ifdef SHIKRA_PROGRAM
-    if (rt_is_proc(k) && RT_PROC(k)->code == core_cont_code) return RT_BOOL(RT_PROC(k)->free[0] != RT_FALSE);
+    if (rt_is_proc(k) && RT_PROC(k)->code == core_cont_code) return RT_FALSE; /* it walks the winders itself */
 #endif
     (void)k;
     return RT_TRUE;

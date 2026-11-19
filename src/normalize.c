@@ -31,6 +31,7 @@ static int cur_form, in_static;
 static obj UNSPEC_FORM;
 static ir_var *new_var(obj name, ir_lambda *owner);
 static pmap demoted;       /* tier-1 sites rebuilt as tier 2 (core form -> 1) */
+pmap ir_forcebox;          /* variable names boxed when assigned (tier 3: ir_classify_callcc) */
 static int cur_ff;         /* first_form of the known procedure being normalized */
 static const ir_opts *opts;
 /* (scheme base) procedures the middle end knows (M1 part A): calls to values,
@@ -693,7 +694,7 @@ static void norm_letrec(obj x, bld *b) {
     for (i = 0; i < n; i++)
         if (early[i]) {
             vs[i]->flags |= V_ASSIGNED | V_CHECK;
-            if (vs[i]->flags & V_CAPTURED) vs[i]->flags |= V_BOXED;
+            if ((vs[i]->flags & V_CAPTURED) || pm_get(&ir_forcebox, vs[i]->name)) vs[i]->flags |= V_BOXED;
             bind_let(b, vs[i], vs[i]->flags & V_BOXED ? prim1(PI_rt_make_box, mk_const(RT_UNDEF)) : mk_const(RT_UNDEF), x);
         }
     for (i = 0; i < n; i = j) {
@@ -1268,9 +1269,10 @@ static void normalize_program(library *order) {
         if (tops[i].g) gvar(tops[i].g)->def_index = i;
         analyse(tops[i].form, 0);
     }
-    for (i = 0; i < nvars; i++) { /* variables both assigned and captured live in boxes */
-        ir_var *v = prog->vars[i];
-        if (!(v->flags & V_GLOBAL) && (v->flags & V_ASSIGNED) && (v->flags & V_CAPTURED)) v->flags |= V_BOXED;
+    for (i = 0; i < nvars; i++) { /* variables both assigned and captured live in boxes (and the */
+        ir_var *v = prog->vars[i]; /* assigned ones a tier-3 capture may copy: ir_classify_callcc) */
+        if (!(v->flags & V_GLOBAL) && (v->flags & V_ASSIGNED) && ((v->flags & V_CAPTURED) || pm_get(&ir_forcebox, v->name)))
+            v->flags |= V_BOXED;
     }
     cur_lib = NULL;
     prog->main = new_lambda(sym("main"), NULL);
@@ -1372,7 +1374,8 @@ ir_program *ir_build(library *order, const ir_opts *o) {
      * after optimization are rebuilt as tier 2 (at most a few rounds: each demotes a site). */
     /* Then the flow analysis (analyze.c): while it rewrites the IR structurally (decided branches,
      * dead code, new known calls) the optimizer runs again (at most three times), then a last
-     * analysis gives the final types and the diagnostics. */
+     * analysis gives the final types and the diagnostics, and the call/cc sites are classified
+     * (tier 2 or 3: analyze.c ir_classify_callcc), which may ask for one more round. */
     for (;;) {
         obj fails, l;
         int k;
@@ -1385,11 +1388,14 @@ ir_program *ir_build(library *order, const ir_opts *o) {
             ir_optimize(prog);
             fails = ir_tier1_failures(prog);
         }
-        if (fails == RT_NIL) break;
+        if (fails == RT_NIL) {
+            if (!getenv("SHIKRA_NOANALYZE")) ir_analyze(prog, 1);
+            /* call/cc sites: tier 2 or 3; more assigned variables to box means another round */
+            if (!ir_classify_callcc(prog)) break;
+        }
         for (l = fails; l != RT_NIL; l = RT_CDR(l)) pm_put(&demoted, RT_CAR(l), (void *)1);
         reset_round();
     }
-    if (!getenv("SHIKRA_NOANALYZE")) ir_analyze(prog, 1);
     ir_finish(prog);
     ir_represent(prog);
     name_lambdas();

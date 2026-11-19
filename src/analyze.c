@@ -987,6 +987,399 @@ int ir_analyze(ir_program *p, int last) {
     return structural;
 }
 
+/* ---- call/cc sites: tier 2 or tier 3 (spec §8.2; DESIGN.md "Tier 3 continuations as built") ----
+ * A %call/cc site is tier 2 when its continuation k provably cannot be invoked once the frame of
+ * its rt_call_cc is gone from the stack. Taint analysis over the final IR, 64 sites at a time: a
+ * value is tainted by site s if it may be (or contain) a continuation of s -- k itself, closures
+ * that capture a tainted variable, and immutable data built from tainted values (results of
+ * allocating primitives; accessors return the taint of their argument). Taints flow through lets,
+ * join parameters, known calls (arguments into parameters, results back), set! of locals, boxes
+ * set by the procedure that binds them, and the winders and handler lists (dynamic-wind,
+ * parameterize, with-exception-handler: entries live only while the activation that pushed them is
+ * on the stack, and continuations restore them with the stack). An atom whose type cannot hold a
+ * reference (fixnum, character, string...) carries no taint. Site s escapes -- tier 3 -- if a value
+ * tainted by s may reach code that outlives the extent: it is returned by s's receiver (it becomes
+ * the call/cc's value), passed to unknown code (an unknown call, apply, a continuation other than
+ * the receiver's own k), stored by a mutating primitive, a box of another procedure or a global,
+ * or returned by a procedure that unknown code may call; an unknown receiver escapes too. What
+ * survives is k passed down to known procedures that only call it or pass it further down. */
+typedef unsigned long long tset;
+#define CARRIER (T_PAIR | T_PCELL | T_VECTOR | T_PROC | T_RECORD | T_OTHER)
+typedef struct { ir_node *n; ir_lambda *recv, *owner; ir_var *dst; } ccsite;
+static tset *TV, *TB, *TR, TW, TH, TE; /* variables, box contents, procedure results; winders, handlers; escaped */
+static char *CR, *CE, *CK, *CAP;       /* reached; may be called by unknown code; used as a receiver; may be live in a capture */
+static int *KC, *NFV, *FVS, *LST;      /* known calls; free variables (count, stamp); nested in (stamp) */
+static ir_var ***FV, **FVT;            /* free variables; collection buffer */
+static int fvt_cap;
+static ir_lambda **RPV, **CW;           /* variable -> only-receiver lambda whose k it is; worklist */
+static ccsite *CS;
+static int ncs, cs_cap, ncw, cbase, tch;
+static pmap site_ix;
+static void tflow(tset *d, tset s) { if (s & ~*d) { *d |= s; tch = 1; } }
+static void tesc(tset t, const char *why) { /* escaped (SHIKRA_TRACE=2 says why) */
+    static int tr = -1;
+    if (tr < 0) tr = getenv("SHIKRA_TRACE") && !strcmp(getenv("SHIKRA_TRACE"), "2");
+    if (tr && (t & ~TE)) fprintf(stderr, "call/cc: sites %llx (of %d) escape: %s\n", t & ~TE, cbase, why);
+    TE |= t;
+}
+static tset tof(ir_node *a) {
+    ir_var *v;
+    if (a->kind != IR_REF || ((v = a->u.ref.v)->flags & V_GLOBAL) || !(ir_atom_type(a) & CARRIER)) return 0;
+    return TV[v->id];
+}
+static void creach(ir_lambda *L) {
+    int i;
+    if (CR[L->id]) return;
+    CR[L->id] = 1;
+    CW[ncw++] = L;
+    for (i = 0; i < L->nclauses; i++) creach(L->clauses[i]);
+}
+static void cescape(ir_lambda *L) {
+    int i;
+    CE[L->id] = 1;
+    for (i = 0; i < L->nclauses; i++) CE[L->clauses[i]->id] = 1;
+}
+static ir_lambda *clam(ir_node *a) { return a->kind == IR_REF ? a->u.ref.v->known : NULL; }
+/* uses of procedure values: a reference that is not the callee of a known call (or a call/cc's
+ * receiver) lets unknown code call the procedure */
+static void cuse(ir_node *a) { ir_lambda *K = clam(a); if (K) { cescape(K); creach(K); } }
+static void cfv(ir_node *a, ir_lambda *L) { /* a free variable of L? */
+    ir_var *v;
+    ir_lambda *O;
+    if (a->kind != IR_REF || ((v = a->u.ref.v)->flags & V_GLOBAL) || FVS[v->id] == L->id + 1) return;
+    if ((O = v->owner) && LST[O->id] == L->id + 1) return; /* bound in L or a procedure nested in it */
+    FVS[v->id] = L->id + 1;
+    if (NFV[L->id] == fvt_cap) {
+        fvt_cap = fvt_cap * 2 + 64;
+        FVT = (ir_var **)realloc(FVT, sizeof(ir_var *) * (size_t)fvt_cap);
+        if (!FVT) die("out of memory");
+    }
+    FVT[NFV[L->id]++] = v;
+}
+static void cscan(ir_node *n, ir_lambda *L, ir_lambda *F, int scan); /* F: collect free variables of F */
+static void cscan_lam(ir_lambda *M, ir_lambda *F) {
+    int i;
+    LST[M->id] = F->id + 1;
+    if (M->nclauses) { for (i = 0; i < M->nclauses; i++) cscan_lam(M->clauses[i], F); return; }
+    if (M->body) cscan(M->body, M, F, 0);
+}
+static void cscan_atoms(ir_node **a, int n, ir_lambda *F, int scan) {
+    int i;
+    for (i = 0; i < n; i++) { if (F) cfv(a[i], F); else if (scan) cuse(a[i]); }
+}
+static void cscan(ir_node *n, ir_lambda *L, ir_lambda *F, int scan) {
+    int i;
+    for (; n; ) {
+        switch (n->kind) {
+        case IR_LET: {
+            ir_node *r = n->u.let.rhs;
+            switch (r->kind) {
+            case IR_CONST: case IR_REF: cscan_atoms(&r, 1, F, scan); break;
+            case IR_PRIM: cscan_atoms(r->u.prim.args, r->u.prim.n, F, scan); break;
+            case IR_SET: cscan_atoms(&r->u.set.val, 1, F, scan); break;
+            case IR_LAMBDA:
+                if (F) cscan_lam(r->u.lam, F);
+                else if (scan) { creach(r->u.lam); if (!n->u.let.v || n->u.let.v->known != r->u.lam) cescape(r->u.lam); }
+                break;
+            case IR_CALL: cscan(r, L, F, scan); break;
+            default: break;
+            }
+            n = n->u.let.body;
+            continue;
+        }
+        case IR_FIX:
+            for (i = 0; i < n->u.fix.n; i++) {
+                if (F) cscan_lam(n->u.fix.lams[i], F);
+                else if (scan) { creach(n->u.fix.lams[i]); if (n->u.fix.vars[i]->known != n->u.fix.lams[i]) cescape(n->u.fix.lams[i]); }
+            }
+            n = n->u.fix.body;
+            continue;
+        case IR_LETJ: {
+            ir_join *j;
+            for (j = n->u.letj.j; j; j = j->next) cscan(j->body, L, F, scan);
+            n = n->u.letj.body;
+            continue;
+        }
+        case IR_IF: cscan_atoms(&n->u.if_.test, 1, F, scan); cscan(n->u.if_.then, L, F, scan); n = n->u.if_.els; continue;
+        case IR_JUMP: cscan_atoms(n->u.jump.args, n->u.jump.n, F, scan); return;
+        case IR_RET: cscan_atoms(&n->u.ret, 1, F, scan); return;
+        case IR_CALL: {
+            ir_lambda *K = n->u.call.known, *R;
+            if (F) { if (n->u.call.fn) cfv(n->u.call.fn, F); cscan_atoms(n->u.call.args, n->u.call.n, F, 0); return; }
+            if (!scan) return;
+            if (n->u.call.ctl == CTL_CALLCC) {
+                ccsite *s;
+                if (pm_get(&site_ix, n)) return;
+                if (ncs == cs_cap) {
+                    cs_cap = cs_cap * 2 + 16;
+                    CS = (ccsite *)realloc(CS, sizeof(ccsite) * (size_t)cs_cap);
+                    if (!CS) die("out of memory");
+                }
+                s = &CS[ncs++];
+                pm_put(&site_ix, n, (void *)(intptr_t)ncs);
+                s->n = n;
+                s->owner = L;
+                s->dst = NULL;
+                R = clam(n->u.call.args[0]);
+                s->recv = R && (R = resolve(R, 1)) && !R->rest ? R : NULL;
+                if (s->recv) { CK[s->recv->id] = 1; creach(clam(n->u.call.args[0])); }
+                else cuse(n->u.call.args[0]);
+                return;
+            }
+            if (K) { KC[K->id]++; creach(K); }
+            else if (n->u.call.fn) cuse(n->u.call.fn);
+            cscan_atoms(n->u.call.args, n->u.call.n, NULL, 1);
+            return;
+        }
+        default: return;
+        }
+    }
+}
+static void csite_dst(ir_node *n) { /* LET v = (%call/cc ...): the value goes to v */
+    for (; n; ) {
+        switch (n->kind) {
+        case IR_LET: {
+            intptr_t i = n->u.let.rhs->kind == IR_CALL ? (intptr_t)pm_get(&site_ix, n->u.let.rhs) : 0;
+            if (i) CS[i - 1].dst = n->u.let.v;
+            n = n->u.let.body;
+            continue;
+        }
+        case IR_FIX: n = n->u.fix.body; continue;
+        case IR_LETJ: {
+            ir_join *j;
+            for (j = n->u.letj.j; j; j = j->next) csite_dst(j->body);
+            n = n->u.letj.body;
+            continue;
+        }
+        case IR_IF: csite_dst(n->u.if_.then); n = n->u.if_.els; continue;
+        default: return;
+        }
+    }
+}
+static tset tclo(ir_lambda *L) {
+    tset t = 0;
+    int i;
+    for (i = 0; i < L->nclauses; i++) t |= tclo(L->clauses[i]);
+    for (i = 0; i < NFV[L->id]; i++) {
+        ir_var *v = FV[L->id][i];
+        if (!v->type || (v->type & CARRIER) || (v->flags & V_BOXED)) t |= TV[v->id] | TB[v->id];
+    }
+    return t;
+}
+static void tsite_value(ccsite *s, tset t) { tflow(s->dst ? &TV[s->dst->id] : &TR[s->owner->id], t); }
+static tset tcall(ir_node *c, ir_lambda *L) {
+    ir_lambda *K = c->u.call.known;
+    tset t = 0;
+    int i;
+    (void)L;
+    if (c->u.call.ctl == CTL_CALLCC) {
+        ccsite *s = &CS[(intptr_t)pm_get(&site_ix, c) - 1];
+        return s->recv ? TR[s->recv->id] : 0;
+    }
+    if (c->u.call.ctl == CTL_APPLY) { tesc(tof(c->u.call.args[1]), "apply"); return 0; }
+    if (c->u.call.ctl == CTL_CWV) return 0; /* producer and consumer escape (their results: see below) */
+    if (K) {
+        for (i = 0; i < c->u.call.n; i++) {
+            tset a = tof(c->u.call.args[i]);
+            tflow(&TV[K->params[i < K->nreq ? i : K->nreq]->id], a); /* extra arguments: the rest list */
+        }
+        return TR[K->id];
+    }
+    for (i = 0; i < c->u.call.n; i++) t |= tof(c->u.call.args[i]);
+    if (t && c->u.call.fn && c->u.call.fn->kind == IR_REF && RPV[c->u.call.fn->u.ref.v->id]) {
+        /* (k v ...) with k a receiver's own parameter: the values become those call/cc sites' values */
+        ir_lambda *R = RPV[c->u.call.fn->u.ref.v->id];
+        for (i = 0; i < ncs; i++) if (CS[i].recv == R) tsite_value(&CS[i], t);
+        return 0;
+    }
+    tesc(t, "argument of an unknown call");
+    return 0;
+}
+static tset tprim(ir_node *r, ir_lambda *L) {
+    int op = r->u.prim.op, n = r->u.prim.n, i, fl;
+    ir_node **x = r->u.prim.args;
+    tset t = 0;
+    char res;
+    for (i = 0; i < n; i++) t |= tof(x[i]);
+    switch (op) {
+    case PI_VALUES: return t;
+    case PI_rt_winders_get: return TW;
+    case PI_rt_handlers_get: return TH;
+    case PI_rt_winders_set: tflow(&TW, t); return 0;
+    case PI_rt_handlers_set: tflow(&TH, t); return 0;
+    case PI_rt_parameter_binding: return t | TW;
+    case PI_rt_make_box: return t;
+    case PI_rt_box_ref: return t | (x[0]->kind == IR_REF ? TB[x[0]->u.ref.v->id] : 0);
+    case PI_rt_box_set:
+        if (x[0]->kind == IR_REF && (x[0]->u.ref.v->flags & V_BOXED) && x[0]->u.ref.v->owner == L) tflow(&TB[x[0]->u.ref.v->id], tof(x[1]));
+        else tesc(tof(x[1]), "box of another procedure");
+        return 0;
+    default: break;
+    }
+    if (op >= NPRIMS) { tesc(t, "primitive"); return 0; }
+    fl = prim_table[op].flags;
+    for (i = 0; i < n; i++) /* stored somewhere that may outlive the extent */
+        if (leaks(op, i) && !((fl & PF_ALLOC) && !(fl & PF_EFFECT))) tesc(tof(x[i]), prim_table[op].name);
+    res = prim_table[op].res;
+    return res == 'a' || res == 'p' || res == 'l' || res == 'v' || res == 'r' || res == 'x' ? t : 0;
+}
+static tset trhs(ir_node *r, ir_lambda *L) {
+    switch (r->kind) {
+    case IR_CONST: case IR_REF: return tof(r);
+    case IR_LAMBDA: return tclo(r->u.lam);
+    case IR_SET:
+        if (r->u.set.v->flags & V_GLOBAL) tesc(tof(r->u.set.val), "set! of a global");
+        else tflow(&TV[r->u.set.v->id], tof(r->u.set.val));
+        return 0;
+    case IR_PRIM: return tprim(r, L);
+    case IR_CALL: return tcall(r, L);
+    default: return 0;
+    }
+}
+static void tterm(ir_node *n, ir_lambda *L) {
+    int i;
+    for (; n; ) {
+        switch (n->kind) {
+        case IR_LET: {
+            tset t = trhs(n->u.let.rhs, L);
+            if (n->u.let.v) tflow(&TV[n->u.let.v->id], t);
+            n = n->u.let.body;
+            continue;
+        }
+        case IR_FIX:
+            for (i = 0; i < n->u.fix.n; i++) tflow(&TV[n->u.fix.vars[i]->id], tclo(n->u.fix.lams[i]));
+            n = n->u.fix.body;
+            continue;
+        case IR_LETJ: {
+            ir_join *j;
+            for (j = n->u.letj.j; j; j = j->next) tterm(j->body, L);
+            n = n->u.letj.body;
+            continue;
+        }
+        case IR_JUMP:
+            for (i = 0; i < n->u.jump.n; i++) tflow(&TV[n->u.jump.j->params[i]->id], tof(n->u.jump.args[i]));
+            return;
+        case IR_IF: tterm(n->u.if_.then, L); n = n->u.if_.els; continue;
+        case IR_RET: tflow(&TR[L->id], tof(n->u.ret)); return;
+        case IR_CALL: tflow(&TR[L->id], tcall(n, L)); return;
+        default: return;
+        }
+    }
+}
+/* may be on the stack, to be resumed, when a tier-3 continuation is captured */
+static int ccap(ir_node *n, int anycap) {
+    int i;
+    for (; n; ) {
+        ir_node *c = n->kind == IR_LET ? n->u.let.rhs : n;
+        if (c->kind == IR_CALL) {
+            ir_lambda *K = c->u.call.known;
+            if (c->u.call.ctl == CTL_CALLCC) {
+                ccsite *s = &CS[(intptr_t)pm_get(&site_ix, c) - 1];
+                if ((c->spec & N_TIER3) || (s->recv ? CAP[s->recv->id] : anycap)) return 1;
+            } else if (K ? CAP[K->id] : anycap) return 1;
+        }
+        switch (n->kind) {
+        case IR_LET: n = n->u.let.body; continue;
+        case IR_FIX: n = n->u.fix.body; continue;
+        case IR_LETJ: {
+            ir_join *j;
+            for (j = n->u.letj.j; j; j = j->next) if (ccap(j->body, anycap)) return 1;
+            n = n->u.letj.body;
+            continue;
+        }
+        case IR_IF: if (ccap(n->u.if_.then, anycap)) return 1; n = n->u.if_.els; continue;
+        default: (void)i; return 0;
+        }
+    }
+    return 0;
+}
+int ir_classify_callcc(ir_program *p) {
+    ir_lambda *L;
+    int i, k, b, added = 0, more;
+    P = p;
+    ids();
+    ncs = ncw = 0;
+    memset(&site_ix, 0, sizeof site_ix);
+    CR = NEWN(char, nlams), CE = NEWN(char, nlams), CK = NEWN(char, nlams), CAP = NEWN(char, nlams);
+    KC = NEWN(int, nlams), NFV = NEWN(int, nlams), FVS = NEWN(int, p->nvars), LST = NEWN(int, nlams);
+    FV = NEWN(ir_var **, nlams), CW = NEWN(ir_lambda *, nlams), RPV = NEWN(ir_lambda *, p->nvars);
+    TV = NEWN(tset, p->nvars), TB = NEWN(tset, p->nvars), TR = NEWN(tset, nlams);
+    creach(p->main);
+    for (L = p->lambdas; L; L = L->next) if (!L->dead && L->keep) { creach(L); cescape(L); }
+    for (i = 0; i < ncw; i++) if (CW[i]->body && !CW[i]->nclauses) cscan(CW[i]->body, CW[i], NULL, 1);
+    p->tier3 = 0;
+    if (!ncs) return 0;
+    for (i = 0; i < ncw; i++) {
+        L = CW[i];
+        if (L->nclauses || !L->body) continue;
+        LST[L->id] = L->id + 1;
+        cscan(L->body, L, L, 0);
+        FV[L->id] = NEWN(ir_var *, NFV[L->id]);
+        memcpy(FV[L->id], FVT, sizeof(ir_var *) * (size_t)NFV[L->id]);
+        csite_dst(L->body);
+        if (CK[L->id] && !CE[L->id] && !KC[L->id] && L->nreq == 1 && !(L->params[0]->flags & (V_ASSIGNED | V_BOXED)))
+            RPV[L->params[0]->id] = L;
+    }
+    for (b = 0; b < ncs; b += 64) {
+        int nb = ncs - b < 64 ? ncs - b : 64;
+        tset esc;
+        cbase = b;
+        memset(TV, 0, sizeof(tset) * (size_t)p->nvars);
+        memset(TB, 0, sizeof(tset) * (size_t)p->nvars);
+        memset(TR, 0, sizeof(tset) * (size_t)nlams);
+        TW = TH = TE = 0;
+        for (k = 0; k < nb; k++)
+            if (CS[b + k].recv) TV[CS[b + k].recv->params[0]->id] |= 1ull << k;
+            else TE |= 1ull << k;
+        do {
+            tch = 0;
+            for (i = 0; i < ncw; i++) {
+                L = CW[i];
+                if (L->nclauses || !L->body) continue;
+                if (L == p->travel) tflow(&TV[L->params[0]->id], TW); /* the runtime passes it saved winders */
+                tterm(L->body, L);
+            }
+        } while (tch);
+        for (i = 0; i < ncw; i++)
+            if (CE[CW[i]->id] || (CW[i]->dispatch && CE[CW[i]->dispatch->id])) tesc(TR[CW[i]->id], idname(CW[i]->name));
+        esc = TE;
+        for (k = 0; k < nb; k++) {
+            ccsite *s = &CS[b + k];
+            if (s->recv && (TR[s->recv->id] >> k & 1)) esc |= 1ull << k;
+            if (esc >> k & 1) { s->n->spec |= N_TIER3; p->tier3++; }
+            else s->n->spec &= ~N_TIER3;
+            if (getenv("SHIKRA_TRACE")) {
+                obj f;
+                intptr_t line = 0, col = 0;
+                if (!(s->n->loc && rt_srcloc_lookup(s->n->loc, &f, &line, &col))) f = RT_FALSE;
+                fprintf(stderr, "call/cc site %s:%ld:%ld in %s: tier %d\n", rt_is_string(f) ? RT_STR(f)->buf : "?", (long)line, (long)col,
+                        idname(s->owner->name), esc >> k & 1 ? 3 : 2);
+            }
+        }
+    }
+    if (!p->tier3) return 0;
+    do { /* procedures that may be resumed from a tier-3 copy of the stack */
+        int anycap = 0;
+        more = 0;
+        for (i = 0; i < ncw; i++) if (CAP[CW[i]->id] && (CE[CW[i]->id] || CW[i]->keep)) anycap = 1;
+        for (i = 0; i < ncw; i++) {
+            L = CW[i];
+            if (CAP[L->id] || L->nclauses || !L->body) continue;
+            if (ccap(L->body, anycap)) CAP[L->id] = more = 1;
+            if (CAP[L->id] && L->dispatch) CAP[L->dispatch->id] = 1;
+        }
+    } while (more);
+    for (i = 0; i < p->nvars; i++) {
+        ir_var *v = p->vars[i];
+        if ((v->flags & V_ASSIGNED) && !(v->flags & (V_GLOBAL | V_BOXED)) && v->owner && CR[v->owner->id] && CAP[v->owner->id] &&
+            !pm_get(&ir_forcebox, v->name)) {
+            pm_put(&ir_forcebox, v->name, (void *)1);
+            added = 1;
+        }
+    }
+    return added;
+}
+
 /* ---- representations (after ir_finish; spec §6.2, §4.1, §8.5) ----
  * A variable proven to hold only fixnums is a C intptr_t holding the tagged word (conversions
  * to obj are free). One proven to hold only flonums is a C double unless that costs boxing: a

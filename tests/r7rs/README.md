@@ -92,7 +92,9 @@ after `call/cc` has returned. That is tier 3 (spec §8.2):
 
 Until tier 3 exists, M1 can be met by `base.scm` with this one failure
 (`658 tests, 657 passed, 1 failed`). The test is part of `(scheme base)`
-and was not removed.
+and was not removed. (Resolved in M5: with tier 3 continuations the compiled
+run passes it too, `658 tests, 658 passed, 0 failed`; DESIGN.md "Tier 3
+continuations as built".)
 
 ## Validation against Chibi Scheme
 

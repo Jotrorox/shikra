@@ -220,6 +220,11 @@ static void gc_scan(char *p, int pair) {
     else if (t == RT_T_STRING) gc_mark_any((uintptr_t)((rt_string *)p)->buf);
     else if (t == RT_T_PORT) { gc_mark_any((uintptr_t)((rt_port *)p)->buf); gc_mark(((rt_port *)p)->name); }
     else if (t == RT_T_PROC) gc_push(((rt_proc *)p)->free, ((rt_proc *)p)->free + (h >> 16));
+#ifdef RT_TIER3
+    /* a tier-3 continuation's stack copy: every word conservatively, as on the stack (the low
+     * bit of lo flags the range for gc_drain) */
+    else if (t == RT_T_CONT) gc_push((obj *)(void *)((uintptr_t)(p + 8) | 1), (obj *)(void *)(p + 8 + (h >> 16)));
+#endif
 }
 static void gc_mark_obj(gc_block *b, char *base, char *p, int pair) {
     size_t off = (size_t)(p - base), g = off >> 3, l, last;
@@ -306,6 +311,14 @@ static void gc_mark_any(uintptr_t a) {
 static void gc_drain(void) {
     while (gc_top) {
         obj *lo = gc_stack[gc_top - 1].lo, *hi = gc_stack[--gc_top].hi;
+#ifdef RT_TIER3
+        if ((uintptr_t)lo & 1) { /* conservative range (stack copy) */
+            lo = (obj *)(void *)((uintptr_t)lo - 1);
+            if (hi - lo > 64) { gc_push((obj *)(void *)((uintptr_t)(lo + 64) | 1), hi); hi = lo + 64; }
+            while (hi > lo) gc_mark_any(RT_W(*--hi));
+            continue;
+        }
+#endif
         if (hi - lo > 64) { gc_push(lo + 64, hi); hi = lo + 64; } /* long vectors in slices */
         while (hi > lo) gc_mark(*--hi);                         /* first field popped first */
     }
