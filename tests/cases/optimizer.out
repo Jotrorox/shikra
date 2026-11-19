@@ -1,0 +1,24 @@
+counters 3 2 
+sum 10 
+adder 15 
+shadow 30 1000 
+free 1001 
+hygiene 7 
+recursion done pong 2432902008176640000 21 
+effects 2 none (1 2 3 4 5) 
+order (a b c) (a b c) 
+fresh (0 1 2 3 4) 
+fresh-assigned (10 11 12) (20 21 22) 
+do-fresh (9 4 1 0) 
+letrec (#t #f) (#f #t) 
+letrec* (1 2 3) 
+machine -7 
+deep 100000 
+arity "two-args: wrong number of arguments" 
+car-error ("car: expected pair" (())) 
+escape 4 #f 
+escaping 2 
+deep-escape reached 
+wind (in out) 
+constants 4 2 
+alias 9 

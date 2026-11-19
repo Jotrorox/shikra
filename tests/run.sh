@@ -12,7 +12,8 @@
 #             (e.g. --unicode=full, also given to the interpreter); NAME.args: the program's
 #             arguments (also for interp);
 #             the generated C must compile with -Wall -Wextra -Werror;
-#             tests/errors/NAME.scm: `shikra check` must fail with stderr containing NAME.err
+#             tests/errors/NAME.scm: `shikra check` must fail with stderr containing NAME.err;
+#             tests/warnings/NAME.scm: `shikra check` must succeed with stderr equal to NAME.warn
 #   expand    tests/expand/NAME.scm: the program's core forms as `shikra debug-expand`
 #             prints them (renaming stripped, as the REPL's ,expand) must equal NAME.out
 #   r7rs      the adapted R7RS suite (tests/r7rs/README.md): each FILE:ENGINE[:FLAG] in r7rs_runs
@@ -126,7 +127,9 @@ run_cases() {
         esac
         # shellcheck disable=SC2086
         case $mode in
-        compiled) $SHIKRA build $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" $args < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
+        compiled) $SHIKRA build -O${opt:-2} $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" $args < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
+        tramp) $SHIKRA build -O${opt:-0} --no-musttail $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" $args < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
+        gcc) $SHIKRA build -O${opt:-2} --cc "$GCC" $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 && "$TMP/prog" $args < "$in" > "$TMP/c.out" 2>> "$TMP/c.err" ;;
         stress) every=1
             [ -f "$base.stress-interval" ] && every=$(cat "$base.stress-interval")
             $SHIKRA build -O$opt --gc-stress $flags "$f" -o "$TMP/prog" > "$TMP/c.err" 2>&1 &&
@@ -142,17 +145,25 @@ run_cases() {
         else bad "$f [$mode${opt:+ -O$opt}] (exit $st)"; head -5 "$TMP/c.err"; diff "$base.out" "$TMP/c.out" | head -10; fi
         if [ "$mode" = compiled ]; then
             # shellcheck disable=SC2086
-            if $SHIKRA emit-c $flags "$f" > "$TMP/c.c" 2> /dev/null &&
+            if $SHIKRA emit-c -O${opt:-2} $flags "$f" > "$TMP/c.c" 2> /dev/null &&
                 $CC -std=c99 -Wall -Wextra -Werror -fsyntax-only "$TMP/c.c" 2> "$TMP/cc.err"; then ok
             else bad "$f (generated C is not warning-free)"; head -5 "$TMP/cc.err"; fi
         fi
     done
-    if [ "$mode" = compiled ]; then
+    if [ "$mode" = compiled ] && [ "${opt:-2}" = 2 ]; then
         for f in tests/errors/*.scm; do
             [ -f "$f" ] || continue
             if $SHIKRA check "$f" > /dev/null 2> "$TMP/e.err"; then bad "$f (expected a diagnostic)"
             elif grep -qF -- "$(cat "${f%.scm}.err")" "$TMP/e.err"; then ok
             else bad "$f"; head -3 "$TMP/e.err"; fi
+        done
+        # warnings (spec §11.3): check succeeds, stderr equals NAME.warn; -w silences them
+        for f in tests/warnings/*.scm; do
+            [ -f "$f" ] || continue
+            if $SHIKRA check "$f" > /dev/null 2> "$TMP/w.err" && cmp -s "$TMP/w.err" "${f%.scm}.warn"; then ok
+            else bad "$f (warnings)"; diff "${f%.scm}.warn" "$TMP/w.err" | head -5; fi
+            if $SHIKRA check -w "$f" > /dev/null 2> "$TMP/w.err" && [ ! -s "$TMP/w.err" ]; then ok
+            else bad "$f (-w)"; head -3 "$TMP/w.err"; fi
         done
     fi
 }
@@ -167,9 +178,9 @@ run_repl() {
         args=
         [ -f "$base.args" ] && args=$(cat "$base.args")
         # shellcheck disable=SC2086
-        # C variable numbers in ,c output (v_x_30) depend on the library sources: normalised
+        # C variable and label numbers in ,c output (v_x_30, j31) depend on the library sources: normalised
         (cd tests/repl && ../../shikra repl $args < "$(basename "$f")" 2>&1) |
-            sed -E 's/(v_[A-Za-z0-9_]*)_[0-9]+/\1_N/g' > "$TMP/repl.out"
+            sed -E 's/(v_[A-Za-z0-9_]*)_[0-9]+/\1_N/g; s/(^| )j[0-9]+:/\1jN:/; s/goto j[0-9]+;/goto jN;/' > "$TMP/repl.out"
         if cmp -s "$TMP/repl.out" "$base.out"; then ok
         else bad "$f [repl]"; diff "$base.out" "$TMP/repl.out" | head -20; fi
     done
@@ -197,12 +208,15 @@ run_r7rs() {
         exp=tests/r7rs/expected/$name.$engine
         # shellcheck disable=SC2086
         case $engine in
-        compiled) $SHIKRA build $flag "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
+        compiled) $SHIKRA build -O${opt:-2} $flag "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
             "$TMP/r7rs" < /dev/null > "$TMP/r7.out" 2>> "$TMP/r7.err" ;;
         interp) $SHIKRA interp $flag "$f" < /dev/null > "$TMP/r7.out" 2> "$TMP/r7.err" ;;
         stress) exp=tests/r7rs/expected/$name.compiled
             $SHIKRA build -O$opt --gc-stress $flag "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
             SHIKRA_GC_STRESS=1 "$TMP/r7rs" < /dev/null > "$TMP/r7.out" 2>> "$TMP/r7.err" ;;
+        tramp) exp=tests/r7rs/expected/$name.compiled
+            $SHIKRA build -O${opt:-0} --no-musttail $flag "$f" -o "$TMP/r7rs" > "$TMP/r7.err" 2>&1 &&
+            "$TMP/r7rs" < /dev/null > "$TMP/r7.out" 2>> "$TMP/r7.err" ;;
         interp-stress) exp=tests/r7rs/expected/$name.interp
             SHIKRA_GC_STRESS=1 $SHIKRA interp $flag "$f" < /dev/null > "$TMP/r7.out" 2> "$TMP/r7.err" ;;
         esac
@@ -212,10 +226,102 @@ run_r7rs() {
         else bad "$f [$engine${opt:+ -O$opt}]"; head -5 "$TMP/r7.err"; diff "$exp" "$TMP/r7.sum" | head -20; fi
         if [ "$engine" = compiled ]; then
             # shellcheck disable=SC2086
-            if $SHIKRA emit-c $flag "$f" > "$TMP/r7.c" 2> /dev/null &&
+            if $SHIKRA emit-c -O${opt:-2} $flag "$f" > "$TMP/r7.c" 2> /dev/null &&
                 $CC -std=c99 -Wall -Wextra -Werror -fsyntax-only "$TMP/r7.c" 2> "$TMP/cc.err"; then ok
             else bad "$f (generated C is not warning-free)"; head -5 "$TMP/cc.err"; fi
         fi
+    done
+}
+
+# run_levels: the compiled cases and the compiled r7rs runs at -O2, -O0 and -Os (M4-1: the
+# optimizer's budgets differ per level; every level must give the same results).
+compiled_runs=$(echo "$r7rs_runs" | tr ' ' '\n' | grep ':compiled' | tr '\n' ' ')
+# The -O0 pass raises the C stack to 64 MB, as the stress pass does (callcc.scm recurses 10^5
+# deep and -O0 frames are larger).
+run_levels() {
+    for opt in 2 0 s; do
+        (   [ $opt = 0 ] && ulimit -s 65520 2> /dev/null
+            run_cases compiled
+            if [ "${1:-}" = r7rs ]; then
+                if [ $opt = 2 ]; then run_r7rs; else r7rs_runs=$compiled_runs; run_r7rs; fi
+            fi
+            echo "$pass $fail" > "$TMP/levels.count" )
+        set -- "${1:-}" $(cat "$TMP/levels.count")
+        pass=$2 fail=$3
+    done
+    opt=
+}
+# run_tramp: tail calls through the trampoline (--no-musttail; spec §8.1 fallback): every case
+# and every compiled r7rs run, at -O0 (no sibling-call optimisation to hide a missing tail call).
+run_tramp() {
+    (   opt=0
+        ulimit -s 65520 2> /dev/null
+        run_cases tramp
+        r7rs_runs=$(echo "$compiled_runs" | tr ' ' '\n' | sed -n 's/:compiled/:tramp/p' | tr '\n' ' ')
+        run_r7rs
+        echo "$pass $fail" > "$TMP/tramp.count" )
+    set -- $(cat "$TMP/tramp.count")
+    pass=$1 fail=$2
+}
+# run_gcc: the compiled cases built by GCC (GCC=gcc-16 by default; not part of all).
+GCC=${GCC:-gcc-16}
+
+# run_shape: tests/shape/NAME.scm, structural properties of the emitted C (M4-1, spec §12): the
+# program is compiled at each level of NAME.check's "levels" line (default: 2 s 0), must run with
+# output NAME.out, and its generated functions (between the literals and rt_program_main) must
+# satisfy NAME.check, one directive per line ('#' comments; "flags ..." adds shikra flags, e.g.
+# --keep NAME to keep a definition as its own function so its body can be selected):
+#   all          select every generated function
+#   fn REGEX     select the functions whose header line matches REGEX
+#   fnof REGEX   select the functions containing a line that matches REGEX
+#   loops N      the selection has at least N loops (a label and a later goto back to it); select
+#                the loop bodies (label to last goto)
+#   no REGEX     no line of the selection matches          has REGEX   some line does
+# REGEX is an extended regular expression without spaces (use [[:space:]]; "(" as [(]).
+shape_select() { # $1 directive, $2 argument; selection in $TMP/sel, program in $TMP/prog.fns
+    case $1 in
+    all) cp "$TMP/prog.fns" "$TMP/sel" ;;
+    fn) awk -v re="$2" '/^static obj [A-Za-z0-9_]+\(.*\) \{$/ { on = ($0 ~ re) } on { print } /^}$/ { on = 0 }' "$TMP/prog.fns" > "$TMP/sel" ;;
+    fnof) awk -v re="$2" '/^static obj [A-Za-z0-9_]+\(.*\) \{$/ { n = 0; hit = 0 } { buf[n++] = $0; if ($0 ~ re) hit = 1 }
+              /^}$/ { if (hit) for (i = 0; i < n; i++) print buf[i]; n = 0; hit = 0 }' "$TMP/prog.fns" > "$TMP/sel" ;;
+    loops) awk -v want="$2" '{ l[NR] = $0 } END {
+              for (a = 1; a <= NR; a++) if (match(l[a], /^ *(j[0-9]+|entry):;$/)) {
+                  lab = l[a]; gsub(/[ :;]/, "", lab); last = 0
+                  for (b = a + 1; b <= NR; b++) if (index(l[b], "goto " lab ";")) last = b
+                  if (last) { found++; for (b = a; b <= last; b++) print l[b] } }
+              if (found < want) { print "SHAPE-FAIL: " found " loops, expected " want > "/dev/stderr"; exit 1 } }' "$TMP/sel" > "$TMP/sel2" &&
+          mv "$TMP/sel2" "$TMP/sel" ;;
+    esac
+}
+run_shape() {
+    for f in tests/shape/*.scm; do
+        [ -f "$f" ] || continue
+        base=${f%.scm}
+        levels=$(sed -n 's/^levels //p' "$base.check")
+        sflags=$(sed -n 's/^flags //p' "$base.check")
+        for lev in ${levels:-2 s 0}; do
+            what="$f [-O$lev]"
+            # shellcheck disable=SC2086
+            if ! { $SHIKRA build -O$lev -w $sflags "$f" -o "$TMP/shape" > "$TMP/shape.err" 2>&1 && "$TMP/shape" > "$TMP/shape.out" 2>&1 &&
+                   cmp -s "$TMP/shape.out" "$base.out"; }; then
+                bad "$what (build or output)"; head -5 "$TMP/shape.err"; continue
+            fi
+            # shellcheck disable=SC2086
+            $SHIKRA emit-c -O$lev -w $sflags "$f" | sed -n '/^\/\* ==== program ==== \*\//,/^static void rt_program_main/p' > "$TMP/prog.fns"
+            cp "$TMP/prog.fns" "$TMP/sel"
+            failed=
+            while read -r dir arg rest; do
+                case $dir in
+                '' | '#'* | levels | flags) continue ;;
+                all | fn | fnof | loops) shape_select "$dir" "$arg" 2> "$TMP/shape.err" || failed="$dir $arg: $(cat "$TMP/shape.err")" ;;
+                no) if grep -Eq -- "$arg" "$TMP/sel"; then failed="no $arg: $(grep -E -- "$arg" "$TMP/sel" | head -2)"; fi ;;
+                has) grep -Eq -- "$arg" "$TMP/sel" || failed="has $arg" ;;
+                *) failed="unknown directive $dir" ;;
+                esac
+                [ -n "$failed" ] && break
+            done < "$base.check"
+            if [ -z "$failed" ]; then ok; else bad "$what: $failed"; fi
+        done
     done
 }
 
@@ -245,13 +351,18 @@ reader) run_reader ;;
 unit) run_unit ;;
 amalg) run_amalg ;;
 expand) run_expand ;;
-compiled) run_cases compiled ;;
+compiled) run_levels ;;
+compiled2) opt=2; run_cases compiled ;;
 interp) run_cases interp; run_repl ;;
 stress) run_stress ;;
-r7rs) run_r7rs ;;
-all) run_reader; run_unit; run_amalg; run_expand; run_cases compiled; run_r7rs; run_cases interp; run_repl
+r7rs) run_r7rs; for opt in 0 s; do saved_runs=$r7rs_runs; r7rs_runs=$compiled_runs; run_r7rs; r7rs_runs=$saved_runs; done; opt= ;;
+levels) run_levels r7rs ;;
+tramp) run_tramp ;;
+gcc) opt=2; run_cases gcc; opt=0; run_cases gcc; opt= ;;
+shape) run_shape ;;
+all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_cases interp; run_repl; run_tramp
     run_stress ;;
-*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|r7rs|interp|stress]"; exit 2 ;;
+*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape]"; exit 2 ;;
 esac
 if [ "$skip" -gt 0 ]; then echo "tests: $pass passed, $fail failed, $skip skipped (see above)"
 else echo "tests: $pass passed, $fail failed"; fi

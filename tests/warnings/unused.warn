@@ -1,0 +1,4 @@
+tests/warnings/unused.scm:3:1: warning: unused definition helper
+tests/warnings/unused.scm:4:1: warning: unused definition countdown
+tests/warnings/unused.scm:8:1: warning: unused definition noisy
+tests/warnings/unused.scm:2:38: warning: unused import (scheme char)

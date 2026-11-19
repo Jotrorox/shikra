@@ -1,0 +1,8 @@
+flags --keep count-pairs
+all
+no ^static[[:space:]]obj[[:space:]]P_main__count_pairs__
+fn P_main__count_pairs[(]
+loops 2
+no rt_make_proc
+no RT_PROC[(]
+no RT_NT[(]

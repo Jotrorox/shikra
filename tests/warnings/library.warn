@@ -1,0 +1,2 @@
+tests/warnings/wlib/util.sld:7:5: warning: unused definition unused-helper
+tests/warnings/wlib/util.sld:2:25: warning: unused import (scheme char)

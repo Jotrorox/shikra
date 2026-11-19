@@ -1,0 +1,9 @@
+flags --keep parity
+all
+no ^static[[:space:]]obj[[:space:]]P_main__parity__
+fn P_main__parity[(]
+loops 1
+no rt_make_proc
+no RT_PROC[(]
+no RT_NT[(]
+no RT_TAIL

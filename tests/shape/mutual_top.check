@@ -1,0 +1,7 @@
+all
+no ^static[[:space:]]obj[[:space:]]P_main__my_even_p[(]
+no ^static[[:space:]]obj[[:space:]]P_main__my_odd_p[(]
+no RT_TAIL[(]P_main
+fn P_main__my_even_p_group[(]
+loops 1
+no RT_NT[(]

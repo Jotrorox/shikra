@@ -1,0 +1,11 @@
+# inlining for-each needs the -O2 / -Os budget (-O0 inlines only wrappers)
+levels 2 s
+flags --keep first-negative
+all
+no rt_call_cc
+no P_scheme_base__call_cc
+fn P_main__first_negative[(]
+loops 1
+no rt_make_proc
+no RT_PROC[(]
+no RT_NT[(]

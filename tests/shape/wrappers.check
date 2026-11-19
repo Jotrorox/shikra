@@ -1,0 +1,22 @@
+# vector-fill! (its range check and loop) is inlined at -O2 only
+levels 2
+flags --keep third --keep add3 --keep between? --keep fill
+all
+no P_scheme_cxr__caddr
+no P_scheme_base__plus
+no P_scheme_base__lt
+no P_scheme_base__vector_fill
+fn P_main__third[(]
+no RT_NT[(]
+has rt_car[(]
+fn P_main__add3[(]
+no RT_NT[(]
+no rt_cons[(]
+has rt_add[(]
+fn P_main__between_p[(]
+no RT_NT[(]
+has rt_lt[(]
+fn P_main__fill[(]
+no RT_NT[(]P_scheme_base__vector
+loops 1
+has rt_vector_set[(]

@@ -1,0 +1,9 @@
+flags --keep norm1
+all
+no P_main__point_x
+no P_main__point_y
+no P_main__make_point
+fn P_main__norm1[(]
+has rt_record_ref[(]
+no RT_NT[(]
+no RT_PROC[(]

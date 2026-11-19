@@ -1,0 +1,10 @@
+;; Unused definitions and imports are warnings (spec §11.3); record procedures are not reported.
+(import (scheme base) (scheme write) (scheme char))
+(define (helper x) (* x 2))
+(define (countdown n) (if (= n 0) 0 (countdown (- n 1))))
+(define-record-type point (make-point x) point? (x point-x))
+(define used 5)
+(define (twice x) (+ x x))
+(define noisy (begin (display "init ") 1))
+(display (twice used))
+(newline)

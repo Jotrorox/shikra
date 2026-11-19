@@ -1,0 +1,14 @@
+# inlining for-each needs the -O2 / -Os budget (-O0 inlines only wrappers)
+levels 2 s
+flags --keep sum-list
+all
+no ^static[[:space:]]obj[[:space:]]P_main__sum_list__
+no P_scheme_base__for_each
+fn P_main__sum_list[(]
+no rt_make_proc
+no rt_make_box
+no rt_box_
+loops 1
+no RT_PROC[(]
+no RT_NT[(]
+has rt_add[(]
