@@ -7,7 +7,7 @@
  * 64-bit intermediates only (no 128-bit type, no libc). Algorithms (n = limbs): schoolbook add and
  * subtract O(n), multiply O(n*m), Knuth's algorithm D for division O(n*m) with a one-limb fast
  * path, decimal printing by repeated division by 10^9 and parsing by multiply-add in chunks (both
- * O(n^2)), Newton's integer square root from 2^ceil(bits/2) (O(log bits) divisions), conversion
+ * O(n^2)), integer square root by Dickinson's recursive-precision Newton (about two full divisions), conversion
  * to double rounded to nearest even from the leading 64 bits plus a sticky bit. */
 #ifndef SHIKRA_RT_H
 #include "rt.h"
@@ -404,18 +404,43 @@ RT_FN obj rt_big_parse(const char *s, const char *e, int radix, int neg) {
 }
 
 /* ---- roots and logarithms ---- */
-RT_FN obj rt_exact_isqrt(obj k) { /* Newton from above: x0 = 2^ceil(bits/2) >= sqrt(k) */
+static obj big_shift(obj x, intptr_t s) { /* x >= 0: floor(x * 2^s), s of either sign */
     big_v v;
-    obj x, y;
+    intptr_t w, n;
+    rt_bignum *r;
+    big_view(x, &v);
+    if (!v.n) return x;
+    if (s >= 0) {
+        w = s / 32;
+        r = big_new(v.n + w + 1);
+        mag_shl(r->d + w, v.d, v.n, (int)(s % 32));
+        return big_fin(r, v.n + w + 1, 0);
+    }
+    w = -s / 32, s = -s % 32;
+    if (w >= v.n) return RT_FIX(0);
+    n = v.n - w;
+    r = big_new(n);
+    for (v.d += w, w = 0; w < n; w++) r->d[w] = (v.d[w] >> s) | (s && w + 1 < n ? v.d[w + 1] << (32 - s) : 0);
+    return big_fin(r, n, 0);
+}
+/* The floor of the square root of an exact k >= 0: Dickinson's recursive-precision Newton (the
+ * algorithm of Python's math.isqrt): a holds the root of the top 2d bits, d doubling each step, so
+ * the divisions grow geometrically and cost about two full-size ones altogether. */
+RT_FN obj rt_exact_isqrt(obj k) {
+    big_v v;
+    obj a = RT_FIX(1);
+    intptr_t c, d = 0, e, sh;
     if (!rt_is_exact(k) || rt_big_cmp(k, RT_FIX(0)) < 0) rt_type_error("exact-integer-sqrt", "exact nonnegative integer", k);
     big_view(k, &v);
     if (v.n == 0) return k;
-    x = rt_big_expt(RT_FIX(2), RT_FIX((big_bits(v.d, v.n) + 1) / 2));
-    for (;;) {
-        y = rt_quotient(rt_add(x, rt_quotient(k, x)), RT_FIX(2));
-        if (rt_big_cmp(y, x) >= 0) return x;
-        x = y;
+    c = (big_bits(v.d, v.n) - 1) / 2;
+    for (sh = 0; c >> sh; sh++) {}
+    while (sh-- > 0) {
+        e = d;
+        d = c >> sh;
+        a = rt_add(big_shift(a, d - e - 1), rt_quotient(big_shift(k, -(2 * c - e - d + 1)), a));
     }
+    return rt_big_cmp(rt_mul(a, a), k) > 0 ? rt_sub(a, RT_FIX(1)) : a;
 }
 RT_FN double rt_big_sqrt(obj x) { /* beyond 2^1000: the root of the integer root (within a unit of it) */
     big_v v;

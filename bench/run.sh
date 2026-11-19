@@ -8,6 +8,7 @@
 # IMPL is one of
 #   shikra          SHIKRA build -O2           (safe, the default mode)
 #   shikra-unsafe   SHIKRA build -O2 --unsafe
+#   shikra-bignum   SHIKRA build -O2 --bignum (pi and chudnovsky run; DESIGN.md "Bignums as built")
 #   shikra-interp   SHIKRA interp (bytecode interpreter; optional)
 #   chez            Chez Scheme, compile-program at optimize-level 2 (safe; as upstream)
 #   chez-unsafe     Chez Scheme at optimize-level 3 (unsafe)
@@ -46,7 +47,7 @@ nboyer sboyer gcbench mperm
 equal bv2string"
 
 usage() {
-    sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -91,7 +92,7 @@ POSTLUDE=/dev/null
 STRIP_IMPORTS=no
 UNSUPPORTED_FILE=/dev/null
 case "$IMPL" in
-    shikra|shikra-unsafe|shikra-interp)
+    shikra|shikra-unsafe|shikra-bignum|shikra-interp)
         [ -x "$SHIKRA" ] || { echo "run.sh: no Shikra binary at $SHIKRA" >&2; exit 1; }
         SHIKRA=$(cd "$(dirname "$SHIKRA")" && pwd)/$(basename "$SHIKRA")
         PRELUDE=$BENCH_DIR/impl/shikra-prelude.scm
@@ -105,6 +106,7 @@ case "$IMPL" in
         case "$IMPL" in
             shikra) FLAGS="build -O2 $SHIKRA_FLAGS" ;;
             shikra-unsafe) FLAGS="build -O2 --unsafe $SHIKRA_FLAGS" ;;
+            shikra-bignum) FLAGS="build -O2 --bignum $SHIKRA_FLAGS" ;;
             shikra-interp) FLAGS="interp" ;;
         esac
         ;;
@@ -186,8 +188,9 @@ record() {   # name status time wall compile rss size note
         "$1" "$2" "${3:--}" "${4:--}" "${5:--}" "${6:--}" "$(printf '%s' "$8" | cut -c1-100)"
 }
 
-unsupported_reason() {
-    grep "^$1|" "$UNSUPPORTED_FILE" 2>/dev/null | head -1 | cut -d'|' -f2-
+unsupported_reason() {   # with --bignum, the reasons that are bignums alone do not apply
+    grep "^$1|" "$UNSUPPORTED_FILE" 2>/dev/null | head -1 | cut -d'|' -f2- |
+        { if [ "$IMPL" = shikra-bignum ]; then grep -v '^bignums:'; else cat; fi; }
 }
 
 # ---------------------------------------------------------------------------
@@ -222,7 +225,7 @@ for b in $BENCHMARKS; do
     size=""
     exe=""
     case "$IMPL" in
-        shikra|shikra-unsafe)
+        shikra|shikra-unsafe|shikra-bignum)
             # shellcheck disable=SC2086
             $LIMIT "$COMPILE_TIMEOUT" /dev/null "$b.compile.log" "$b.compile.log" "$b.compile.rusage" -- \
                 "$SHIKRA" $FLAGS "$b.scm" -o "$b" > "$b.compile.status"
@@ -255,7 +258,7 @@ for b in $BENCHMARKS; do
 
     # Run, input on stdin, as upstream: EXEC binary < inputs/NAME.input
     case "$IMPL" in
-        shikra|shikra-unsafe|gambit|gambit-unsafe)
+        shikra|shikra-unsafe|shikra-bignum|gambit|gambit-unsafe)
             set -- "./$b" ;;
         shikra-interp)
             set -- "$SHIKRA" interp "$b.scm" ;;
