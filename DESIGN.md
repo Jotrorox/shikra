@@ -97,6 +97,8 @@ Four control operations are engine-specific and implemented once per engine:
 The handler stack and the winders list (`dynamic-wind` + `parameterize`, one
 list, spec §8.4) are runtime globals manipulated from Scheme through
 %primitives; a captured continuation records both and restores/rewinds on entry.
+`guard` and `parameterize` are `syntax-rules` macros in `lib/` over library
+procedures, so both engines share them too (§11 M1 part A).
 
 ## 4. Values (spec §6)
 
@@ -234,6 +236,23 @@ engines and the outputs must be identical.
 - *No trampoline fallback yet* (§8.1): without `musttail` (`RT_MUSTTAIL` empty) tail
   calls rely on the C compiler's sibling-call optimisation, which `-O2` performs for these
   same-signature calls but `-O0` does not. TODO(M4).
+- *The receiver of a tier-2 `call/cc` is not called in tail position* (R7RS 3.5 requires
+  it; M1 part A): `rt_call_cc`'s C frame holds the jump target while the receiver runs, so a
+  loop that recurses through `call/cc` grows the C stack. Tier-1 sites in tail position are
+  proper (the receiver body is inlined). Fixing it needs heap continuations (M5 tier 3).
+- *`guard` clause tests see the raiser's parameter values* (R7RS 4.2.7 says the guard's
+  dynamic environment; M1 part A): spec §8.3 evaluates the clauses on top of the raising
+  frame, before unwinding; they run with the guard's handler stack, but the winders list
+  (hence parameterize bindings) is still the raiser's. Bodies of matching clauses run after
+  unwinding, in the guard's environment. Setting the winders list to the guard's for the
+  tests would skip the raiser's after thunks if a test escaped.
+- *A literal `call-with-values` receiver given a provably wrong number of values is a
+  compile error* (M1 part A), like a known call with the wrong argument count (§11.3):
+  `(call-with-values (lambda () (values 1 2 3)) (lambda (a b) a))`.
+- *Hello world on macOS arm64 is 69 KB*, not ~50 KB (§9.4, M1 part A): `raise` is always
+  linked (runtime errors are raised through it) and `display` reads the
+  `current-output-port` parameter; the text grew by ~2.5 KB but crossed a 16 KB page. M4's
+  type-level shaking and inlining are expected to win this back.
 
 ## 11. As built
 
@@ -426,10 +445,9 @@ it. Native: `let` (named: `((letrec* ((n (lambda ...))) n) init ...)`), `let*`, 
 `%append2`; constant parts fold into one quote), `define-record-type` (`%make-rtd`,
 `%make-record`, `%record-ref/-set!` with constant indices), `case-lambda` (core
 `%case-lambda`), `let-values`, `let*-values`, `define-values` (via
-`%call-with-values`), `let-syntax`, `letrec-syntax`, `syntax-error`. Not yet:
-`parameterize`, `guard` (M1) and `delay`, `delay-force` (M5): clean "not implemented
-yet (milestone ...)" errors; `parameterize`/`guard` are already exported by
-`(scheme base)`. Rationale for C over syntax-rules: located, specific diagnostics
+`%call-with-values`), `let-syntax`, `letrec-syntax`, `syntax-error`. Not yet: `delay`,
+`delay-force` (M5): clean "not implemented yet (milestone M5)" errors. (`guard` and
+`parameterize` are `syntax-rules` macros of `(scheme base)` since M1 part A.) Rationale for C over syntax-rules: located, specific diagnostics
 ("malformed let binding (y)") and no dependency of basic syntax on the macro engine.
 
 syntax-rules: patterns are matched directly (no compilation); bindings are a list of
@@ -570,17 +588,17 @@ errors (`compile_errors_init`).
   `rw_*` rewrite in expand.c dispatched from `expand_core` (or a definition-producing
   case in `scan_form`), export it from the relevant `.sld`, add tests in `tests/cases`
   and a `tests/errors` case for its malformed use.
-- *a control primitive* (engine-specific, M1): a `PI_*` after `NPRIMS` with its
+- *a control primitive* (engine-specific): a `PI_*` after `NPRIMS` with its
   `prim_table` row; normalize.c turns it into an `IR_CALL` with a new `CTL_*`; emit.c
-  emits it.
+  emits it (see `CTL_CALLCC`).
 
 **Tests.** `make test` (= `check-embed` + `tests/run.sh all`): reader, unit, amalg,
 expand (1), compiled (16 programs, each also compiled with `-Wall -Wextra -Werror`),
 errors (24 diagnostics). `tests/run.sh compiled` alone takes ~5 s.
 Debugging: `shikra debug-expand|debug-core|debug-ir|emit-c FILE`.
 
-**R7RS suite status.** `shikra check tests/r7rs/base.scm` stops at the shim's first
-`guard` (`tests/r7rs/chibi/test.sld:153:7: error: guard is not implemented yet
+**R7RS suite status** (at the end of M0; see M1 part A for the current state).
+`shikra check tests/r7rs/base.scm` stopped at the shim's first `guard` (`tests/r7rs/chibi/test.sld:153:7: error: guard is not implemented yet
 (milestone M1)`). In a scratch copy with the M1 features stubbed (`guard`,
 `parameterize`, `call/cc`, `dynamic-wind`, exception handlers, `expt`,
 `numerator`/`denominator`, binary ports, `features`, `test-error`), the whole file
@@ -588,16 +606,13 @@ compiles and runs into section 6.10; every failure before that is a test of a st
 procedure.
 
 **Known gaps / next steps**
-- M1: `guard`, `parameterize`, the handler stack (`raise`/`error` are uncaught-only
-  via `%raise`), `call/cc` (`%call/cc` is rejected by the normalizer), `dynamic-wind`,
-  parameter objects (the current ports are plain procedures), `command-line`, binary
-  ports, `features`, and the procedures the primitives cannot express yet (`expt`,
+- M1 (the control items are done in part A): `command-line`, binary ports, `features`, and the procedures the primitives cannot express yet (`expt`,
   `numerator`, `denominator`, `rationalize`); `(scheme char)` and the other optional
   libraries do not exist yet.
 - M4 (performance): every variable is a C local of type `obj`, every primitive is the
   checked runtime call, named-let loops are separate C functions entered by a direct
   call (not contified), closures for local procedures with free variables are
-  allocated, `values` always boxes.
+  allocated, `values` to an unknown receiver boxes (literal receivers: M1 part A).
 - `strip_syntax` and the literal emitter do not handle circular quoted data (datum
   labels in literals); `equal?`-cycles are a runtime M5 item too.
 - Macro expansion recurses on the C stack (very deep recursive macros could overflow);
@@ -606,3 +621,152 @@ procedure.
   imports/definitions, spec §11.3).
 - Commits of this milestone are unsigned: the 1Password SSH signing agent was not
   available while the owner was away.
+
+### M1 part A (control: dynamic state, exceptions, continuations, multiple values)
+
+**File map** (runtime +120 lines → ~2,470; compiler +330 → ~4,190; Scheme library +200)
+
+```
+src/rt_core.c   rt_winders / rt_handlers (GC roots) and their leaf %primitives,
+                %parameter-binding, %continuation-live?, %values-check/-ref/-tail,
+                %uncaught; rt_call_cc + core_cont_code (program mode only): %call/cc
+src/rt_sys.c    rt_sys_catch / rt_sys_throw: the only setjmp user
+src/normalize.c "control forms the normalizer open-codes": rewrite_aliases, cwv_inline,
+                tier1_site/k_ok; norm_callcc1/kjump (tier 1), norm_cwv/norm_mv/mv_jump/
+                mv_spread (receiver join points); raise kept as a root; dead procedures
+                dropped; ir_count counts copies into unused variables lazily
+src/emit.c      CTL_CALLCC; rt_engine_raise -> (scheme base) raise; (%values x) is x
+lib/shikra/dynamic.sld          internal library: travel-to!, the winders walk
+lib/scheme/base/errors.scm      with-exception-handler raise raise-continuable error guard
+lib/scheme/base/control.scm     dynamic-wind call/cc make-parameter parameterize (+ M0)
+lib/scheme/base/io.scm          current-input/output/error-port are parameters
+lib/scheme/process-context.sld  exit unwinds first; emergency-exit does not
+```
+
+**Dynamic state** (spec §8.4). `rt_winders` is one Scheme list, innermost first, of
+`(before . after)` frames (dynamic-wind; car is a procedure) and `(cell . value)` frames
+(parameterize; car is a pair). `travel-to! to` (Scheme) unwinds from the current list to
+the common tail, setting the list to the outside of each frame before calling its after
+thunk, then rewinds outermost first (before thunk called outside its frame, frame entered
+after it returns) -- R7RS 6.10, and the after thunks see the right parameter values.
+`dynamic-wind`: call before, push, call thunk (not a tail call), pop, call after, return the
+(possibly packed) result.
+
+**Parameters** are closures (a case-lambda over the cell `(converter . global-value)`), so
+`procedure?` holds and known and unknown calls need nothing special; `RT_T_PARAMETER` is
+unused. `(p)` = `(cdr (%parameter-binding cell))`: the leaf primitive returns the innermost
+winders frame whose car is the cell, else the cell (deep binding). Restoring a winders list
+restores every parameter, so escapes do no parameter work. `(p key)` with the private
+literal `parameter-key` returns the cell; `(p v)` sets the innermost binding (converted;
+R7RS leaves it unspecified). `parameterize` is `syntax-rules`:
+`(parameterize ((p v) ...) body ...)` → `(parameterize-run (list p ...) (list v ...)
+(lambda () body ...))`, which converts every value before pushing any frame and restores
+the saved list after the thunk (no reconversion).
+
+**Exceptions** (spec §8.3). `rt_handlers` is a list of procedures. `with-exception-handler`
+pushes, calls the thunk, restores. `raise` pops the top handler and calls it with the rest
+as the current stack; if it returns, `(error "exception handler returned from
+non-continuable raise:" obj)` is raised in that same context; with no handler, `%uncaught`
+prints "Error: msg irritants" / "Error: uncaught exception: obj" to stderr after flushing
+stdout and exits 70. `raise-continuable` is the same but restores the stack and returns the
+handler's value. Runtime errors: `rt_error` → `rt_raise` → generated `rt_engine_raise` → a
+direct C call of `(scheme base)` `raise` (normalize.c finds the global in base's frame and
+roots it in tree shaking; without `(scheme base)` it falls back to `rt_uncaught`). So
+`(guard (e (#t ...)) (car (vector-ref v 0)))` catches "car: expected pair", arity errors,
+"not a procedure", overflow and undefined-variable errors, with message and irritants.
+
+`guard` is `syntax-rules` (errors.scm):
+
+```
+(guard (var clause ...) body ...)
+  => (guard-run (lambda () body ...) (lambda (var) (guard-select clause ...)))
+guard-select: a cond-like chain that returns #f or a thunk for the chosen clause
+  ((test => f) -> (lambda () (f t)); (test) -> (lambda () t); else; (test e ...))
+```
+
+`guard-run` captures `k` with the raw `%call/cc` and installs a handler with
+`with-exception-handler`. The handler runs on top of the raising frame with the guard's
+handler stack and evaluates the selector: a thunk → `travel-to!` the guard's winders (after
+thunks run), then `(k (guard-escape . thunk))` (`k` restores the handler stack) and
+guard-run calls the thunk in the guard's context; `#f` → `(raise-continuable condition)`
+from inside the handler, i.e. the outer handler in the raiser's context, its value going
+back to the raiser (a `raise` then reports the secondary error). The body's normal result,
+packed values included, passes through. Cost per guard entry: one `rt_call_cc` frame, one
+handler-stack cons, three small closures.
+
+**Continuations** (spec §8.2). Classification is per `call/cc` site, syntactic, after
+expansion (normalize.c):
+- *Tier 1*: `(call/cc (lambda (k) body))` (base's `call/cc` or
+  `call-with-current-continuation`) where `k` is only called -- operator position, never
+  `set!`, never referenced from inside a lambda; let-style direct applications, inlined
+  `call-with-values` lambdas and nested tier-1 receivers do not count as crossing. The body
+  is inlined: in value position the site is a join point with one parameter and `(k a ...)`
+  is a JUMP to it (several arguments are packed); in tail position `(k a)` is a RET and the
+  body keeps its tail calls. Code after a jump goes to a dead sink and is dropped
+  (procedures created there are removed from `prog->lambdas`). No runtime cost; no
+  dynamic-wind, parameterize or handler can come between capture and jump.
+- *Tier 2*: every other site, through the library: `call/cc` =
+  `(%call/cc (lambda (k) (f (escape-procedure k (%winders)))))`. `%call/cc` is
+  `CTL_CALLCC` → `rt_call_cc(f)`: a `core_cont` frame on the C stack (jump buffer, saved
+  winders and handlers, result) and a heap procedure `k` (`core_cont_code`) whose `free[0]`
+  is the frame address (a raw word that looks like a fixnum) or `#f`. `core_conts` lists the
+  live frames; a jump marks every frame it discards dead, a normal return marks its own.
+  Invoking a live `k` packs its arguments (one value is itself), restores both lists and
+  throws (`rt_sys_throw`; `__builtin_setjmp` on GCC and x86 clang, `sigsetjmp(b, 0)`
+  otherwise, e.g. Apple clang arm64). The escape procedure checks `%continuation-live?`
+  first (so a dead `k` fails before any winder runs), then `travel-to!`, then
+  `(%apply k vals)`.
+- *Tier 3* (M5): a dead `k` raises "re-entrant continuation not supported yet (milestone
+  M5)". The hook is the dead state: M5 keeps a heap copy of the stack segment instead of
+  `#f` and copies it back in `core_cont_code`; tier 2 stays as is.
+
+**Multiple values** (spec §8.5). Calls to base's `values`, `call-with-values` (2 args) and
+`apply` (2 args) are rewritten to `%values` / `%call-with-values` / `%apply` before tree
+shaking. `(%values x)` is `x`; others build a values object (`rt_values_n`). A
+`(%call-with-values P (lambda formals body))` has a join point whose parameters are the
+formals (boxed ones get raw parameters): if `P` is `(lambda () pbody)`, each tail of pbody
+(through `if`, `begin`, `letrec*`, lets) that is `(%values a ...)` jumps there directly
+(no allocation; count checked at compile time); any other tail is spread with
+`%values-check` + `%values-ref`/`%values-tail`. A non-literal producer is called and spread
+the same way. In tail position the receiver body is a tail; otherwise it jumps to a second
+join point. The variable analysis treats both lambdas as scopes of the enclosing procedure.
+Unknown receivers keep `CTL_CWV` (consumer tail-called). TODO(M4): a known procedure that
+returns several values could return a small C struct into `mv_spread` (comment there).
+
+**exit**: `(travel-to! '())` then `%exit` (flushes the standard ports); statuses `#t`/none
+0, `#f` 1, exact integer itself, otherwise 0. `emergency-exit` skips the unwinding.
+
+**For the VM engineer (M3).** Re-implement only: `%call/cc` (capture the VM stack; `k`
+must save and restore `rt_winders` and `rt_handlers`; re-entry works there), `%apply`,
+`%values` (one value is itself, else a values object), `%call-with-values` (spread a values
+object; consumer tail-called), and the raise hook (a runtime error unwinds to the dispatch
+loop, which then calls the library's `raise` -- find the global as normalize.c does). For
+free from `lib/`: `raise`, `raise-continuable`, `error`, `with-exception-handler`, `guard`,
+`dynamic-wind`, `call/cc`'s winders handling (`escape-procedure`, `travel-to!`), parameters
+and `parameterize`, `exit`; the leaf primitives (`%continuation-live?` answers `#t` for
+anything that is not a compiled tier-2 escape). Tier 1 and receiver join points are
+compiler optimisations; the VM runs the library definitions.
+
+**Tests**: tests/cases values, callcc, exceptions, parameters, dynamic_wind, control_tail
+(10^6 iterations through apply, call-with-values, guard bodies, dynamic-wind thunks),
+higher_order, reentry, handler_returns, reraise_uncaught, exit_unwind, exit_true,
+emergency_exit; tests/errors values_count, malformed_guard, malformed_parameterize. `make
+test`: 123 checks. The `__builtin_setjmp` path was also checked with
+`--cc "cc -arch x86_64"` (Rosetta).
+
+**R7RS suite status.** `shikra check tests/r7rs/base.scm` stops at the first identifier of
+the data/ports half: `expt`, `numerator`, `denominator`, `rationalize`, `binary-port?`,
+`open-input-bytevector`, `open-output-bytevector`, `input-port-open?`, `output-port-open?`,
+`char-ready?`, `read-u8`, `u8-ready?`, `read-bytevector`, `read-bytevector!`, `write-u8`,
+`get-output-bytevector`, `write-bytevector`, `features`. With those stubbed in a scratch
+copy it builds and reports `658 tests, 621 passed, 37 failed`: every failure is a stubbed
+procedure, `(string->number "#x4000000000000001/3e1")`, or the R7RS 6.10 re-entry example
+(tier 3, M5).
+
+**Known gaps**
+- Bump allocation only: the 10^6 raise/catch loop allocates ~170 MB (guard closures). M2.
+- Tier 2 capture costs an `rt_call_cc` frame, two closures, and a rest list per invocation.
+- An after thunk that escapes during `travel-to!` abandons the rest of the original jump
+  (the winders list is consistent at every step; R7RS leaves this unspecified).
+- Ports other than the standard ones are not flushed by `exit` (M0 gap; ports half).
+- `call-with-port` and the binary/bytevector ports are the next engineer's.
