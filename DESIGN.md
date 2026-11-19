@@ -776,8 +776,8 @@ procedure, `(string->number "#x4000000000000001/3e1")`, or the R7RS 6.10 re-entr
 
 ### M1 part B (the data half of `(scheme base)`: numbers, strings, bytevectors, ports)
 
-**File map** (runtime +225 lines → ~2,695 in `rt.h` + `rt_*.c`, plus 214 in `prims.def`;
-compiler +7; Scheme library +100 → ~910)
+**File map** (runtime +228 lines → 2,695 in `rt.h` + `rt_*.c`, plus 214 in `prims.def`;
+compiler +5 → 4,208; Scheme library +97 → ~910)
 
 ```
 src/rt_io.c     binary + bytevector ports, io_check (direction x textual/binary), port state
@@ -890,7 +890,7 @@ end of file, kinds and states, `call-with-port`, errors), `ports_stdin` (+ `.in`
 the 4 KB buffer; output compared with values computed independently), `numbers_edges`
 (overflow errors of `+ - * abs quotient / expt exact`, `exact-integer-sqrt`, flonum printing
 of `1.0 1e21 -0.0 +inf.0 +nan.0` ..., exact mixed comparison), `string_to_number`
-(rejections), `error_names` (63 error situations); rt_unit: `rt_ports` bookkeeping and the
+(rejections), `error_names` (64 error situations); rt_unit: `rt_ports` bookkeeping and the
 flush at exit (run.sh checks the file afterwards). `make test`: 138 checks.
 
 **Known gaps**
