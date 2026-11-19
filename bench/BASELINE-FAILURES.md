@@ -59,7 +59,9 @@ Ratios are Shikra safe time / reference time from `RESULTS.md`
    `--unsafe` the remaining checks are removed"). Expected at this stage (no
    optimizer yet), but it means the `Shikra unsafe` column measures the same code
    as the safe one for now.
-2. **The collector lets the heap grow far beyond the live data.** Peak RSS
+2. **The collector lets the heap grow far beyond the live data.** (M4-3: collections got 10-30%
+   cheaper -- O(1) block lookup, lazy object-start walk -- but the RSS figures stand; graphs is
+   bounded by fragmentation a non-moving collector keeps: DESIGN.md "M4-3 as built", Collector.) Peak RSS
    (MB, Shikra / Chez / Gambit): `graphs` 1062 / 84 / 112, `earley`
    2926 / 1208 / 2877, `nboyer` 532 / 471 / 1201, `sboyer` 267 / 147 / 307,
    `gcbench` 283 / 185 / 353. On `graphs` (allocates ~7 GB in total) the

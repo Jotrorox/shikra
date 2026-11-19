@@ -10,7 +10,7 @@
  *     padding, code signature, non-allocated ELF sections) is format overhead.
  * Symbols are mapped back to their origin through the emitter's naming contract (DESIGN.md
  * "M4-3 as built"): P_<library>__<procedure>[__<inner>...] (the library part never contains
- * "__"), P_init the program body, C_<...> static closures, L<n> literals, rt_lit_pairs,
+ * "__"), P_init the program body, C_<...> static closures, rt_lits (the literals), rt_lit_pairs,
  * rt_static_syms, rt_g; runtime functions and variables by the runtime source file that
  * defines them (looked up in the runtime sources embedded in the tool). Procedures that were
  * inlined or contified have no code of their own: their bytes are in their host's. */
@@ -216,7 +216,7 @@ static void classify(const char *raw, const char *sect, unsigned long long bytes
         } else add_item(K_LIB, lib, sep + 2, bytes);
         return;
     }
-    if (n[0] == 'L' && n[1] >= '0' && n[1] <= '9') { add_item(K_DATA, "literals (strings, vectors, flonums, symbols)", "", bytes); return; }
+    if ((n[0] == 'L' && n[1] >= '0' && n[1] <= '9') || !strcmp(n, "rt_lits")) { add_item(K_DATA, "literals (strings, vectors, flonums, symbols)", "", bytes); return; }
     if (!strcmp(n, "rt_lit_pairs")) { add_item(K_DATA, "literal pairs (rt_lit_pairs)", "", bytes); return; }
     if (!strcmp(n, "rt_static_syms")) { add_item(K_DATA, "static symbol list (rt_static_syms)", "", bytes); return; }
     if (!strcmp(n, "rt_g")) { add_item(K_DATA, "program globals (rt_g)", "", bytes); return; }

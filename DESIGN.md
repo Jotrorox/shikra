@@ -222,7 +222,12 @@ tests/expand/NAME.scm + NAME.out            core forms as `,expand` prints them
 tests/r7rs/                                 adapted Chibi r7rs-tests, split by library
 tests/r7rs/expected/FILE.ENGINE             pinned summary line + failing tests (r7rs mode;
                                             since M5 every file under both engines)
+tests/size/*.elf                            ELF fixtures for `shikra size` (M4-3; size mode)
+tests/debug/NAME.scm + NAME.expected        -g run-time error locations (M4-3; debug mode)
 ```
+M4-3 modes of tests/run.sh: `size`, `cache` (expansion cache, private directory), `debug` (-g),
+`driver` (commands and flags); all four are part of `all`. The runner sets `SHIKRA_CACHE_DIR` to
+`tests/tmp/cache`, so tests never write to the user's cache.
 
 Every feature lands with a test. From M3 on, every case runs under both
 engines and the outputs must be identical.
@@ -302,6 +307,15 @@ engines and the outputs must be identical.
   the r7rs gate and 36 of the 41 programs in tests/cases collect at every allocation, at
   -O2 and -O0; five whose live set or allocation count makes a full collection per
   allocation quadratic use a per-case interval (M2 "Stress mode" lists them and why).
+- *1,000-2,000-line programs exceed 200 KB at -O2 on macOS* (spec §9.3; M4-3): scheme (1,055 lines)
+  241 KB and dynamic (2,328) 311 KB at -O2, 176 KB and 181 KB at -Os; parsing and slatex are inside
+  the range at both levels; tests/r7rs/base.scm (a 658-case test suite, 1,600 small procedures) is
+  539 / 476 KB. Binaries keep their local symbols (10-26% of the file) because `shikra size` needs them.
+  bench/SIZES.md has the table and what was tried.
+- *graphs' peak RSS is 6.4x Chez's* (M4-3's goal was a small factor of Chez and of the live data): the
+  non-moving collector keeps the lines of sparse survivors, and a smaller heap costs more collections
+  than the speed goal allows. Every other allocation-heavy benchmark is within 1.3x of Chez except
+  earley (1.4-1.8x). "M4-3 as built", Collector.
 
 ## 11. As built
 
@@ -1973,3 +1987,211 @@ get only the facts of their declaration.
 `rt_fx*`, flat printers) and the two config macros; `-g` locations can reuse the inlined-code
 locations (N_LIB copies carry the user's call site); the expansion cache is unaffected (the analysis
 runs on IR).
+
+### M4-3 (finishing M4: shikra size, size targets, collector, expansion cache, -g, driver)
+
+**File map** (compiler, counted as in M4-2: 7,940 -> 9,307 lines, of which size.c 365 and cache.c 743; runtime 3,969 -> 3,986)
+
+```
+src/size.c      shikra size: Mach-O 64 / ELF64 reader, attribution, runtime component table, report
+src/cache.c     the expansion cache: recording, fingerprints, entry writer and reader, run key
+src/main.c      size, --no-cache, --version, --help, run reuse, -g C kept, phase times, cc flags
+src/library.c   load_library tries the cache first; notes of files, imports and (library ...) tests
+src/expand.c    per-library global list (global.index), alias/local-symbol constructors for the cache
+src/emit.c      literals as members of one struct rt_lits, shared by content; -g rt_loc stores
+src/opt.c       contification relocates library bodies moved into user code (the user's call site)
+src/rt_gc.c     block map, lazy object-start walk;  src/rt_core.c, rt.h  rt_loc (RT_DEBUG only)
+tests/size/     ELF fixtures;  tests/debug/  -g programs;  tests/run.sh size|cache|debug|driver
+bench/SIZES.md  lines vs bytes, before/after
+```
+
+**`shikra size app`** (spec §9.3, §11). The tool parses the executable itself -- Mach-O 64 (load
+commands, `LC_SEGMENT_64` sections, `LC_SYMTAB`) and ELF64 (section headers, `.symtab`), little
+endian, x86-64 and arm64; universal (fat) Mach-O files are refused with a message. Every byte is
+counted once: within each allocated section with contents the defined symbols are sorted by address
+and a symbol owns the bytes up to the next one (aliases at the same address own nothing; Arm mapping
+symbols `$x`/`$d` are skipped); bytes before the first symbol of a section, and sections without
+symbols, go to an "other" row named after the section kind (unwind tables, dynamic linking stubs and
+GOT, C strings, compiler constant tables, code without a symbol). Everything outside such sections --
+headers, load commands, symbol and string tables, segment padding, the code signature, non-allocated
+ELF sections -- is "format overhead", so the report's total is the file size. Zero-fill sections are
+reported apart ("not in the file"). Rows: libraries (the program first by size like the others), each
+with its procedures sorted by size; `(runtime)` by component; static data; other; format overhead with
+the symbol-table share on its own line. `--all` lists every procedure (default: twelve per group),
+`--tsv` prints machine-readable rows (`kind group name bytes in_file`) whose in-file bytes add up to
+the file size. The footer says that inlined and contified procedures are counted in their host.
+
+*Naming contract* (emitter -> size): `P_<lib>__<proc>[__<inner>...]` is a procedure, where `<lib>` is
+the library id mangled with every run of non-alphanumeric characters collapsed to one `_` and no `_` at
+either end (so the first `__` after `P_` always ends it; `main` is the program), `P_init` the program
+body, `rt_program_main` too (clang inlines `P_init` into it), `rt_engine_raise`/`rt_engine_travel` the
+runtime entries of `raise` and `travel-to!`, `<proc>__<k>` case-lambda clauses, `C_<lib>__<proc>` static
+closures, `rt_lits` all literals, `rt_lit_pairs` literal pairs, `rt_static_syms`, `rt_g` the globals
+array. Clang's suffixes (`.cold.N`, `.llvm.N`, a static's `fn.var`) are cut at the dot. Runtime symbols
+are found in the runtime sources embedded in the tool: a column-0 definition (a function with a body on
+its line, or a variable) belongs to its file -- `rt_gc.c` collector, `rt_read.c` reader, `rt_str.c`
+strings and chars, `rt_sys.c` system layer, `rt_io.c` ports, except its "printer" section, `rt_num.c`
+numbers, except "decimal conversion" (float printing and parsing), `rt_core.c` by section (startup and
+exit, errors, symbols, control, data structures), `rt_unicode.c`, inline helpers of `rt.h` emitted out
+of line. Built-in library ids are shown as `(scheme base)`; a user library as its mangled id
+(`geometry_vec`; the mangling is lossy, so `(my-lib)` and `(my lib)` look alike). A binary without
+symbols, or whose symbols contain no Shikra name, is refused ("has no Shikra symbols: it was stripped,
+or it was not built by shikra build"); a non-executable gets "not a 64-bit little-endian Mach-O or ELF
+executable".
+
+*Symbols are kept*: `shikra build` strips nothing, so local symbols stay in the binary (the linker's
+default); `strip app` removes them and `shikra size` then refuses the binary. They cost 10-26% of a
+binary (bench/SIZES.md), which the report shows.
+
+**Size work** (bench/SIZES.md has the table). Hello world 50,888 bytes, pinned at 52,000 by
+`tests/run.sh size`. `shikra size` found two avoidable costs: Apple clang's splitting of every cold
+path into its own function and symbol (now `-Xclang -fno-split-cold-code` whenever the C compiler is
+`cc` on Darwin or a `clang`; not for gcc or `zig cc`), and one symbol per literal (now one struct
+`rt_lits`; equal strings, flonums by bit pattern and bytevectors share a member across libraries).
+scheme 294 -> 241 KB, nucleic 437 -> 239 KB, r7rs/base 588 -> 539 KB at -O2. The -O2 inlining budget
+was left as it was (a quarter or half of it saves 30% on dynamic but measured slower), and
+`-Wl,-no_data_const` (16 KB less per macOS binary) was rejected because literals would no longer be
+in read-only memory.
+
+**Collector** (spec §7; rt_gc.c 523 -> 527 lines). Two inefficiencies fixed:
+- *Block lookup*: every marked word looked up its block by a linear search over the chunks (up to 48;
+  ~12 for a 1 GB heap). Now a byte map over the heap's address span holds the chunk number + 1 of every
+  32 KB block, rebuilt when a chunk is added (one byte per block: 32 KB for a 1 GB span).
+- *Object starts*: the start-bit walk over all runs allocated since the last collection ran at the
+  start of every collection over every headered block. Now a block is walked when marking first
+  reaches it (`gc_walk`, from `gc_mark`/`gc_mark_any` only, never outside a collection: a walk would
+  otherwise miss objects allocated after it), and blocks holding only garbage are never walked. In
+  graphs the walk had cost as much as the marking.
+
+Times (s, min of 3 interleaved runs on a machine with load 7-11, so +-15%) and peak RSS (MB), M4-2
+collector vs M4-3, with Chez (bench/results/chez-20261119-0641.csv):
+
+| benchmark | time M4-2 | time M4-3 | time Chez | RSS M4-2 | RSS M4-3 | RSS Chez | peak live |
+|---|---|---|---|---|---|---|---|
+| graphs | 2.57 | 2.44 | 1.52 | 531 | 531 | 83 | 20 |
+| earley | 1.42 | 1.04 | 2.13 | 1677-2120 | 1677-2120 | 1207 | 415-480 |
+| gcbench | 0.80 | 0.61 | 0.55 | 150 | 150 | 185 | 48 |
+| conform | 0.86 | 0.85 | 1.34 | 3 | 3 | 49 | |
+| peval | 0.66 | 0.67 | 1.19 | 2 | 2 | 49 | |
+| nboyer | 1.36 | 1.23 | 1.26 | 531 | 531 | 470 | 200 |
+| sboyer | 0.69 | 0.69 | 0.59 | 194 | 194 | 146 | 42-55 |
+| lattice | 1.48 | 1.50 | 2.47 | 2 | 2 | 49 | |
+| matrix | 0.66 | 0.53 | 0.79 | 2 | 2 | 49 | |
+| paraffins | 3.62 | 2.64 | 3.66 | 1061 | 1062 | 1035 | 320 |
+| string | 0.51 | 0.55 | 0.92 | 7 | 7 | 54 | |
+| browse | 0.77 | 0.73 | 0.90 | 2 | 2 | 49 | |
+| deriv | 0.77 | 0.74 | 0.84 | 2 | 2 | 49 | |
+| destruc | 0.93 | 0.90 | 1.38 | 2 | 2 | 49 | |
+| diviter | 1.07 | 1.06 | 1.30 | 2 | 2 | 49 | |
+| divrec | 3.53 | 3.47 | 1.60 | 2 | 2 | 49 | |
+| mperm | 3.12 | 2.16 | 6.79 | 1061 | 1061 | 2167 | 416 |
+
+(graphs: the first interleaved series gave 2.89 / 4.19, a load spike; three reruns of both binaries
+gave 2.57-3.19 vs 2.44-2.55. earley's RSS varies from run to run with both collectors: conservative
+stack words retain different amounts.) Allocation-heavy programs got 10-30% faster; RSS is unchanged:
+within 1.3x of Chez everywhere except graphs (6.4x Chez, 26x its live data) and earley (1.4-1.8x).
+The growth policy itself (double the block heap when more than half of its lines hold live objects
+after a collection) was kept, after measuring the alternatives on the eight largest heaps:
+- *Reusing single free pair cells* (pair blocks allocate in runs of >= 8 free 16-byte cells found in
+  the mark bitmap instead of free 256-byte lines; growth decided by free 128-byte pieces): graphs
+  531 -> 266 MB, sboyer 194 -> 134 MB, but 13-18% slower on graphs, earley, paraffins and mperm --
+  new objects scattered into small holes lose locality -- and earley stays at 2 GB because its live
+  pairs alternate with dead ones cell by cell.
+- *128-byte lines*: graphs 267 MB but 1.8x slower; *growing by the shortfall only* (to exactly half
+  used) or *by half*: more collections, up to 2x slower on graphs, no RSS gain elsewhere.
+graphs is the case a non-moving collector cannot fix cheaply: its live set (up to 20 MB) is built
+while short-lived objects are allocated between its members, so after a collection 20 MB of
+survivors keep 130 MB of lines (pairs 10x, headered objects 5x); the heap doubles to give the
+allocator room, and every halving of the heap doubles the collections (each marks the live set).
+Chez's generational copying collector compacts the survivors. Sticky mark bits (a generational mode
+with a write barrier, spec §7.2) or evacuating sparse blocks would be the fix.
+
+**Expansion cache** (spec §4.2, §14; cache.c). The entry of a library is
+`<cache>/expand/<16 hex digits>`, the hash of: library id, source path of its `.sld`, compiler build
+(the tool executable's path, size, mtime and inode, plus `__DATE__ __TIME__` and the format version)
+and the feature list (target, `--unicode`). One file per library and configuration: an edited library
+overwrites its entry, the directory does not grow with edits. Contents: a header with the format
+version, build and feature ids, id and path; the hash of every source file the library read (its
+`.sld`, `include`d files, `include-library-declarations`); the answers of its `cond-expand` `(library
+...)` tests; its imports in load order with their fingerprints; its own fingerprint (hash of its file
+hashes, its imports' fingerprints and its test answers). Then the payload: its globals in creation
+order (name, assigned, nowarn, definition count, location of the definition), its top-level frame
+(identifier -> binding: its own globals by index, its own syntax-rules macros -- name, ellipsis,
+literals, rules, environment frame --, imports by (library, export name)), its exports, its core forms,
+its import records and which identifiers they bound (unused-import warnings), the globals of other
+libraries it assigned and the import records of other libraries it marked used while it was expanded
+(a macro of library A that `set!`s A's global, used by B, makes the global assigned during B's
+expansion), and how many local symbols it numbered. Data are a graph (shared and circular structure
+kept) of pairs with their source locations, strings, symbols, flonums, vectors, bytevectors and
+immediates; symbols are interned names, aliases (original identifier + environment: a library's top
+frame or `(shikra primitives)`), local symbols (source name + number relative to the counter when the
+library's expansion started) or globals ((library, index)). A trailing checksum covers the file.
+- *Loading* (`load_library` -> `cache_load`, after the library is registered as loading): checksum,
+  version, build, features, id and path; disk sources rehashed (built-in sources are part of the
+  tool, so the build id covers them); `(library ...)` answers re-asked; imports loaded in the recorded
+  order (from the cache or from source, exactly as a fresh expansion would load them) and their
+  fingerprints compared; then the payload restores the library, local symbols renumbered from the
+  current counter, the recorded effects applied. Any mismatch or malformed byte is a miss: what was
+  restored is undone and the library is read and expanded from source, and its entry rewritten.
+- *Writing* (`cache_store` after a fresh expansion): to `<entry>.<pid>.tmp`, then `rename`, so
+  concurrent builds never read a partial entry; a library whose state cannot be written (a macro
+  whose environment is a local scope, an unexpected kind of datum or symbol) is not cached.
+- *Identity*: output with a warm cache is byte-identical to a cold one and to `--no-cache` -- the
+  entry restores the state a fresh expansion produces. One thing outside the library could differ:
+  literal objects shared across libraries through macro templates (a string constant of a template
+  ends up in every library using the macro); the emitter now shares equal literals by content, so
+  identity no longer matters.
+- Not cached: the program itself (always expanded), the REPL and `shikra interp` (they expand with
+  immortal allocation and an open top level; `--no-cache` is implied). `SHIKRA_CACHE_DIR` relocates
+  the cache (the tests use `tests/tmp/cache`), `--no-cache` disables it.
+- *Gain* (`SHIKRA_TIME=1` prints the phases; front end = read, resolve, expand of everything): the
+  front end is small next to the middle end. tests/r7rs/base.scm: front end 4.4 ms without the cache,
+  4.6 ms warm (median of 21: 5.3 vs 5.1 ms), while the middle end takes ~120-160 ms and `cc` 0.5-1.5 s;
+  hello world 1.8 -> 1.2 ms; nucleic (the largest benchmark) 7.7 -> 7.7 ms. Loading an entry costs
+  about as much as expanding the library: the expander is fast and most of the front end's time is the
+  program itself. The cache's real use is the next item.
+
+**`shikra run`** reuses its executable: the name is `run-<hash>` of the program's key (from the cache:
+the program's source files and `(library ...)` answers, every library's fingerprint, build and feature
+ids) and the flags, so when nothing changed a run is the front end plus `exec`. The build's warnings
+are stored in `run-<hash>.warn` and replayed. With `--no-cache` the key is the hash of the generated C
+(the M0 behaviour: the middle end runs every time). Latency: hello world cold 0.27-0.46 s (cc), warm
+under 10 ms; tests/r7rs/base.scm cold 1.15 s, warm 10 ms (was 0.15 s: front, middle and emit ran every
+time).
+
+**`-g`** (spec §11.1, §11.3). With `-g` the emitter writes `rt_loc = "file:line:col";` before every
+primitive application that can fail (`PF_FAIL`) and every call, when the node's location is in a user
+file (not `<builtin>`). `rt_make_error` gives an error object without a location `rt_loc`, so
+`rt_uncaught` prints `file:line:col: error: msg irritants`; the handler-less path (`core_die`) prints
+it too. Inlined library code carries the user's call site (M4-2's N_LIB copies), and contification now
+relocates a library body it moves into user code the same way (at -O0 and -Os small library procedures
+are contified rather than inlined); a library procedure called out of line runs with the location of
+its call. So type, range, overflow, unknown-call arity and `error` errors, and errors inside library
+wrappers, name the user's expression (tests/debug). Without `-g` nothing is emitted: no store, no
+string (`RT_DEBUG` guards the variable). `-g` also passes `-g` to the C compiler, and the generated C
+is kept as `<cache>/debug-<hash of the output path>.c` so a debugger finds the source (one file per
+output, overwritten by the next `-g` build of it). Limits: an error inside out-of-line library code
+that called back into user code reports the last user location that ran (e.g. inside the callback);
+locations are of the expression, not of the argument at fault.
+
+**Driver** (spec §11). Checked every command and flag: `-O 0|2|s` (also `-O0`...), `--unsafe`,
+`--gc=immix|bump`, `--unicode=ascii|full`, repeatable `-I`, `--cc` with arguments (`--cc "zig cc"`,
+`--cc gcc-16`, `--cc "cc -arch x86_64"` work), `-g`, `-o` (default: the input's base name). Added
+`--version`, a complete `--help` (also after a command), "unknown flag" pointing to it, `--no-cache`,
+`-w` documented. `check` already ran the whole middle end (flow analysis included); tests/run.sh driver
+now checks that its diagnostics equal `build`'s for every error and warning test. `emit-c` output is one
+file that `cc out.c` and `gcc-16 out.c` build with no flags (tested). `--target` handling is the Linux
+port's and was not touched.
+
+**Tests** (`make test` adds the modes size, cache, debug, driver to `all`): see the headers of each
+mode in tests/run.sh.
+
+**Known gaps**
+- 1,000-2,000-line programs at -O2: scheme (241 KB) and dynamic (311 KB) exceed 200 KB (their -Os
+  builds are within it), r7rs/base exceeds it at both levels; see bench/SIZES.md.
+- graphs' RSS (531 MB, 6.4x Chez) and earley's (up to 1.8x): fragmentation a non-moving collector
+  keeps; above.
+- The expansion cache gains almost nothing on its own (the front end is ~2-5% of `emit-c`); it pays
+  off through `shikra run`.
+- `shikra size` cannot split a procedure's bytes among the procedures inlined into it, and shows user
+  library ids mangled.

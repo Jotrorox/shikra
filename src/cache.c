@@ -312,7 +312,7 @@ void cache_store(library *lib) {
     FILE *f;
     const char *tmp;
     if (!r) return;
-    for (i = 0; i < r->nfiles; i++) fp = fnv(fp, &r->files[i].hash, 8);
+    for (i = 0; i < r->nfiles; i++) fp = fnv(fnv(fp, &r->files[i].hash, 8), r->files[i].path, strlen(r->files[i].path) + 1);
     for (i = 0; i < r->ndeps; i++) { u64 d = fingerprint(r->deps[i]); fp = fnv(fp, &d, 8); }
     for (i = 0; i < r->nex; i++) fp = fnv(fp, &r->ex[i].r, sizeof(int));
     set_fingerprint(lib, fp);

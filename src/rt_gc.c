@@ -153,13 +153,9 @@ static void gc_add_chunk(size_t n) {
     gc_nblocks += n;
     if ((uintptr_t)m < gc_lo) gc_lo = (uintptr_t)m;
     if ((uintptr_t)m + n * GC_BLOCK > gc_hi) gc_hi = (uintptr_t)m + n * GC_BLOCK;
-    /* the block map: chunk number + 1 of every block between gc_lo and gc_hi (when that span
-     * is at most 2^26 blocks; otherwise gc_find searches the chunks) */
-    if (gc_map) rt_sys_free(gc_map, gc_nmap);
-    gc_nmap = (gc_hi - gc_lo) / GC_BLOCK;
-    if (gc_nmap > ((size_t)1 << 26) || !(gc_map = (unsigned char *)rt_sys_mem(gc_nmap))) gc_map = 0;
-    for (i = 0; gc_map && i < gc_nchunks; i++)
-        rt_memset(gc_map + ((uintptr_t)gc_chunks[i].base - gc_lo) / GC_BLOCK, i + 1, gc_chunks[i].n);
+    if (gc_map) rt_sys_free(gc_map, gc_nmap); /* the block map: chunk number + 1 of every block from gc_lo to gc_hi */
+    if (!(gc_map = (unsigned char *)rt_sys_mem(gc_nmap = (gc_hi - gc_lo) / GC_BLOCK))) gc_oom();
+    for (i = 0; i < gc_nchunks; i++) rt_memset(gc_map + ((uintptr_t)gc_chunks[i].base - gc_lo) / GC_BLOCK, i + 1, gc_chunks[i].n);
 }
 
 static void gc_setup(void) {
@@ -258,21 +254,9 @@ static void gc_walk(gc_block *b, char *base) {
 }
 static gc_block *gc_find(uintptr_t p, char **base) {
     int i;
-    gc_block *b = 0;
-    if (p < gc_lo || p >= gc_hi) return 0;
-    if (gc_map) {
-        if (!(i = gc_map[(p - gc_lo) / GC_BLOCK])) return 0;
-        *base = (char *)(p & ~(uintptr_t)(GC_BLOCK - 1));
-        b = &gc_chunks[i - 1].b[(size_t)(*base - gc_chunks[i - 1].base) / GC_BLOCK];
-    } else
-        for (i = 0; i < gc_nchunks && !b; i++) {
-            uintptr_t off = p - (uintptr_t)gc_chunks[i].base;
-            if (off < gc_chunks[i].n * GC_BLOCK) {
-                *base = gc_chunks[i].base + (off & ~(uintptr_t)(GC_BLOCK - 1));
-                b = &gc_chunks[i].b[off / GC_BLOCK];
-            }
-        }
-    return b;
+    if (p < gc_lo || p >= gc_hi || !(i = gc_map[(p - gc_lo) / GC_BLOCK])) return 0;
+    *base = (char *)(p & ~(uintptr_t)(GC_BLOCK - 1));
+    return &gc_chunks[i - 1].b[(size_t)(*base - gc_chunks[i - 1].base) / GC_BLOCK];
 }
 /* Large objects: binary search of the sorted table; interior: a may point into the object. */
 static void gc_large_mark(uintptr_t a, int interior) {
