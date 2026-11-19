@@ -870,5 +870,10 @@ RT_FN obj rt_fl_remquo_bits(obj, obj); RT_FN obj rt_fl_fast_fma(void);
 RT_FN obj rt_make_f64vector(obj, obj); RT_FN obj rt_f64vector_p(obj); RT_FN obj rt_f64vector_length(obj);
 RT_FN obj rt_f64vector_ref(obj, obj); RT_FN obj rt_f64vector_set(obj, obj, obj); RT_FN obj rt_f64vector_to_list(obj);
 RT_FN obj rt_list_to_f64vector(obj); RT_FN obj rt_assume_failed(obj);
+/* define-c conversions (who: the Scheme procedure's name) */
+RT_FN long rt_ffi_long(obj, const char *); RT_FN int rt_ffi_int(obj, const char *); RT_FN double rt_ffi_dbl(obj, const char *);
+RT_FN char rt_ffi_char(obj, const char *); RT_FN int rt_ffi_bool(obj, const char *); RT_FN const char *rt_ffi_str(obj, const char *);
+RT_FN void *rt_ffi_ptr(obj, const char *); RT_FN obj rt_ffi_rlong(long, const char *); RT_FN obj rt_ffi_rptr(void *, const char *);
+RT_FN obj rt_ffi_rstr(const char *);
 #endif
 #endif /* SHIKRA_RT_H */

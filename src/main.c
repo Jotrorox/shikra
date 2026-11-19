@@ -51,6 +51,8 @@ typedef struct {
     int nargs;
     int size_all, size_tsv; /* size: --all (every procedure), --tsv (machine-readable) */
     int no_cache;           /* --no-cache: expand every library from source */
+    const char **links;     /* --link FILE, -l NAME (repeatable): extra link inputs, for define-c */
+    int nlinks;
 } options;
 
 int size_command(const char *path, int all, int tsv); /* size.c */
@@ -84,6 +86,8 @@ static void usage(FILE *f) {
           "  -o file                  output file\n"
           "  -w                       no warnings\n"
           "  --no-cache               do not use the expansion cache\n"
+          "  --link FILE              also compile/link FILE (.c, .o, .a, library; repeatable): define-c\n"
+          "  -l NAME                  link the library NAME (cc -lNAME; repeatable): define-c\n"
           "  --help, --version\n"
           "environment: SHIKRA_CACHE_DIR (default $XDG_CACHE_HOME/shikra or ~/.cache/shikra)\n", f);
 }
@@ -109,6 +113,7 @@ static void parse_args(int argc, char **argv, options *o) {
     o->cc = "cc";
     o->incdirs = (const char **)xmalloc(sizeof(char *) * (size_t)argc);
     o->keep = (const char **)xmalloc(sizeof(char *) * (size_t)(argc + 1));
+    o->links = (const char **)xmalloc(sizeof(char *) * (size_t)(argc + 1));
     if (argc < 2) { usage(stderr); exit(2); }
     if (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "help")) { usage(stdout); exit(0); }
     if (!strcmp(argv[1], "--version") || !strcmp(argv[1], "version")) {
@@ -146,6 +151,12 @@ static void parse_args(int argc, char **argv, options *o) {
         } else if ((v = flag_value(argc, argv, &i, "--cc"))) o->cc = v;
         else if ((v = flag_value(argc, argv, &i, "--target"))) o->target = v;
         else if ((v = flag_value(argc, argv, &i, "-I"))) o->incdirs[o->nincdirs++] = v;
+        else if ((v = flag_value(argc, argv, &i, "--link"))) o->links[o->nlinks++] = v;
+        else if ((v = flag_value(argc, argv, &i, "-l"))) {
+            char *l = (char *)xmalloc(strlen(v) + 3);
+            sprintf(l, "-l%s", v);
+            o->links[o->nlinks++] = l;
+        }
         else if ((v = flag_value(argc, argv, &i, "-o"))) o->output = v;
         else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(stdout); exit(0); }
         else if (a[0] == '-' && a[1]) die("unknown flag '%s' (shikra --help lists them)", a);
@@ -265,8 +276,8 @@ static void write_text(const char *path, const sbuf *s) {
 
 /* The C compiler command line (spec §11.1 flags; DESIGN.md §11 M0 part B). */
 static char **cc_argv(const options *o, const char *cfile, const char *out) {
-    char **av = (char **)xmalloc(sizeof(char *) * 64), *cc = arena_strdup(&compiler_arena, o->cc), *t;
-    int n = 0, darwin;
+    char **av = (char **)xmalloc(sizeof(char *) * (size_t)(64 + o->nlinks)), *cc = arena_strdup(&compiler_arena, o->cc), *t;
+    int n = 0, darwin, k;
     static char optflag[4] = "-O2";
     for (t = strtok(cc, " \t"); t && n < 40; t = strtok(NULL, " \t")) av[n++] = t;
     if (!n) die("--cc is empty");
@@ -296,6 +307,7 @@ static char **cc_argv(const options *o, const char *cfile, const char *out) {
     av[n++] = "-o";
     av[n++] = (char *)out;
     av[n++] = (char *)cfile;
+    for (k = 0; k < o->nlinks; k++) av[n++] = (char *)o->links[k]; /* --link, -l (define-c) */
     if (!darwin) av[n++] = "-lm"; /* rt_sys_pow; libm is part of libSystem on macOS */
     av[n] = NULL;
     return av;
@@ -368,6 +380,11 @@ static int cmd_run(options *o) {
     if ((key = cache_program_key())) {
         key = fnv_str(fnv_str(fnv_str(key, flags), o->cc), o->target ? o->target : "");
         for (k = 0; k < o->nkeep; k++) key = fnv_str(key, o->keep[k]);
+        for (k = 0; k < o->nlinks; k++) { /* link inputs: their names and contents */
+            char *t = read_file(o->links[k], &i);
+            key = fnv_str(key, o->links[k]);
+            if (t) { size_t j; for (j = 0; j < i; j++) key = (key ^ (unsigned char)t[j]) * 1099511628211ull; free(t); }
+        }
         sb_printf(&bin, "%s/run-%016llx", dir, key);
         sb_printf(&wf, "%s.warn", bin.s);
         if (access(bin.s, X_OK) == 0 && (w = read_file(wf.s, &i))) { fwrite(w, 1, i, stderr); goto exec; }
@@ -376,6 +393,7 @@ static int cmd_run(options *o) {
     emit_program(o, &c);
     if (!key) {
         sb_printf(&c, "/* cc: %s %s */\n", o->cc, flags); /* the key covers compiler and flags */
+        for (k = 0; k < o->nlinks; k++) sb_printf(&c, "/* link: %s */\n", o->links[k]); /* (contents: not with --no-cache) */
         for (i = 0; i < c.len; i++) h = (h ^ (unsigned char)c.s[i]) * 1099511628211ull;
         sb_printf(&bin, "%s/run-%016llx", dir, h);
     }

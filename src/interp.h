@@ -63,6 +63,7 @@ enum {
     OP_TEVAL,
     OP_ENV,     /*          acc = (environment . import sets in acc) */
     OP_INTERENV,
+    OP_CCALL,   /* i n      acc = C function i of ffi.c (define-c) on the n-1 pushed values and acc */
     OP_HALT     /*          return acc to vm_run's caller */
 };
 
@@ -85,6 +86,10 @@ void vm_reset(void);        /* after an abort: empty stack, default hooks */
 extern void (*vm_abort)(void);           /* REPL: called after an uncaught error was printed */
 extern library *vm_interaction;          /* (interaction-environment); NULL: made on demand */
 obj vm_default_import_form(void);        /* (import (scheme base) ...): the REPL defaults */
+
+/* ffi.c: define-c in the interpreter (dlsym in the running process; DESIGN.md "Extensions as built") */
+int ffi_resolve(obj desc, obj where);    /* index of the C function; cerror if the interpreter cannot call it */
+obj ffi_call(int i, int n, const obj *args);
 
 /* repl.c */
 typedef struct { front_opts fo; const char *argv0; } interp_opts;

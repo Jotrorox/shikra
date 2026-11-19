@@ -553,6 +553,7 @@ static const char *ccall(ir_node *r, int *erep) {
     obj d = r->u.prim.args[0]->u.value;
     const char *cname = RT_STR(RT_CAR(RT_CDR(d)))->buf, *name, *who, *pn;
     int n = r->u.prim.n - 1, i, rt = ir_ccall_type(r, -1);
+    *erep = R_OBJ;
     sbuf b = {0}, q = {0};
     obj nm = RT_CAR(d);
     c_string(&q, cname_str(nm), strlen(cname_str(nm)));

@@ -358,6 +358,17 @@ static void comp_prim(cfun *f, obj x, int p, int tail) {
         return;
     case PI_ENVIRONMENT: comp(f, RT_CAR(args), 0); emit(f, OP_ENV); break;
     case PI_INTERENV: emit(f, OP_INTERENV); break;
+    case PI_CCALL: { /* define-c: resolved now, i.e. when the definition is compiled */
+        int i = ffi_resolve(CADR(RT_CAR(args)), x);
+        n--;
+        for (l = RT_CDR(args); l != RT_NIL; l = RT_CDR(l)) {
+            comp(f, RT_CAR(l), 0);
+            if (RT_CDR(l) != RT_NIL) push(f);
+        }
+        op2(f, OP_CCALL, i, n);
+        if (n > 1) depth(f, -(n - 1));
+        break;
+    }
     default:
         for (l = args; l != RT_NIL; l = RT_CDR(l)) {
             comp(f, RT_CAR(l), 0);

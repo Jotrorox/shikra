@@ -2589,6 +2589,11 @@ static const char *const e32[] = {
 "RT_FN obj rt_make_f64vector(obj, obj); RT_FN obj rt_f64vector_p(obj); RT_FN obj rt_f64vector_length(obj);\n"
 "RT_FN obj rt_f64vector_ref(obj, obj); RT_FN obj rt_f64vector_set(obj, obj, obj); RT_FN obj rt_f64vector_to_list(obj);\n"
 "RT_FN obj rt_list_to_f64vector(obj); RT_FN obj rt_assume_failed(obj);\n"
+"/* define-c conversions (who: the Scheme procedure's name) */\n"
+"RT_FN long rt_ffi_long(obj, const char *); RT_FN int rt_ffi_int(obj, const char *); RT_FN double rt_ffi_dbl(obj, const char *);\n"
+"RT_FN char rt_ffi_char(obj, const char *); RT_FN int rt_ffi_bool(obj, const char *); RT_FN const char *rt_ffi_str(obj, const char *);\n"
+"RT_FN void *rt_ffi_ptr(obj, const char *); RT_FN obj rt_ffi_rlong(long, const char *); RT_FN obj rt_ffi_rptr(void *, const char *);\n"
+"RT_FN obj rt_ffi_rstr(const char *);\n"
 "#endif\n"
 "#endif /* SHIKRA_RT_H */\n"
 "",
