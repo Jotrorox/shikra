@@ -34,7 +34,7 @@ program (spec §4.3), so run the files in place:
 
 ```
 shikra run tests/r7rs/base.scm                  # compiled
-shikra repl tests/r7rs/base.scm                 # interpreted (M3+)
+shikra interp tests/r7rs/base.scm               # interpreted (M3+; or shikra repl FILE)
 shikra run --unicode=full tests/r7rs/char-unicode.scm
 ```
 

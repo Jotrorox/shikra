@@ -140,7 +140,9 @@ Raw non-`obj` words stored in precisely-scanned objects must look like fixnums
   testing flag; env `SHIKRA_GC_STRESS=N` collects at every N-th allocation instead, 0 off).
 - In the tool: compile commands run with collection disabled (batch program,
   frees nothing). In the REPL, front-end allocations (datums, expander state,
-  constants) are made in *immortal* mode: never reclaimed, and scanned as roots.
+  constants) are made in *immortal* mode: never reclaimed. (M3: front-end data uses the
+  unscanned "pure" immortal mode; mutable immortal objects -- global cells, copies of data
+  handed to `eval` -- the scanned one. See "M3 as built".)
 
 ## 6. Front end (passes 1–3, shared by compiler and REPL)
 
@@ -197,7 +199,7 @@ Front end → core forms → compact bytecode → VM with its own value stack (n
 recursion for Scheme calls; tail calls in constant space; continuations copy
 the VM stack). Open top level (globals in a table, redefinable). Always
 checked. Uses the same runtime and the same Scheme library sources as compiled
-programs. Never linked into compiled programs.
+programs. Never linked into compiled programs. As built: "M3 as built" in §11.
 
 ## 9. Tests
 
@@ -206,7 +208,11 @@ tests/run.sh [compiled|r7rs|interp|stress|expand|all]   driver used by `make tes
 tests/cases/NAME.scm + NAME.out             program + expected stdout (+ NAME.exit,
                                             + NAME.err: expected stderr substring,
                                             + NAME.in: stdin, else /dev/null,
-                                            + NAME.stress-interval: see M2 "Stress mode")
+                                            + NAME.stress-interval: see M2 "Stress mode",
+                                            + NAME.interp-stress-interval: M3 "Stress mode",
+                                            + NAME.compiled-only: reason the interpreter
+                                              legitimately differs; reported as skipped)
+tests/repl/NAME.in + NAME.out (+ NAME.args) input piped into `shikra repl`, whole output
 tests/errors/NAME.scm + NAME.err            expected compile diagnostics (substring)
 tests/expand/NAME.scm + NAME.out            core forms as `,expand` prints them
 tests/r7rs/                                 adapted Chibi r7rs-tests, split by library
@@ -229,7 +235,8 @@ engines and the outputs must be identical.
   detect the remaining case statically (a call reachable from an earlier top-level form).
 - (Resolved in M2: quoted pairs are read-only too. All literals are `static const`; literal
   pairs sit in one array and `set-car!`/`set-cdr!` raise "expected mutable pair" for them.
-  In the REPL (M3) quoted data are immortal heap pairs, so mutating them is not detected.)
+  In the interpreter (M3) quoted pairs are immortal heap pairs, and `RT_LITPAIR` in tool mode
+  asks the collector whether a pair is immortal, so mutation is detected there too.)
 - *Tree shaking spares user code* (§9 "anything unreachable ... is never emitted"):
   every form of the program and of user libraries is compiled so that the middle end's
   diagnostics (arity of known calls) cover all user code; only built-in library code is
@@ -260,6 +267,18 @@ engines and the outputs must be identical.
   text): the library's top-level `make-parameter` calls allocate, and tree shaking keeps
   every impure top-level form of a built-in library. M4's type-level shaking and inlining
   are expected to win this back; with `--gc=bump` hello world is 69,312 bytes.
+- *The REPL echoes its input when stdin is not a terminal* (M3; spec §11.2 shows a terminal
+  session): piped input then produces a transcript identical to the spec's session, which is
+  what tests/repl compares.
+- *An uncaught error at the REPL prompt does not run pending `dynamic-wind` after thunks*
+  (M3): the session's winders and handler lists are reset to empty (so parameterize bindings
+  are undone) and the prompt returns; running the after thunks could raise again.
+- *Redefining an imported name at the REPL shadows it for session code only* (M3): library
+  code keeps calling the library's own binding (it was resolved when the library was
+  expanded); callers inside the session see every new definition.
+- *Interpreter stack overflow is not catchable* (M3): beyond 2^25 slots (256 MB) the VM
+  prints "Error: stack overflow" and returns to the prompt (`shikra interp`: exits 70);
+  there is no room left to run a handler. Compiled programs crash on C stack overflow.
 - *Stress mode collects at every allocation for all but five cases* (§13 M2 "done when"):
   the r7rs gate and 36 of the 41 programs in tests/cases collect at every allocation, at
   -O2 and -O0; five whose live set or allocation count makes a full collection per
@@ -805,9 +824,9 @@ the R7RS 6.10 `dynamic-wind` re-entry example (tier 3, M5), which reports `error
 `make test`) builds each file of `r7rs_files` under each engine of `r7rs_engines` and compares
 the last line plus every `FAIL:`/`ERROR:` report with its "expected"/"but got" lines against
 `tests/r7rs/expected/FILE.ENGINE`, so a regression, a different error, or an unexpected pass
-all fail; it also checks the generated C with `-Wall -Wextra -Werror`. M3 adds `interp` to
-`r7rs_engines` (expected file `base.interp`, identical to `base.compiled`), M5 adds the other
-files.
+all fail; it also checks the generated C with `-Wall -Wextra -Werror`. (M3 replaced the two
+lists by `r7rs_runs`, FILE:ENGINE pairs, and added `base:interp` -- 658/658, since the
+interpreter's continuations are re-entrant -- and `eval:interp`.) M5 adds the other files.
 
 **Scheme vs. C.** C primitives are the leaf operations that need the representation or are hot:
 the port machinery (every read/write primitive takes an explicit port and exact bounds),
@@ -1095,3 +1114,211 @@ buffer was not a root, and `rt_init` allocated (ports, symbol table) for every p
 - Quoted data in the REPL (immortal heap pairs) are mutable (no `RT_LITPAIR` there).
 - Fixed limits: 64 root ranges, 48 chunks (with doubling growth: far beyond any real heap).
 - Weak references, finalizers, guardians: none (R7RS-small needs none).
+
+### M3 (the interpreter and the REPL)
+
+**File map** (interpreter 1,480 lines of C: `interp.h` 93, `bytecode.c` 468, `vm.c` 522,
+`repl.c` 396; runtime +40, front end +40)
+
+```
+src/interp.h     templates, the instruction set, the API between the three files
+src/bytecode.c   core forms -> bytecode: variable analysis, closures, letrec*, units
+src/vm.c         the VM: stack, dispatch loop, continuations, errors, eval/environment
+src/repl.c       shikra repl (input, printing, ,expand, ,c, ,quit) and shikra interp
+src/main.c       repl and the hidden command `interp FILE [args]`
+lib/scheme/{eval,load,repl}.sld   REPL-only libraries on %eval %environment
+                                  %interaction-environment (+ %read for load)
+src/rt_gc.c      dynamic root ranges, pure immortal mode, tool stress, rt_gc_immortal_pair
+src/library.c    front_opts.repl gates the REPL-only libraries; cerror_hook; front_repl_recover
+```
+
+**Pipeline.** Front end unchanged (passes 1-3) → core forms → `bc_unit` → a *template* per
+lambda clause → `vm_run`. A *unit* is the top-level code compiled at once: the bodies of every
+library loaded since the last unit (front_order after the last compiled one), then the given
+top-level forms; it is a zero-argument template whose code ends with RET. `shikra interp`
+compiles the whole program with its libraries as one unit (so a top-level continuation
+includes the rest of the program, as in a compiled program); the REPL makes one unit per entry
+(including the libraries an `import` just loaded). The interpreter never calls `ir_build` or
+the emitter.
+
+**Templates and closures.** `tmpl` (C memory, never freed): code (`int32_t[]`), constants
+(the elements of an immortal vector), name (for arity errors), nreq, rest, nlocals, maxstack,
+nfree, case-lambda clauses. A closure is an ordinary procedure object (`rt_make_proc` with code
+`vm_closure_code`): `free[0]` = the template's address (8-aligned, a fixnum to the collector),
+`free[1..nfree]` = captured values. A case-lambda closure's template lists clause templates
+that share one free-variable layout; the VM picks the first clause whose arity fits. A
+continuation is a procedure with code `vm_cont_code` whose `free[0]` is its stack copy. Both
+code functions raise if ever called from C (nothing in the tool calls Scheme from C).
+
+**Variables.** Locals are unique uninterned symbols, so a symbol occurrence is a reference to
+its binder (no scopes needed). Each binder gets a frame slot of its procedure; a reference
+from an inner lambda is a free variable of every lambda in between (flat closures, captured at
+closure creation). *Boxed* (slot holds a box): every assigned variable -- not only captured
+ones, because continuations copy the stack and a copy must share the location -- and every
+*early* letrec* variable: one mentioned by the init of its own or an earlier binding, except
+when both inits are lambdas of the same consecutive lambda run. Reads of early variables are
+checked ("x: variable used before its definition"). Lambda runs are created in order; captures
+of not-yet-created run members are placeholders patched by OP_FIXCL afterwards. Assigned
+parameters are boxed on entry. `((lambda (v ...) body) arg ...)` with matching counts is a
+let (slots, no closure). Lambdas are named as the compiled engine names them (global name,
+let/letrec variable name unless assigned, else `lambda`), so arity errors read the same.
+
+**Globals.** One *cell* per front-end `global` (`global.cell`): an immortal (scanned) vector
+`[value, name, defined?]`; GREF/GSET/GDEF reference it as a constant, so redefinition at the
+prompt is seen by every caller. `defined?` is set when a unit containing a `define` of it is
+compiled: reading the undefined marker then reports "x: variable used before its definition"
+(the compiled wording), otherwise "x: unbound variable" (REPL only; the open top level makes
+unbound identifiers globals). As in compiled programs, a top-level procedure defined once and
+never assigned exists from the start of its unit (DESIGN §10, "known top-level procedures").
+
+**Instruction set** (interp.h has the authoritative list with operands): CONST; LREF LSET FREF;
+LBREF FBREF LBREFC FBREFC LBSET FBSET BOX MKBOX (boxes); GREF GSET GDEF; PUSH; JMP JMPF;
+CLOSURE FIXCL; FRAME CALL TCALL RET; PRIM (p, n: the first n-1 arguments pushed, the last in
+acc); VALUES; SPREADL SPREADV CALLV TCALLV CWVSWAP VCHECK (apply and call-with-values);
+CALLCC TCALLCC; EVAL TEVAL ENV INTERENV; HALT. Accumulator machine: every expression leaves
+its value in `acc`.
+
+**Frames** (fp points at the first argument):
+
+```
+fp[-4] caller's fp (fixnum: stack index)    fp[-3] caller's pc (fixnum: code offset)
+fp[-2] caller's template (raw, 8-aligned)   fp[-1] the running procedure (its closure)
+fp[0 .. nlocals)  parameters, then let/letrec* variables     above: temporaries
+```
+
+A non-tail call: FRAME (3 placeholder slots), push f and the arguments, CALL n fills in the
+return information and enters. TCALL moves f and the arguments down to fp[-1] (constant
+space). Entry checks the procedure, picks a clause, checks arity, makes room for nlocals +
+maxstack + 16 slots (the stack is one `realloc`ed array, doubling up to 2^25 slots), builds the
+rest list, sets the remaining locals to the undefined marker. RET pops the frame. The bottom
+frame returns to a one-instruction HALT template. Every slot below sp is an obj or a
+fixnum-looking word, so the stack is a precise root range.
+
+**Continuations.** CALLCC copies the stack below its frame into a vector `[fp, pc, template,
+winders, handlers, slots...]`; TCALLCC copies below the current frame and uses the frame's
+return information (constant space for loops through `call/cc` in tail position). Invoking it
+copies the slots back, restores `rt_winders`/`rt_handlers` and continues with the argument
+(several arguments: a values object). Fully re-entrant: generators, re-entering
+`dynamic-wind` (the library's escape procedure rewinds first; `%continuation-live?` is #t for
+VM continuations), re-entering top-level forms. Cost: proportional to stack depth per capture
+and per invocation.
+
+**Primitives** are called through a function-pointer table built from prims.def
+(`prims[]`, cast to the exact arity, 0..5). `%uncaught` is replaced by the VM's (REPL: print,
+return to the prompt). The control operations are instructions: `%apply` = SPREADL+CALLV,
+`%call-with-values` = CWVSWAP, CALL 0, SPREADV, CALLV (with a literal lambda receiver, VCHECK
+first: "call-with-values: wrong number of values for the receiver", as compiled), `%values`
+= VALUES, `%call/cc` = CALLCC.
+
+**Errors.** Before anything that can raise or allocate, the loop saves its registers (`SYNC`).
+`rt_raise_hook` (set during `vm_run`) longjmps (`rt_sys_throw`) back to `vm_run`, which pushes
+a call of `(scheme base)`'s `raise` with the error object on top of the faulting frame (its
+return point is after the faulting instruction) and re-enters the loop -- so `guard`,
+`with-exception-handler` and `raise-continuable` are the library's, exactly as compiled. With
+no `raise` defined yet, or when `raise` reaches `%uncaught`: `shikra interp` prints and exits
+70 like a program, the REPL prints and returns to the prompt.
+
+**Memory and roots.** Collection is on in the interpreter (`rt_gc_enable(1)` in `vm_init`);
+compile commands are unchanged. Front-end work (reading, expansion, bytecode, templates'
+constants) allocates in *pure immortal* mode (`rt_gc_set_immortal(2)`): never reclaimed and
+not scanned, which is valid because such objects point only to immortal objects, static data
+and interned symbols (the symbol table is a root). Objects that are mutated later or may hold
+collectable values are *scanned immortal* (mode 1): global cells and the copies of data given
+to `eval`/`environment` (they may contain procedures). Literal strings, vectors and
+bytevectors get `RT_F_RO`; literal pairs are immortal, and tool-mode `RT_LITPAIR` asks
+`rt_gc_immortal_pair`, so mutating a literal raises as in compiled code. Roots: the VM stack
+as a *dynamic* range `[stk, vm_sp)` (`rt_gc_add_dynamic_roots`, bounds read at each
+collection), `vm_err`, the REPL's record of definitions; registers and C locals of the loop are
+covered by the conservative stack scan. Source locations are recorded only during front-end
+work (the table holds addresses the collector does not see). Unscanned immortal data made a
+collection at every allocation cheap (r7rs base: 11.5 s with scanned front-end data, 0.09 s).
+
+**Stress mode.** The tool reads `SHIKRA_GC_STRESS=N` (default 0; programs: as in M2) and then
+collects every N-th allocation once collection is enabled (not during immortal allocation).
+`tests/run.sh stress` runs every case and r7rs base through `shikra interp` at N = 1, except
+(`NAME.interp-stress-interval`; each takes 2.5-6 s at that interval, 40 s to minutes at 1):
+
+| case | N | | case | N |
+|---|---|---|---|---|
+| control_tail | 10 | | gc_mixed | 100 |
+| exceptions | 10 | | gc_reach | 10 |
+| tail_calls | 1,000 | | gc_deep | 100,000 |
+| gc_cons | 100 | | | |
+
+Checked that it bites: with the VM stack root removed, r7rs base and closures.scm fail under
+stress and pass without it.
+
+**The REPL** (spec §11.2). Prompt `shikra> `; input is read line by line from `rt_stdin` (the
+same port user code reads); an entry continues until its parentheses balance outside strings,
+`|symbols|`, `;` and `#| |#` comments and `#\(` characters. Each datum of the entry is read
+(pure immortal), expanded with `front_repl_expand` (or `front_repl_import` for `(import ...)`),
+compiled as a unit and run; the value is printed with `write` (nothing for the unspecified
+value; each of several values on its own line; values start on a fresh line). With stdin not
+a terminal the input lines are echoed (a piped session reads like the spec's transcript). An
+error prints its message and irritants (compile errors: `error: msg`, located when the source
+has positions), drops the rest of the entry, resets the dynamic state and returns to the
+prompt; definitions survive (`front_repl_recover` forgets half-loaded libraries). End of input
+prints a newline and exits 0. `,quit` exits.
+
+*Environment model.* Without a file the session is `front_repl_new()` importing `(scheme base)
+(scheme case-lambda) (scheme cxr) (scheme write) (scheme process-context) (scheme eval)
+(scheme load) (scheme repl)` -- every built-in library there is today. With `shikra repl
+main.scm` the program is loaded as for `build` (closed top level, program dir and `-I` for
+libraries), run (errors print and the prompt still comes), and its top-level frame is reopened
+as the session: its imports and definitions are available and redefinable. `import` at the
+prompt adds bindings (later imports override in the open frame). `(interaction-environment)`
+is the session; in `shikra interp` it is a fresh open top level with the default imports, made
+on first use. `(environment set ...)` is a new open top level with those imports (definitions
+by `eval` go into it). `eval` copies its datum (scanned immortal), expands it in the
+environment's frame (an `(import ...)` datum imports), compiles a unit and tail-calls it; front-
+end errors inside become Scheme errors ("malformed if", "library (x) not found") catchable by
+`guard`. `load` is Scheme: read each datum with `%read` and `eval` it before reading the next.
+
+*,expand expr*: expands in a scratch frame whose parent is the session (definitions do not
+take effect) and prints each core form with `unparse` (renaming stripped). *,c name*: the
+session records the source of its imports and definitions (and of the loaded file); `,c`
+writes the imports (minus the REPL-only libraries) and the latest definition of each name to a
+temporary program, runs `shikra emit-c -I <progdir> [-I dirs] FILE` (argv[0]) and prints the
+functions of that definition: the block commented `/* main: name */` whose C name is
+`P_main__<x>`, and every function named `P_main__<x>__...` (its nested procedures and
+case-lambda clauses). Messages for a name the session did not define, a definition that is
+not a procedure, and a session the compiler rejects (its diagnostic is shown above).
+
+**How to add an instruction**: an `OP_` in interp.h (document its operands there), emit it in
+bytecode.c (keep `depth()` accounting exact: maxstack sizes the frame), a `case` in `run()`
+(vm.c) that calls `SYNC()` before anything that can allocate or raise, and a test in
+tests/cases (it then runs under both engines).
+
+**Tests.** `tests/run.sh interp`: the 41 tests/cases under `shikra interp` against the compiled
+expectations (one `NAME.compiled-only`: reentry, whose compiled run pins the M5 tier-3 error;
+the interpreter prints the R7RS answer, tested in tests/repl/callcc), and 13 REPL transcripts:
+spec (the spec's session verbatim), multiline, errors, redefine, expand, c, quit, eof,
+eof_nonl, load_file (+ a user library and `import` at the prompt), eval (eval, environment,
+interaction-environment, load), callcc (generator, re-entered dynamic-wind, top-level re-entry,
+multiple values to a continuation), deep (10^6-iteration tail loop, 10^5-deep recursion, apply
+on 10^5 elements). r7rs: base.scm interpreted is 658/658 (`expected/base.interp`; its whole
+output equals the compiled run's except the pinned tier-3 test); eval.scm interpreted is 1/3
+(`expected/eval.interp`: the other two use `(scheme inexact)`, M5). tests/errors
+repl_only_eval and repl_only_load. `make test`: 332 checks, 2 reported skips, 3:24.
+
+**Numbers** (Apple M-series): start-up of `shikra repl`/`interp` (read, expand and compile
+every built-in library, run hello world) about 3 ms; r7rs base 7 ms. `fib 30`: interpreter
+122 ms, compiled (-O2) 4.5 ms: 27x.
+
+**Engine disagreements found** (all fixed on the interpreter side): quoted data were mutable
+(now read-only, see Memory); a literal `call-with-values` receiver given the wrong number of
+values reported an arity error instead of the compiled wording (VCHECK). No compiled-engine
+bug was found.
+
+**Known gaps**
+- The interpreter is not optimised: every library procedure call (`car`, `+`) is a full VM
+  call through its global cell; no superinstructions.
+- A continuation copies the whole stack (no segmenting); deep stacks make capture and re-entry
+  proportionally slow.
+- `eval`/`load` copy their data into immortal memory and front-end structures are never freed:
+  a session that evaluates unboundedly many forms grows (templates are leaked too).
+- Middle-end diagnostics of the compiler (arity of known calls, provably wrong types, values
+  counts) are run-time errors in the interpreter.
+- Circular data given to `eval` loops in the copy.
+- `,c` text extraction relies on the emitter's comment and naming conventions; `define-record-type`
+  or `define-values` names are not recognised by `,c` (only `define`).
