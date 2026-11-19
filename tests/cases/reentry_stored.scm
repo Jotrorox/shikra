@@ -49,3 +49,9 @@
   (write r)
   (if (not once) (begin (set! once #t) (kk #f))))
 (newline)
+
+;; a continuation passed to itself becomes the value of its own call/cc: calling it re-enters
+(define n 0)
+(let ((x (call/cc (lambda (k) (k k)))))
+  (set! n (+ n 1))
+  (if (procedure? x) (x 5) (begin (write (list x n)) (newline))))

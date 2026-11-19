@@ -1166,7 +1166,12 @@ static tset tclo(ir_lambda *L) {
     }
     return t;
 }
-static void tsite_value(ccsite *s, tset t) { tflow(s->dst ? &TV[s->dst->id] : &TR[s->owner->id], t); }
+/* a value the call/cc site s returns: its own continuation there has left its extent */
+static tset tsite_value(ccsite *s, tset t) {
+    intptr_t i = s - CS - cbase;
+    if (i >= 0 && i < 64 && (t >> i & 1)) tesc(1ull << i, "the continuation becomes its own call/cc's value");
+    return t;
+}
 static tset tcall(ir_node *c, ir_lambda *L) {
     ir_lambda *K = c->u.call.known;
     tset t = 0;
@@ -1174,7 +1179,7 @@ static tset tcall(ir_node *c, ir_lambda *L) {
     (void)L;
     if (c->u.call.ctl == CTL_CALLCC) {
         ccsite *s = &CS[(intptr_t)pm_get(&site_ix, c) - 1];
-        return s->recv ? TR[s->recv->id] : 0;
+        return s->recv ? tsite_value(s, TR[s->recv->id]) : 0;
     }
     if (c->u.call.ctl == CTL_APPLY) { tesc(tof(c->u.call.args[1]), "apply"); return 0; }
     if (c->u.call.ctl == CTL_CWV) return 0; /* producer and consumer escape (their results: see below) */
@@ -1189,7 +1194,8 @@ static tset tcall(ir_node *c, ir_lambda *L) {
     if (t && c->u.call.fn && c->u.call.fn->kind == IR_REF && RPV[c->u.call.fn->u.ref.v->id]) {
         /* (k v ...) with k a receiver's own parameter: the values become those call/cc sites' values */
         ir_lambda *R = RPV[c->u.call.fn->u.ref.v->id];
-        for (i = 0; i < ncs; i++) if (CS[i].recv == R) tsite_value(&CS[i], t);
+        for (i = 0; i < ncs; i++)
+            if (CS[i].recv == R) tflow(CS[i].dst ? &TV[CS[i].dst->id] : &TR[CS[i].owner->id], tsite_value(&CS[i], t));
         return 0;
     }
     tesc(t, "argument of an unknown call");
