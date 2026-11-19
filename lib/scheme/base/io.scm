@@ -1,6 +1,8 @@
 ;; Input and output (R7RS 6.13): textual and binary ports over OS descriptors, strings and
 ;; bytevectors (rt_io.c). A port is textual or binary, never both; the standard ports are
-;; textual. The current ports are parameter objects (control.scm). display and write are in
+;; textual. The current ports are parameter objects whose cell (converter . value) is a static
+;; pair of the runtime (%port-cell k): no allocation at start-up, (current-output-port) reads the
+;; cell, and parameterize swaps a value in and out (control.scm). display and write are in
 ;; (scheme write); file ports are (scheme file).
 (export current-input-port current-output-port current-error-port call-with-port
         port? input-port? output-port? textual-port? binary-port?
@@ -12,9 +14,18 @@
         eof-object eof-object?
         write-char write-string newline write-u8 write-bytevector flush-output-port)
 (begin
-  (define current-input-port (make-parameter (%stdin-port)))
-  (define current-output-port (make-parameter (%stdout-port)))
-  (define current-error-port (make-parameter (%stderr-port)))
+  (define current-input-port
+    (case-lambda
+      (() (%cdr (%port-cell 0)))
+      ((x) (if (%eq? x parameter-key) (%port-cell 0) (%set-cdr! (%port-cell 0) x)))))
+  (define current-output-port
+    (case-lambda
+      (() (%cdr (%port-cell 1)))
+      ((x) (if (%eq? x parameter-key) (%port-cell 1) (%set-cdr! (%port-cell 1) x)))))
+  (define current-error-port
+    (case-lambda
+      (() (%cdr (%port-cell 2)))
+      ((x) (if (%eq? x parameter-key) (%port-cell 2) (%set-cdr! (%port-cell 2) x)))))
   (define (call-with-port port proc)
     (call-with-values (lambda () (proc port))
       (lambda vals (%close-port port) (%apply values vals))))

@@ -48,24 +48,33 @@
     (let ((cell (if (%procedure? p) (p parameter-key) #f)))
       (if (%pair? cell) cell (type-error "parameterize" "parameter" p))))
   ;; Values are converted before any binding takes effect; restoring does not convert.
+  ;; The three port parameters are shallow-bound: their frame is a dynamic-wind frame whose
+  ;; before and after thunks swap the value in and out of the static cell, so the current
+  ;; port is always the cell's cdr; travel-to! enters and leaves the frames, also on escapes.
   (define-syntax parameterize
     (syntax-rules ()
       ((_ () body ...) (let () body ...))
       ((_ ((p v) ...) body ...)
        (parameterize-run (list p ...) (list v ...) (lambda () body ...)))))
+  (define (port-cell? c)
+    (if (%eq? c (%port-cell 0)) #t (if (%eq? c (%port-cell 1)) #t (%eq? c (%port-cell 2)))))
+  (define (swap-frame cell v)
+    (let ((swap (lambda () (let ((t (%cdr cell))) (%set-cdr! cell v) (set! v t)))))
+      (%cons swap swap)))
   (define (parameterize-run params vals thunk)
     (let ((w (%winders)))
       (let loop ((ps params) (vs vals) (acc w))
         (if (%null? ps)
             (begin
-              (%set-winders! acc)
+              (travel-to! acc)
               (let ((r (thunk)))
-                (%set-winders! w)
+                (travel-to! w)
                 r))
             (let* ((cell (parameter-cell (%car ps)))
-                   (conv (%car cell)))
+                   (conv (%car cell))
+                   (v (if conv (conv (%car vs)) (%car vs))))
               (loop (%cdr ps) (%cdr vs)
-                    (%cons (%cons cell (if conv (conv (%car vs)) (%car vs))) acc)))))))
+                    (%cons (if (port-cell? cell) (swap-frame cell v) (%cons cell v)) acc)))))))
   (define (procedure? x) (%procedure? x))
   ;; R7RS 6.14: the cond-expand feature identifiers (spec 3.4), fixed at compile time.
   (define (features) (list-copy (%features)))

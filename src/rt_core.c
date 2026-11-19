@@ -38,6 +38,7 @@ RT_FN void rt_init(int argc, char **argv, void *stack_base) {
     rt_gc_add_roots(&rt_stdout, &rt_stdout + 1);
     rt_gc_add_roots(&rt_stderr, &rt_stderr + 1);
     rt_gc_add_roots(&rt_ports, &rt_ports + 1);
+    rt_gc_add_roots(&rt_port_cells[0].car, &rt_port_cells[2].cdr + 1);
 }
 
 RT_FN void rt_exit(int code) {
@@ -118,6 +119,50 @@ RT_FN void rt_print_error(obj e) {
     rt_port_putc(p, '\n');
 }
 
+#ifdef RT_NO_HANDLERS
+/* No exception handler can ever be installed in this program (the analysis found no
+ * with-exception-handler or guard; DESIGN.md M4-2): a runtime error is uncaught, so it is
+ * printed as rt_uncaught would and the program exits, with no error object, no irritant list
+ * and no Scheme raise: the error path allocates nothing. */
+static void core_die_head(const char *who, const char *msg, const char *msg2) {
+    rt_flush(rt_stdout);
+    rt_port_write_fd(rt_stderr, "Error: ", 7);
+    if (who) { rt_port_write_fd(rt_stderr, who, rt_strlen(who)); rt_port_write_fd(rt_stderr, ": ", 2); }
+    rt_port_write_fd(rt_stderr, msg, rt_strlen(msg));
+    if (msg2) rt_port_write_fd(rt_stderr, msg2, rt_strlen(msg2));
+}
+static RT_NORETURN void core_die(const char *who, const char *msg, const char *msg2, obj irritants) {
+    core_die_head(who, msg, msg2);
+    for (; rt_is_pair(irritants); irritants = RT_CDR(irritants)) {
+        rt_port_putc(rt_stderr, ' ');
+        rt_print(RT_CAR(irritants), rt_stderr, 1);
+    }
+    rt_port_write_fd(rt_stderr, "\n", 1);
+    rt_exit(70);
+}
+#define CORE_DIE1(who, msg, msg2, x) do { obj i_[2]; i_[0] = (x); i_[1] = RT_NIL; core_die1(who, msg, msg2, i_); } while (0)
+static RT_NORETURN void core_die1(const char *who, const char *msg, const char *msg2, obj *x) {
+    core_die_head(who, msg, msg2);
+    rt_port_putc(rt_stderr, ' ');
+    rt_print(x[0], rt_stderr, 1);
+    rt_port_write_fd(rt_stderr, "\n", 1);
+    rt_exit(70);
+}
+RT_FN void rt_error(const char *who, const char *msg, obj irritants) { core_die(who, msg, 0, irritants); }
+RT_FN void rt_type_error(const char *who, const char *expected, obj x) { CORE_DIE1(who, "expected ", expected, x); }
+RT_FN void rt_range_error(const char *who, obj x) { CORE_DIE1(who, "index out of range", 0, x); }
+/* Fixnum overflow of + - * (also from specialised code): the irritants are fixnums, printed by
+ * the integer printer alone (so the section 12 program links no general printer). */
+RT_FN void rt_fx_overflow(const char *who, obj a, obj b) {
+    core_die_head(who, "fixnum overflow", 0);
+    rt_port_write_fd(rt_stderr, " ", 1);
+    rt_put_fixnum(a, rt_stderr);
+    rt_port_write_fd(rt_stderr, " ", 1);
+    rt_put_fixnum(b, rt_stderr);
+    rt_port_write_fd(rt_stderr, "\n", 1);
+    rt_exit(70);
+}
+#else
 RT_FN void rt_error(const char *who, const char *msg, obj irritants) {
     obj m = rt_open_output_string();
     if (who) { rt_port_puts(m, who); rt_port_puts(m, ": "); }
@@ -133,6 +178,8 @@ RT_FN void rt_type_error(const char *who, const char *expected, obj x) {
 }
 
 RT_FN void rt_range_error(const char *who, obj x) { rt_error(who, "index out of range", rt_cons(x, RT_NIL)); }
+RT_FN void rt_fx_overflow(const char *who, obj a, obj b) { rt_error(who, "fixnum overflow", rt_cons(a, rt_cons(b, RT_NIL))); }
+#endif
 
 /* ---- pairs and lists ---- */
 RT_FN intptr_t rt_list_length(obj x, const char *who) {
@@ -207,28 +254,30 @@ RT_FN intptr_t *rt_addrtab_get(rt_addrtab *t, obj a, obj b, int insert) {
     }
 }
 
-/* equal? terminates on circular structures (R7RS 6.1): a first pass gives up after visiting
- * CORE_EQ_BUDGET pairs and vectors or nesting CORE_EQ_DEPTH levels deep (a cycle through cars
- * would otherwise recurse that far on the C stack); the second pass records every pair of compound objects it
- * enters and treats a pair met again as equal (the comparison is a bisimulation), so it
- * terminates. Returns 1, 0, or -1 when the budget ran out. */
+/* equal? terminates on circular structures (R7RS 6.1). One pass: plain recursion (on cars and
+ * vector elements; iterating on cdrs and last elements) while a budget of CORE_EQ_BUDGET pairs and
+ * vectors lasts and nesting stays below CORE_EQ_DEPTH; from then on (in place, nothing is
+ * redone) every pair of compound objects entered is recorded in an address table and a pair met
+ * again counts as equal (a bisimulation: the greatest fixed point), which terminates because the
+ * table only grows. Large acyclic data and DAGs stay on the fast path (M4-2: the M5 version
+ * restarted from scratch and recorded everything once a deep car chain was seen). */
 #define CORE_EQ_BUDGET 100000
-#define CORE_EQ_DEPTH 1000
-static int core_equal(obj a, obj b, intptr_t *budget, int depth, rt_addrtab *seen) {
+#define CORE_EQ_DEPTH 10000
+typedef struct { intptr_t budget; int hashing; rt_addrtab seen; } core_eq;
+static int core_equal(obj a, obj b, core_eq *q, int depth) {
     for (;;) {
         if (rt_eqv(a, b)) return 1;
         if (rt_is_pair(a) ? !rt_is_pair(b) : !rt_is_heap(a) || !rt_is_heap(b) || RT_HTYPE(a) != RT_HTYPE(b)) return 0;
         if (rt_is_pair(a) || RT_HTYPE(a) == RT_T_VECTOR) {
-            if (!seen) { if (--*budget < 0 || depth > CORE_EQ_DEPTH) return -1; }
-            else {
-                intptr_t *v = rt_addrtab_get(seen, a, b, 1);
+            if (!q->hashing && (--q->budget < 0 || depth > CORE_EQ_DEPTH)) q->hashing = 1;
+            if (q->hashing) {
+                intptr_t *v = rt_addrtab_get(&q->seen, a, b, 1);
                 if (*v) return 1;
                 *v = 1;
             }
         }
         if (rt_is_pair(a)) {
-            int r = core_equal(RT_CAR(a), RT_CAR(b), budget, depth + 1, seen);
-            if (r != 1) return r;
+            if (!core_equal(RT_CAR(a), RT_CAR(b), q, depth + 1)) return 0;
             a = RT_CDR(a); b = RT_CDR(b);
             continue;
         }
@@ -241,10 +290,9 @@ static int core_equal(obj a, obj b, intptr_t *budget, int depth, rt_addrtab *see
                    rt_memcmp(RT_PTR(a, rt_bytevector)->b, RT_PTR(b, rt_bytevector)->b, (size_t)RT_HLEN(a)) == 0;
         case RT_T_VECTOR: {
             intptr_t i, n = RT_HLEN(a);
-            int r;
             if (n != RT_HLEN(b)) return 0;
             if (n == 0) return 1;
-            for (i = 0; i < n - 1; i++) if ((r = core_equal(RT_VEC(a)[i], RT_VEC(b)[i], budget, depth + 1, seen)) != 1) return r;
+            for (i = 0; i < n - 1; i++) if (!core_equal(RT_VEC(a)[i], RT_VEC(b)[i], q, depth + 1)) return 0;
             a = RT_VEC(a)[n - 1]; b = RT_VEC(b)[n - 1];
             continue;
         }
@@ -253,10 +301,12 @@ static int core_equal(obj a, obj b, intptr_t *budget, int depth, rt_addrtab *see
     }
 }
 RT_FN int rt_equal(obj a, obj b) {
-    intptr_t budget = CORE_EQ_BUDGET;
-    int r = core_equal(a, b, &budget, 0, 0);
-    rt_addrtab seen = {0, 0, 0};
-    return r >= 0 ? r : core_equal(a, b, &budget, 0, &seen);
+    core_eq q;
+    q.budget = CORE_EQ_BUDGET;
+    q.hashing = 0;
+    q.seen.e = 0;
+    q.seen.cap = q.seen.n = 0;
+    return core_equal(a, b, &q, 0);
 }
 RT_FN obj rt_eqv_p(obj a, obj b) { return RT_BOOL(rt_eqv(a, b)); }
 RT_FN obj rt_equal_p(obj a, obj b) { return RT_BOOL(rt_equal(a, b)); }
@@ -505,10 +555,15 @@ RT_FN obj rt_rest_list(intptr_t argc, intptr_t nreq, obj a0, obj a1, obj a2, obj
     for (i = argc - 1; i >= nreq; i--) r = rt_cons(i == 0 ? a0 : i == 1 ? a1 : i == 2 ? a2 : i == 3 ? a3 : rt_args[i - 4], r);
     return r;
 }
+#ifdef RT_NO_HANDLERS
+RT_FN void rt_arity_error(const char *who, intptr_t argc) { CORE_DIE1(who, "wrong number of arguments", 0, RT_FIX(argc)); }
+RT_FN void rt_not_procedure(obj f) { CORE_DIE1(0, "not a procedure", 0, f); }
+#else
 RT_FN void rt_arity_error(const char *who, intptr_t argc) {
     rt_error(who, "wrong number of arguments", rt_cons(RT_FIX(argc), RT_NIL));
 }
 RT_FN void rt_not_procedure(obj f) { rt_error(0, "not a procedure", rt_cons(f, RT_NIL)); }
+#endif
 RT_FN void rt_undefined_error(const char *name) { rt_error(name, "variable used before its definition", RT_NIL); }
 RT_FN intptr_t rt_spread(obj args, obj *regs) {
     intptr_t n = rt_list_length(args, "apply"), i;

@@ -24,9 +24,7 @@ static double num_d(obj x, const char *who) {
     RT_CHECK(rt_is_flo(x), who, "number", x);
     return RT_FLO(x);
 }
-static RT_NORETURN void num_overflow(const char *who, obj a, obj b) {
-    rt_error(who, "fixnum overflow", rt_cons(a, rt_cons(b, RT_NIL)));
-}
+static RT_NORETURN void num_overflow(const char *who, obj a, obj b) { rt_fx_overflow(who, a, b); }
 static obj num_fix(intptr_t v, const char *who, obj a, obj b) {
     if (v < RT_FIX_MIN || v > RT_FIX_MAX) num_overflow(who, a, b);
     return RT_FIX(v);
@@ -360,7 +358,11 @@ RT_FN obj rt_number_to_string(obj x, obj radix) {
     }
     RT_CHECK(rt_is_flo(x), "number->string", "number", x);
     if (r != 10) rt_error("number->string", "inexact numbers are printed in radix 10 only", rt_cons(x, RT_NIL));
+#ifndef RT_NO_FLONUMS /* no flonum can exist (analysis, spec §9.1): no float printer */
     n = rt_format_double(RT_FLO(x), buf);
+#else
+    n = 0;
+#endif
     return rt_make_string_n(buf, n);
 }
 

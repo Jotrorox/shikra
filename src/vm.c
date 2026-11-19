@@ -81,7 +81,7 @@ static void grow(size_t need) { /* room for need more slots above vm_sp */
         rt_flush(rt_stdout);
         rt_port_puts(rt_stderr, "Error: stack overflow (interpreter stack exceeds 256 MB)\n");
         vm_sp = stk;
-        if (vm_repl) { restore_hooks(); rt_winders = rt_handlers = RT_NIL; vm_abort(); }
+        if (vm_repl) { restore_hooks(); rt_winders = rt_handlers = RT_NIL; rt_port_cells_reset(); vm_abort(); }
         rt_exit(70);
     }
     if (!(s = (obj *)realloc(stk, n * sizeof(obj)))) die("out of memory");

@@ -334,6 +334,7 @@ RT_FN void rt_print_error(obj e); /* what rt_uncaught prints, without exiting (t
 RT_FN RT_NORETURN void rt_error(const char *who, const char *msg, obj irritants); /* "who: msg" */
 RT_FN RT_NORETURN void rt_type_error(const char *who, const char *expected, obj x);
 RT_FN RT_NORETURN void rt_range_error(const char *who, obj x);
+RT_FN RT_NORETURN void rt_fx_overflow(const char *who, obj a, obj b); /* "who: fixnum overflow" a b */
 RT_FN obj rt_make_error(int kind, obj message, obj irritants, obj loc);
 
 /* ---- core objects (rt_core.c) ---- */
@@ -461,11 +462,20 @@ RT_FN obj rt_continuation_live_p(obj k);  /* #f only for a dead tier-2 escape */
  * the winders and handler lists and jumps back here with its arguments as the result. */
 RT_FN obj rt_call_cc(obj f);
 #endif
+/* --unsafe (spec §3.3, RT_UNSAFE): the remaining checks are removed -- type, bounds, overflow,
+ * undefined-variable, not-a-procedure and literal-mutation checks of the inline primitives and
+ * of every RT_CHECK in the runtime; behaviour is then undefined, as in C. */
+#ifdef RT_UNSAFE
+#define RT_SAFE(x)
+#else
+#define RT_SAFE(x) x
+#endif
 RT_INLINE obj rt_chkdef(obj v, const char *name) {
-    if (RT_UNLIKELY(v == RT_UNDEF)) rt_undefined_error(name);
+    RT_SAFE(if (RT_UNLIKELY(v == RT_UNDEF)) rt_undefined_error(name);)
+    (void)name;
     return v;
 }
-#define RT_CALLABLE(f) do { if (RT_UNLIKELY(!rt_is_proc(f))) rt_not_procedure(f); } while (0)
+#define RT_CALLABLE(f) do { RT_SAFE(if (RT_UNLIKELY(!rt_is_proc(f))) rt_not_procedure(f);) } while (0)
 
 /* ---- strings and chars (rt_str.c) ---- */
 RT_FN int rt_utf8_encode(char *out, int cp);   /* returns 1..4 */
@@ -561,6 +571,12 @@ RT_FN size_t rt_format_double(double d, char *out); /* >= 32 bytes; no NUL */
 /* Generic arithmetic: inline fixnum fast path, out-of-line general case. The fast paths are
  * always inlined: since M4-1 a procedure's body holds all its arithmetic, and the C compiler's
  * heuristics would otherwise leave some of it out of line. */
+#ifdef RT_UNSAFE /* fixnum overflow wraps (two's complement, through unsigned arithmetic) */
+#define RT_WRAP(a, op, b) ((intptr_t)((uintptr_t)(a) op (uintptr_t)(b)))
+RT_INLINE RT_ALWAYS obj rt_add(obj a, obj b) { return RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) ? RT_O(RT_WRAP(a, +, b)) : rt_add2(a, b); }
+RT_INLINE RT_ALWAYS obj rt_sub(obj a, obj b) { return RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) ? RT_O(RT_WRAP(a, -, b)) : rt_sub2(a, b); }
+RT_INLINE RT_ALWAYS obj rt_mul(obj a, obj b) { return RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) ? RT_O(RT_WRAP(RT_FIXVAL(a), *, b)) : rt_mul2(a, b); }
+#else
 RT_INLINE RT_ALWAYS obj rt_add(obj a, obj b) {
     intptr_t r;
     if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) && !rt_add_ovf((intptr_t)a, (intptr_t)b, &r)) return RT_O(r);
@@ -576,6 +592,7 @@ RT_INLINE RT_ALWAYS obj rt_mul(obj a, obj b) {
     if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) && !rt_mul_ovf(RT_FIXVAL(a), (intptr_t)b, &r)) return RT_O(r);
     return rt_mul2(a, b);
 }
+#endif
 RT_INLINE RT_ALWAYS obj rt_lt(obj a, obj b) {
     if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b))) return RT_BOOL((intptr_t)a < (intptr_t)b);
     return rt_lt2(a, b);
@@ -585,8 +602,63 @@ RT_INLINE RT_ALWAYS obj rt_gt(obj a, obj b) {
     return rt_gt2(a, b);
 }
 
+/* ---- specialised arithmetic (M4-2): operands proven by the flow analysis ----
+ * Fixnums are tagged words (intptr_t, n << 1): add, subtract and compare work on them
+ * directly, multiply untags one operand (spec §6); one overflow branch, which raises (never
+ * wraps, except with --unsafe). Integer division falls back to the generic primitive for the
+ * cases that raise. */
+#ifdef RT_UNSAFE
+#define rt_fxadd(a, b) RT_WRAP(a, +, b)
+#define rt_fxsub(a, b) RT_WRAP(a, -, b)
+#define rt_fxmul(a, b) RT_WRAP(RT_FIXVAL(a), *, b)
+#else
+RT_INLINE RT_ALWAYS intptr_t rt_fxadd(intptr_t a, intptr_t b) {
+    intptr_t r;
+    if (RT_UNLIKELY(rt_add_ovf(a, b, &r))) rt_fx_overflow("+", RT_O(a), RT_O(b));
+    return r;
+}
+RT_INLINE RT_ALWAYS intptr_t rt_fxsub(intptr_t a, intptr_t b) {
+    intptr_t r;
+    if (RT_UNLIKELY(rt_sub_ovf(a, b, &r))) rt_fx_overflow("-", RT_O(a), RT_O(b));
+    return r;
+}
+RT_INLINE RT_ALWAYS intptr_t rt_fxmul(intptr_t a, intptr_t b) {
+    intptr_t r;
+    if (RT_UNLIKELY(rt_mul_ovf(RT_FIXVAL(a), b, &r))) rt_fx_overflow("*", RT_O(a), RT_O(b));
+    return r;
+}
+#endif
+RT_INLINE intptr_t rt_fxquo(intptr_t a, intptr_t b) {
+    RT_SAFE(if (RT_UNLIKELY(b == 0 || (b == -2 && a == (intptr_t)RT_FIX(RT_FIX_MIN)))) return (intptr_t)rt_quotient(RT_O(a), RT_O(b));)
+    return (intptr_t)RT_FIX(RT_FIXVAL(a) / RT_FIXVAL(b));
+}
+RT_INLINE intptr_t rt_fxrem(intptr_t a, intptr_t b) {
+    RT_SAFE(if (RT_UNLIKELY(b == 0)) return (intptr_t)rt_remainder(RT_O(a), RT_O(b));)
+    return (intptr_t)RT_FIX(RT_FIXVAL(a) % RT_FIXVAL(b));
+}
+RT_INLINE intptr_t rt_fxmod(intptr_t a, intptr_t b) {
+    intptr_t r;
+    RT_SAFE(if (RT_UNLIKELY(b == 0)) return (intptr_t)rt_modulo(RT_O(a), RT_O(b));)
+    r = RT_FIXVAL(a) % RT_FIXVAL(b);
+    if (r != 0 && (r < 0) != (b < 0)) r += RT_FIXVAL(b);
+    return (intptr_t)RT_FIX(r);
+}
+/* A proven number as a double; flonum abs (sign bit, as rt_abs). */
+RT_INLINE double rt_num_dbl(obj x) { return rt_is_fix(x) ? (double)RT_FIXVAL(x) : RT_FLO(x); }
+RT_INLINE double rt_flabs(double d) { union { double d; uint64_t u; } x; x.d = d; x.u &= ~((uint64_t)1 << 63); return x.d; }
+
 /* ---- ports and printing (rt_io.c) ---- */
 RT_EXTVAR obj rt_stdin, rt_stdout, rt_stderr;
+RT_EXTVAR rt_pair rt_port_cells[3]; /* (converter . value) of the three port parameters */
+RT_FN void rt_port_cells_reset(void);
+RT_FN void rt_port_write_fd(obj port, const char *s, size_t n); /* OS-descriptor port: no allocation */
+/* Unchecked writes to an open textual OS-descriptor port (a standard port the analysis proved) */
+RT_FN obj rt_put_fixnum(obj n, obj port);
+RT_FN obj rt_put_string(obj s, obj port);
+RT_FN obj rt_put_char(obj c, obj port);
+RT_INLINE obj rt_put_newline(obj port) { rt_port_write_fd(port, "\n", 1); return RT_UNSPEC; }
+RT_FN obj rt_display_flat(obj x, obj port); /* x is no pair and no non-empty vector: no labels */
+RT_FN obj rt_write_flat(obj x, obj port);
 RT_EXTVAR obj rt_ports; /* open OS-descriptor output ports other than stdout/stderr (flushed at exit) */
 RT_FN obj rt_make_fd_port(int fd, int flags, obj name);
 RT_FN obj rt_open_input_string(obj s);
@@ -650,7 +722,7 @@ RT_FN void rt_srcloc_set(obj pair, obj file, intptr_t line, intptr_t col);
 #endif
 
 /* ---- inline checked primitives (named in prims.def) ---- */
-#define RT_CHECK(c, who, ty, x) do { if (RT_UNLIKELY(!(c))) rt_type_error(who, ty, x); } while (0)
+#define RT_CHECK(c, who, ty, x) do { RT_SAFE(if (RT_UNLIKELY(!(c))) rt_type_error(who, ty, x);) } while (0)
 RT_INLINE obj rt_car(obj x) { RT_CHECK(rt_is_pair(x), "car", "pair", x); return RT_CAR(x); }
 RT_INLINE obj rt_cdr(obj x) { RT_CHECK(rt_is_pair(x), "cdr", "pair", x); return RT_CDR(x); }
 #ifdef RT_UNSAFE
@@ -670,6 +742,8 @@ RT_INLINE obj rt_set_cdr(obj x, obj v) {
     RT_CDR(x) = v;
     return RT_UNSPEC;
 }
+RT_INLINE obj rt_set_car_u(obj x, obj v) { RT_CHECK_MUTABLE_PAIR(x, "set-car!"); RT_CAR(x) = v; return RT_UNSPEC; }
+RT_INLINE obj rt_set_cdr_u(obj x, obj v) { RT_CHECK_MUTABLE_PAIR(x, "set-cdr!"); RT_CDR(x) = v; return RT_UNSPEC; }
 RT_INLINE obj rt_pair_p(obj x) { return RT_BOOL(rt_is_pair(x)); }
 RT_INLINE obj rt_null_p(obj x) { return RT_BOOL(x == RT_NIL); }
 RT_INLINE obj rt_eq_p(obj a, obj b) { return RT_BOOL(a == b); }
@@ -682,39 +756,62 @@ RT_INLINE obj rt_string_p(obj x) { return RT_BOOL(rt_is_string(x)); }
 RT_INLINE obj rt_string_length(obj s) { RT_CHECK(rt_is_string(s), "string-length", "string", s); return RT_FIX(RT_STR(s)->chars); }
 RT_INLINE obj rt_vector_p(obj x) { return RT_BOOL(rt_is_vector(x)); }
 RT_INLINE obj rt_vector_length(obj v) { RT_CHECK(rt_is_vector(v), "vector-length", "vector", v); return RT_FIX(RT_HLEN(v)); }
+#define RT_INDEX(c, who, k) do { RT_SAFE(if (RT_UNLIKELY(c)) rt_range_error(who, k);) } while (0)
 RT_INLINE obj rt_vector_ref(obj v, obj k) {
     RT_CHECK(rt_is_vector(v), "vector-ref", "vector", v);
-    if (RT_UNLIKELY(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v))) rt_range_error("vector-ref", k);
+    RT_INDEX(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), "vector-ref", k);
     return RT_VEC(v)[RT_FIXVAL(k)];
 }
 RT_INLINE obj rt_vector_set(obj v, obj k, obj x) {
     RT_CHECK(rt_is_vector(v) && !(RT_HFLAGS(v) & RT_F_RO), "vector-set!", "mutable vector", v);
-    if (RT_UNLIKELY(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v))) rt_range_error("vector-set!", k);
+    RT_INDEX(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), "vector-set!", k);
     RT_VEC(v)[RT_FIXVAL(k)] = x;
     return RT_UNSPEC;
+}
+/* _u: the type checks are proven (vector, fixnum index); the bounds and literal checks stay. */
+RT_INLINE obj rt_vector_ref_u(obj v, obj k) {
+    RT_INDEX((uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), "vector-ref", k);
+    return RT_VEC(v)[RT_FIXVAL(k)];
+}
+RT_INLINE obj rt_vector_set_u(obj v, obj k, obj x) {
+    RT_SAFE(if (RT_UNLIKELY(RT_HFLAGS(v) & RT_F_RO)) rt_type_error("vector-set!", "mutable vector", v);)
+    RT_INDEX((uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), "vector-set!", k);
+    RT_VEC(v)[RT_FIXVAL(k)] = x;
+    return RT_UNSPEC;
+}
+RT_INLINE obj rt_string_ref_u(obj s, obj k) {
+    if (RT_LIKELY((RT_HFLAGS(s) & RT_F_ASCII) && (uintptr_t)RT_FIXVAL(k) < (uintptr_t)RT_STR(s)->chars))
+        return RT_CHAR((unsigned char)RT_STR(s)->buf[RT_FIXVAL(k)]);
+    return rt_string_ref(s, k);
 }
 RT_INLINE obj rt_bytevector_p(obj x) { return RT_BOOL(rt_is_bytevector(x)); }
 RT_INLINE obj rt_bytevector_length(obj v) { RT_CHECK(rt_is_bytevector(v), "bytevector-length", "bytevector", v); return RT_FIX(RT_HLEN(v)); }
 RT_INLINE obj rt_bytevector_u8_ref(obj v, obj k) {
     RT_CHECK(rt_is_bytevector(v), "bytevector-u8-ref", "bytevector", v);
-    if (RT_UNLIKELY(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v))) rt_range_error("bytevector-u8-ref", k);
+    RT_INDEX(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), "bytevector-u8-ref", k);
+    return RT_FIX(RT_PTR(v, rt_bytevector)->b[RT_FIXVAL(k)]);
+}
+RT_INLINE obj rt_bytevector_u8_ref_u(obj v, obj k) {
+    RT_INDEX((uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), "bytevector-u8-ref", k);
     return RT_FIX(RT_PTR(v, rt_bytevector)->b[RT_FIXVAL(k)]);
 }
 RT_INLINE obj rt_bytevector_u8_set(obj v, obj k, obj b) {
     RT_CHECK(rt_is_bytevector(v) && !(RT_HFLAGS(v) & RT_F_RO), "bytevector-u8-set!", "mutable bytevector", v);
-    if (RT_UNLIKELY(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v))) rt_range_error("bytevector-u8-set!", k);
-    if (RT_UNLIKELY(!rt_is_fix(b) || (uintptr_t)RT_FIXVAL(b) > 255)) rt_type_error("bytevector-u8-set!", "byte", b);
+    RT_INDEX(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), "bytevector-u8-set!", k);
+    RT_CHECK(rt_is_fix(b) && (uintptr_t)RT_FIXVAL(b) <= 255, "bytevector-u8-set!", "byte", b);
     RT_PTR(v, rt_bytevector)->b[RT_FIXVAL(k)] = (unsigned char)RT_FIXVAL(b);
     return RT_UNSPEC;
 }
 RT_INLINE obj rt_box_ref(obj b) { RT_CHECK(rt_is_type(b, RT_T_BOX), "box-ref", "box", b); return RT_VEC(b)[0]; }
 RT_INLINE obj rt_box_set(obj b, obj v) { RT_CHECK(rt_is_type(b, RT_T_BOX), "box-set!", "box", b); RT_VEC(b)[0] = v; return RT_UNSPEC; }
 RT_INLINE obj rt_record_ref(obj r, obj rtd, obj k) {
-    if (RT_UNLIKELY(!rt_is_type(r, RT_T_RECORD) || RT_VEC(r)[0] != rtd)) rt_record_error(r, rtd);
+    RT_SAFE(if (RT_UNLIKELY(!rt_is_type(r, RT_T_RECORD) || RT_VEC(r)[0] != rtd)) rt_record_error(r, rtd);)
+    (void)rtd;
     return RT_VEC(r)[1 + RT_FIXVAL(k)]; /* k is a compiler-generated constant */
 }
 RT_INLINE obj rt_record_set(obj r, obj rtd, obj k, obj v) {
-    if (RT_UNLIKELY(!rt_is_type(r, RT_T_RECORD) || RT_VEC(r)[0] != rtd)) rt_record_error(r, rtd);
+    RT_SAFE(if (RT_UNLIKELY(!rt_is_type(r, RT_T_RECORD) || RT_VEC(r)[0] != rtd)) rt_record_error(r, rtd);)
+    (void)rtd;
     RT_VEC(r)[1 + RT_FIXVAL(k)] = v;
     return RT_UNSPEC;
 }
@@ -726,8 +823,6 @@ RT_INLINE obj rt_exact_integer_p(obj x) { return RT_BOOL(rt_is_fix(x)); }
 RT_INLINE obj rt_port_p(obj x) { return RT_BOOL(rt_is_port(x)); }
 RT_INLINE obj rt_eof_object(void) { return RT_EOF; }
 RT_INLINE obj rt_eof_object_p(obj x) { return RT_BOOL(x == RT_EOF); }
-RT_INLINE obj rt_stdin_port(void) { return rt_stdin; }
-RT_INLINE obj rt_stdout_port(void) { return rt_stdout; }
-RT_INLINE obj rt_stderr_port(void) { return rt_stderr; }
+RT_INLINE obj rt_port_cell(obj k) { return RT_O((char *)&rt_port_cells[RT_FIXVAL(k)] + 1); }
 
 #endif /* SHIKRA_RT_H */

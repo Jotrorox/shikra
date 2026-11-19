@@ -202,9 +202,8 @@ PRIM("%number->string", "number->string", rt_number_to_string, 2, "nf", 's', PF_
 PRIM("%string->number", "string->number", rt_string_to_number, 2, "sf", 'a', PF_ALLOC | PF_FAIL)
 
 /* ports and I/O */
-PRIM("%stdin-port", "current-input-port", rt_stdin_port, 0, "", 'a', PF_PURE)
-PRIM("%stdout-port", "current-output-port", rt_stdout_port, 0, "", 'a', PF_PURE)
-PRIM("%stderr-port", "current-error-port", rt_stderr_port, 0, "", 'a', PF_PURE)
+/* the static (converter . value) cell of current-input-port (0), -output-port (1), -error-port (2) */
+PRIM("%port-cell", "current-output-port", rt_port_cell, 1, "f", 'p', PF_PURE)
 PRIM("%port?", "port?", rt_port_p, 1, "a", 'b', PF_PURE)
 PRIM("%input-port?", "input-port?", rt_input_port_p, 1, "a", 'b', PF_PURE)
 PRIM("%output-port?", "output-port?", rt_output_port_p, 1, "a", 'b', PF_PURE)

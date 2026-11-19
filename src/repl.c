@@ -23,6 +23,7 @@ static RT_NORETURN void to_prompt(void) {
     rt_gc_set_immortal(0);
     front_repl_recover();
     rt_winders = rt_handlers = RT_NIL;
+    rt_port_cells_reset(); /* parameterize of a port swaps the cell (control.scm) */
     vm_reset();
     rt_srcloc_enable(1);
     rt_sys_throw(prompt_jb);

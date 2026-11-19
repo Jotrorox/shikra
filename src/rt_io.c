@@ -21,6 +21,15 @@ static rt_port io_std[3] = {
 RT_VAR obj rt_stdin = (obj)((char *)&io_std[0] + 5), rt_stdout = (obj)((char *)&io_std[1] + 5),
            rt_stderr = (obj)((char *)&io_std[2] + 5);
 RT_VAR obj rt_ports = RT_NIL;
+/* The current-input/-output/-error-port parameters (lib/scheme/base/io.scm) keep their value in
+ * the cdr of these static (converter . value) pairs, so (current-output-port) is a load;
+ * parameterize swaps a value in and out (shallow binding, control.scm). A root range. */
+RT_VAR rt_pair rt_port_cells[3] = {{RT_FALSE, (obj)((char *)&io_std[0] + 5)}, {RT_FALSE, (obj)((char *)&io_std[1] + 5)},
+                                   {RT_FALSE, (obj)((char *)&io_std[2] + 5)}};
+RT_FN void rt_port_cells_reset(void) { /* the REPL's reset of the dynamic state */
+    int i;
+    for (i = 0; i < 3; i++) rt_port_cells[i].cdr = (obj)((char *)&io_std[i] + 5);
+}
 
 static obj io_make(int flags, intptr_t fd, intptr_t cap, obj name) {
     char *buf = (char *)rt_alloc_raw((size_t)cap);
@@ -249,6 +258,16 @@ RT_FN obj rt_read_bytevector_x(obj bv, obj port, obj start, obj end) {
 }
 
 /* ---- output ---- */
+/* An OS-descriptor port (no allocation: what the unchecked writes to the standard ports use). */
+RT_FN void rt_port_write_fd(obj port, const char *s, size_t n) {
+    rt_port *p = RT_PORT(port);
+    if (RT_HFLAGS(port) & RT_PF_UNBUF && port != rt_stdout && rt_stdout) rt_flush(rt_stdout);
+    if ((size_t)(p->cap - p->len) < n) io_flush(p);
+    if ((intptr_t)n >= p->cap) rt_sys_write((int)p->fd, s, n);
+    else { rt_memcpy(p->buf + p->len, s, n); p->len += (intptr_t)n; }
+    if (RT_HFLAGS(port) & RT_PF_UNBUF) io_flush(p);
+    if (n) p->col = s[n - 1] != '\n'; /* output: 0 at the start of a line (the REPL's fresh line) */
+}
 RT_FN void rt_port_write(obj port, const char *s, size_t n) {
     rt_port *p = RT_PORT(port);
     if (RT_HFLAGS(port) & RT_PF_STRING) {
@@ -264,12 +283,7 @@ RT_FN void rt_port_write(obj port, const char *s, size_t n) {
         p->len += (intptr_t)n;
         return;
     }
-    if (RT_HFLAGS(port) & RT_PF_UNBUF && port != rt_stdout && rt_stdout) rt_flush(rt_stdout);
-    if ((size_t)(p->cap - p->len) < n) io_flush(p);
-    if ((intptr_t)n >= p->cap) rt_sys_write((int)p->fd, s, n);
-    else { rt_memcpy(p->buf + p->len, s, n); p->len += (intptr_t)n; }
-    if (RT_HFLAGS(port) & RT_PF_UNBUF) io_flush(p);
-    if (n) p->col = s[n - 1] != '\n'; /* output: 0 at the start of a line (the REPL's fresh line) */
+    rt_port_write_fd(port, s, n);
 }
 RT_FN void rt_port_putc(obj port, int c) {
     char b[4];
@@ -278,12 +292,28 @@ RT_FN void rt_port_putc(obj port, int c) {
 RT_FN void rt_port_puts(obj port, const char *s) { rt_port_write(port, s, rt_strlen(s)); }
 
 /* ---- printer ---- */
-static void io_fix(obj port, intptr_t v) {
-    char buf[24], *p = buf + sizeof buf;
+static char *io_digits(intptr_t v, char *end) { /* decimal digits of v ending at end */
     uintptr_t u = v < 0 ? (uintptr_t)0 - (uintptr_t)v : (uintptr_t)v;
-    do { *--p = (char)('0' + u % 10); u /= 10; } while (u);
-    if (v < 0) *--p = '-';
+    do { *--end = (char)('0' + u % 10); u /= 10; } while (u);
+    if (v < 0) *--end = '-';
+    return end;
+}
+static void io_fix(obj port, intptr_t v) {
+    char buf[24], *p = io_digits(v, buf + sizeof buf);
     rt_port_write(port, p, (size_t)(buf + sizeof buf - p));
+}
+/* Unchecked writes to an open textual OS-descriptor port (the standard ports when the analysis
+ * proves the port; DESIGN.md M4-2 "pay for what you use"): the integer printer alone. */
+RT_FN obj rt_put_fixnum(obj n, obj port) {
+    char buf[24], *p = io_digits(RT_FIXVAL(n), buf + sizeof buf);
+    rt_port_write_fd(port, p, (size_t)(buf + sizeof buf - p));
+    return RT_UNSPEC;
+}
+RT_FN obj rt_put_string(obj s, obj port) { rt_port_write_fd(port, RT_STR(s)->buf, (size_t)RT_STR(s)->bytes); return RT_UNSPEC; }
+RT_FN obj rt_put_char(obj c, obj port) {
+    char b[4];
+    rt_port_write_fd(port, b, (size_t)rt_utf8_encode(b, RT_CHARVAL(c)));
+    return RT_UNSPEC;
 }
 static void io_hex(obj port, int c) {
     char buf[12], *p = buf + sizeof buf;
@@ -403,11 +433,56 @@ static int io_label(io_labels *L, obj x, obj port) {
     return 0;
 }
 
-static void io_print(obj x, obj port, int write, io_labels *L) {
+/* Everything but pairs and non-empty vectors: no datum labels (a value whose type excludes them
+ * is printed without linking the label pre-pass, M4-2). */
+static void io_print_atom(obj x, obj port, int write) {
     char buf[40];
     intptr_t i;
+    (void)buf;
     if (rt_is_fix(x)) { io_fix(port, RT_FIXVAL(x)); return; }
     if (rt_is_char(x)) { io_char(port, RT_CHARVAL(x), write); return; }
+    if (rt_is_proc(x)) { rt_port_puts(port, "#<procedure>"); return; }
+    if (!rt_is_heap(x)) {
+        rt_port_puts(port, x == RT_TRUE ? "#t" : x == RT_FALSE ? "#f" : x == RT_NIL ? "()" : x == RT_EOF ? "#<eof>"
+                         : x == RT_UNSPEC ? "#<unspecified>" : x == RT_UNDEF ? "#<undefined>"
+                         : x == RT_DEFAULT ? "#<default>" : "#<immediate>");
+        return;
+    }
+    switch (RT_HTYPE(x)) {
+#ifndef RT_NO_FLONUMS /* no flonum can exist in this program (analysis): no float printer */
+    case RT_T_FLONUM: rt_port_write(port, buf, rt_format_double(RT_FLO(x), buf)); return;
+#endif
+    case RT_T_STRING:
+        if (write) io_escaped(port, RT_STR(x)->buf, RT_STR(x)->bytes, '"');
+        else rt_port_write(port, RT_STR(x)->buf, (size_t)RT_STR(x)->bytes);
+        return;
+    case RT_T_SYMBOL: {
+        rt_string *s = RT_STR(RT_PTR(x, rt_symbol)->name);
+        if (write && !io_sym_plain(s->buf, s->bytes)) io_escaped(port, s->buf, s->bytes, '|');
+        else rt_port_write(port, s->buf, (size_t)s->bytes);
+        return;
+    }
+    case RT_T_VECTOR: rt_port_puts(port, "#()"); return; /* empty: non-empty vectors are compound */
+    case RT_T_BYTEVECTOR:
+        rt_port_puts(port, "#u8(");
+        for (i = 0; i < RT_HLEN(x); i++) {
+            if (i) rt_port_putc(port, ' ');
+            io_fix(port, RT_PTR(x, rt_bytevector)->b[i]);
+        }
+        rt_port_putc(port, ')');
+        return;
+    case RT_T_RECORD: rt_port_puts(port, "#<"); io_print_atom(RT_VEC(RT_VEC(x)[0])[0], port, 0); rt_port_putc(port, '>'); return;
+    case RT_T_RTD: rt_port_puts(port, "#<record-type "); io_print_atom(RT_VEC(x)[0], port, 0); rt_port_putc(port, '>'); return;
+    case RT_T_ERROR: rt_port_puts(port, "#<error "); rt_print(RT_VEC(x)[0], port, 1); rt_port_putc(port, '>'); return;
+    case RT_T_PORT: rt_port_puts(port, "#<port>"); return;
+    case RT_T_PROMISE: rt_port_puts(port, "#<promise>"); return;
+    case RT_T_BOX: rt_port_puts(port, "#<box>"); return;
+    case RT_T_VALUES: rt_port_puts(port, "#<values>"); return;
+    default: rt_port_puts(port, "#<object>"); return;
+    }
+}
+static void io_print(obj x, obj port, int write, io_labels *L) {
+    intptr_t i;
     if (rt_is_pair(x)) {
         if (io_label(L, x, port)) return;
         rt_port_putc(port, '(');
@@ -421,26 +496,7 @@ static void io_print(obj x, obj port, int write, io_labels *L) {
         rt_port_putc(port, ')');
         return;
     }
-    if (rt_is_proc(x)) { rt_port_puts(port, "#<procedure>"); return; }
-    if (!rt_is_heap(x)) {
-        rt_port_puts(port, x == RT_TRUE ? "#t" : x == RT_FALSE ? "#f" : x == RT_NIL ? "()" : x == RT_EOF ? "#<eof>"
-                         : x == RT_UNSPEC ? "#<unspecified>" : x == RT_UNDEF ? "#<undefined>"
-                         : x == RT_DEFAULT ? "#<default>" : "#<immediate>");
-        return;
-    }
-    switch (RT_HTYPE(x)) {
-    case RT_T_FLONUM: rt_port_write(port, buf, rt_format_double(RT_FLO(x), buf)); return;
-    case RT_T_STRING:
-        if (write) io_escaped(port, RT_STR(x)->buf, RT_STR(x)->bytes, '"');
-        else rt_port_write(port, RT_STR(x)->buf, (size_t)RT_STR(x)->bytes);
-        return;
-    case RT_T_SYMBOL: {
-        rt_string *s = RT_STR(RT_PTR(x, rt_symbol)->name);
-        if (write && !io_sym_plain(s->buf, s->bytes)) io_escaped(port, s->buf, s->bytes, '|');
-        else rt_port_write(port, s->buf, (size_t)s->bytes);
-        return;
-    }
-    case RT_T_VECTOR:
+    if (rt_is_vector(x) && RT_HLEN(x) > 0) {
         if (io_label(L, x, port)) return;
         rt_port_puts(port, "#(");
         for (i = 0; i < RT_HLEN(x); i++) {
@@ -449,30 +505,16 @@ static void io_print(obj x, obj port, int write, io_labels *L) {
         }
         rt_port_putc(port, ')');
         return;
-    case RT_T_BYTEVECTOR:
-        rt_port_puts(port, "#u8(");
-        for (i = 0; i < RT_HLEN(x); i++) {
-            if (i) rt_port_putc(port, ' ');
-            io_fix(port, RT_PTR(x, rt_bytevector)->b[i]);
-        }
-        rt_port_putc(port, ')');
-        return;
-    case RT_T_RECORD: rt_port_puts(port, "#<"); io_print(RT_VEC(RT_VEC(x)[0])[0], port, 0, 0); rt_port_putc(port, '>'); return;
-    case RT_T_RTD: rt_port_puts(port, "#<record-type "); io_print(RT_VEC(x)[0], port, 0, 0); rt_port_putc(port, '>'); return;
-    case RT_T_ERROR: rt_port_puts(port, "#<error "); rt_print(RT_VEC(x)[0], port, 1); rt_port_putc(port, '>'); return;
-    case RT_T_PORT: rt_port_puts(port, "#<port>"); return;
-    case RT_T_PROMISE: rt_port_puts(port, "#<promise>"); return;
-    case RT_T_BOX: rt_port_puts(port, "#<box>"); return;
-    case RT_T_VALUES: rt_port_puts(port, "#<values>"); return;
-    default: rt_port_puts(port, "#<object>"); return;
     }
+    io_print_atom(x, port, write);
 }
 /* mode: RT_PRINT_WRITE (else display), RT_PRINT_SHARED (label all shared structure),
  * RT_PRINT_SIMPLE (no labels: may not terminate on cycles). Without SHARED or SIMPLE only
  * cycles get labels, so display and write always terminate. */
 RT_FN void rt_print(obj x, obj port, int mode) {
     io_labels L;
-    if (!io_compound(x) || (mode & RT_PRINT_SIMPLE)) { io_print(x, port, mode & RT_PRINT_WRITE, 0); return; }
+    if (!io_compound(x)) { io_print_atom(x, port, mode & RT_PRINT_WRITE); return; }
+    if (mode & RT_PRINT_SIMPLE) { io_print(x, port, mode & RT_PRINT_WRITE, 0); return; }
     L.t.e = 0;
     L.t.cap = L.t.n = L.next = 0;
     io_scan(&L, x, mode & RT_PRINT_SHARED);
@@ -527,5 +569,8 @@ RT_FN obj rt_display(obj x, obj port) {
     else rt_print(x, port, 0);
     return RT_UNSPEC;
 }
+/* display / write of a value proven not to be a pair or a non-empty vector (M4-2): no labels */
+RT_FN obj rt_display_flat(obj x, obj port) { io_check(port, RT_PF_OUT, "display"); io_print_atom(x, port, 0); return RT_UNSPEC; }
+RT_FN obj rt_write_flat(obj x, obj port) { io_check(port, RT_PF_OUT, "write"); io_print_atom(x, port, 1); return RT_UNSPEC; }
 RT_FN obj rt_newline(obj port) { io_check(port, RT_PF_OUT, "newline"); rt_port_putc(port, '\n'); return RT_UNSPEC; }
 RT_FN obj rt_flush_output_port(obj port) { io_check(port, RT_PF_OUT | IO_ANY, "flush-output-port"); rt_flush(port); return RT_UNSPEC; }
