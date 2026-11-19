@@ -2714,3 +2714,6 @@ the C. Both fixed.
 - `fl+*` is a call into exact integer code on targets without a hardware fused multiply-add.
 - Results of the special functions near their zeros are accurate in absolute, not relative, terms
   (Bessel, log-gamma below -2), as is inherent in their evaluation by recurrences and reflection.
+- `make test`: 1,323 checks, 0 failures, 2 skips (ext_ffi_user in the interpreter and its stress run,
+  marked compiled-only); `tests/run.sh gcc` (gcc-16): 222 checks, 0 failures. `shikra size` attributes
+  rt_ext.c symbols to the component "extensions (shikra ...)".
