@@ -11,6 +11,9 @@ RT_VAR char **rt_argv;
 #ifndef SHIKRA_PROGRAM
 RT_VAR void (*rt_raise_hook)(obj e);
 #endif
+static RT_UNUSED obj core_argbuf[RT_ARGBUF];
+static RT_UNUSED intptr_t core_argcap = RT_ARGBUF;
+RT_VAR obj *rt_args = core_argbuf;
 static RT_UNUSED obj core_symtab; /* vector, open addressing; #f = empty slot */
 static RT_UNUSED intptr_t core_symcount;
 
@@ -19,6 +22,7 @@ RT_FN void rt_init(int argc, char **argv, void *stack_base) {
     rt_argv = argv;
     rt_gc_init(stack_base);
     rt_gc_add_roots(&core_symtab, &core_symtab + 1);
+    rt_gc_add_roots(core_argbuf, core_argbuf + RT_ARGBUF);
     core_symtab = rt_vector_n(256, RT_FALSE);
     rt_gc_add_roots(&rt_stdin, &rt_stdin + 1);
     rt_gc_add_roots(&rt_stdout, &rt_stdout + 1);
@@ -357,3 +361,52 @@ RT_FN obj rt_make_proc(rt_code code, intptr_t nfree) {
     for (i = 0; i < nfree; i++) p->free[i] = RT_FALSE;
     return RT_PROC_OBJ(p);
 }
+
+/* ---- compiled calling convention ---- */
+RT_FN void rt_args_reserve(intptr_t n) {
+    if (n > core_argcap) { /* TODO(M2): register the grown buffer as a root */
+        obj *b = (obj *)rt_sys_mem(sizeof(obj) * (size_t)(2 * n));
+        if (!b) rt_error(0, "out of memory", RT_NIL);
+        rt_args = b;
+        core_argcap = 2 * n;
+    }
+}
+RT_FN obj rt_rest_list(intptr_t argc, intptr_t nreq, obj a0, obj a1, obj a2, obj a3) {
+    obj r = RT_NIL;
+    intptr_t i;
+    for (i = argc - 1; i >= nreq; i--) r = rt_cons(i == 0 ? a0 : i == 1 ? a1 : i == 2 ? a2 : i == 3 ? a3 : rt_args[i - 4], r);
+    return r;
+}
+RT_FN void rt_arity_error(const char *who, intptr_t argc) {
+    rt_error(who, "wrong number of arguments", rt_cons(RT_FIX(argc), RT_NIL));
+}
+RT_FN void rt_not_procedure(obj f) { rt_error(0, "not a procedure", rt_cons(f, RT_NIL)); }
+RT_FN void rt_undefined_error(const char *name) { rt_error(name, "variable used before its definition", RT_NIL); }
+RT_FN intptr_t rt_spread(obj args, obj *regs) {
+    intptr_t n = rt_list_length(args, "apply"), i;
+    if (n > 4) rt_args_reserve(n - 4);
+    for (i = 0; i < n; i++, args = RT_CDR(args))
+        if (i < 4) regs[i] = RT_CAR(args);
+        else rt_args[i - 4] = RT_CAR(args);
+    for (; i < 4; i++) regs[i] = RT_FALSE;
+    return n;
+}
+RT_FN intptr_t rt_spread_values(obj v, obj *regs) {
+    intptr_t n, i;
+    if (!rt_is_type(v, RT_T_VALUES)) { regs[0] = v; regs[1] = regs[2] = regs[3] = RT_FALSE; return 1; }
+    n = RT_HLEN(v);
+    if (n > 4) rt_args_reserve(n - 4);
+    for (i = 0; i < n; i++)
+        if (i < 4) regs[i] = RT_VEC(v)[i];
+        else rt_args[i - 4] = RT_VEC(v)[i];
+    for (; i < 4; i++) regs[i] = RT_FALSE;
+    return n;
+}
+RT_FN obj rt_append2(obj a, obj b) {
+    obj rev = RT_NIL;
+    rt_list_length(a, "append");
+    for (; rt_is_pair(a); a = RT_CDR(a)) rev = rt_cons(RT_CAR(a), rev);
+    for (; rt_is_pair(rev); rev = RT_CDR(rev)) b = rt_cons(RT_CAR(rev), b);
+    return b;
+}
+RT_FN obj rt_raise_o(obj e) { rt_raise(e); }

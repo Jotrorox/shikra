@@ -125,6 +125,7 @@ typedef obj (*rt_code)(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3);
 typedef struct { uintptr_t hdr; rt_code code; obj free[]; } rt_proc;
 #define RT_PROC(x) ((rt_proc *)((char *)(x) - 3 - sizeof(uintptr_t)))
 #define RT_PROC_OBJ(p) RT_O((char *)&(p)->code + 3)
+#define RT_SPROC(c) ((obj)((char *)&(c).code + 3)) /* static closure: an address constant */
 
 /* Ports: fixed fields. buf is a raw heap buffer (or static memory). */
 typedef struct {
@@ -306,6 +307,39 @@ RT_FN obj rt_make_values(obj list);
 RT_FN obj rt_values_n(intptr_t n, const obj *v);
 RT_FN obj rt_values_to_list(obj v);
 RT_FN obj rt_make_proc(rt_code code, intptr_t nfree); /* free slots set to #f */
+
+/* ---- compiled calling convention (rt_core.c; spec §8.1, DESIGN.md §4, §11 M0 part B) ----
+ * Every compiled procedure: obj f(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3).
+ * Arguments beyond a3 are stored by the caller in rt_args[0..argc-5] right before the call
+ * and copied out by the callee at entry, before anything else can call. Tail calls are
+ * `RT_MUSTTAIL return f(...);`. */
+#ifdef __has_attribute
+#if __has_attribute(musttail)
+#define RT_MUSTTAIL __attribute__((musttail))
+#endif
+#endif
+#ifndef RT_MUSTTAIL
+/* TODO(M4): trampoline fallback (spec §8.1). Until then compilers without musttail rely on
+ * sibling-call optimisation, which -O2 performs for these calls but -O0 does not. */
+#define RT_MUSTTAIL
+#endif
+#define RT_ARGBUF 64
+RT_EXTVAR obj *rt_args;
+RT_FN void rt_args_reserve(intptr_t nextra); /* room for nextra arguments beyond a3 */
+RT_FN obj rt_rest_list(intptr_t argc, intptr_t nreq, obj a0, obj a1, obj a2, obj a3);
+RT_FN RT_NORETURN void rt_arity_error(const char *who, intptr_t argc);
+RT_FN RT_NORETURN void rt_not_procedure(obj f);
+RT_FN RT_NORETURN void rt_undefined_error(const char *name);
+/* Spread a list (apply) or a values object (call-with-values) into a0..a3 + rt_args. */
+RT_FN intptr_t rt_spread(obj args, obj *regs);
+RT_FN intptr_t rt_spread_values(obj v, obj *regs);
+RT_FN obj rt_append2(obj a, obj b);
+RT_FN obj rt_raise_o(obj e);
+RT_INLINE obj rt_chkdef(obj v, const char *name) {
+    if (RT_UNLIKELY(v == RT_UNDEF)) rt_undefined_error(name);
+    return v;
+}
+#define RT_CALLABLE(f) do { if (RT_UNLIKELY(!rt_is_proc(f))) rt_not_procedure(f); } while (0)
 
 /* ---- strings and chars (rt_str.c) ---- */
 RT_FN int rt_utf8_encode(char *out, int cp);   /* returns 1..4 */

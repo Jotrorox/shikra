@@ -43,6 +43,7 @@ PRIM("%null?", "null?", rt_null_p, 1, "a", 'b', PF_PURE)
 PRIM("%list?", "list?", rt_list_p, 1, "a", 'b', 0)
 PRIM("%length", "length", rt_length, 1, "l", 'f', PF_FAIL)
 PRIM("%reverse", "reverse", rt_reverse, 1, "l", 'l', PF_ALLOC | PF_FAIL)
+PRIM("%append2", "append", rt_append2, 2, "la", 'a', PF_ALLOC | PF_FAIL)
 
 /* equivalence, booleans, procedures */
 PRIM("%eq?", "eq?", rt_eq_p, 2, "aa", 'b', PF_PURE)
@@ -111,6 +112,8 @@ PRIM("%error-object-message", "error-object-message", rt_error_object_message, 1
 PRIM("%error-object-irritants", "error-object-irritants", rt_error_object_irritants, 1, "a", 'l', PF_FAIL)
 PRIM("%file-error?", "file-error?", rt_file_error_p, 1, "a", 'b', PF_PURE)
 PRIM("%read-error?", "read-error?", rt_read_error_p, 1, "a", 'b', PF_PURE)
+/* M0: raise without handlers (uncaught); M1 puts the Scheme-level handler stack in front */
+PRIM("%raise", "raise", rt_raise_o, 1, "a", 'a', PF_FAIL | PF_EFFECT)
 
 /* multiple-values object (values flowing to an unknown receiver) */
 PRIM("%make-values", "values", rt_make_values, 1, "l", 'a', PF_ALLOC | PF_FAIL)
