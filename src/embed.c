@@ -2599,14 +2599,12 @@ static const char *const e35[] = {
 "RT_EXTVAR int rt_argc;\n"
 "RT_EXTVAR char **rt_argv;\n"
 "#ifdef SHIKRA_PROGRAM\n"
-"/* Provided by the generated code: the program body (rt_sys.c's main calls it). Tier 3 copies the\n"
-" * stack up to the base main passes to rt_init (the address of a local of main), so no frame of the\n"
-" * program may share main's frame (GCC inlines static functions called once). */\n"
-"#ifdef RT_TIER3\n"
+"/* Provided by the generated code: the program body (rt_sys.c's main / shikra_start calls it).\n"
+" * Never inlined into its caller (GCC inlines static functions called once): tier 3 copies the\n"
+" * stack up to the base main passes to rt_init (the address of a local of main), so no frame of\n"
+" * the program may share main's frame; and `shikra size` finds the program body under its own\n"
+" * symbol instead of inside main or shikra_start (DESIGN.md \"Integration\"). */\n"
 "static RT_NOINLINE void rt_program_main(void);\n"
-"#else\n"
-"static void rt_program_main(void);\n"
-"#endif\n"
 "#endif\n"
 "\n"
 "/* ---- error path (rt_core.c; DESIGN.md \302\2473 \"Engine boundary\") ----\n"
@@ -2616,9 +2614,9 @@ static const char *const e35[] = {
 " * With no engine handler: rt_uncaught prints \"Error: msg irritant ...\" (or\n"
 " * \"loc: error: msg ...\" when the error carries a location) to stderr, exits 70. */\n"
 "#ifdef SHIKRA_PROGRAM\n"
-"static RT_NORETURN void rt_engine_raise(obj e);\n"
+"static RT_NORETURN void rt_engine_raise(obj e);\n",
 "/* Also generated: make w the winders list, running after/before thunks ((shikra dynamic)\n"
-" * travel-to!); a tier-2 continuation calls it before it jumps (spec \302\2478.4). */\n",
+" * travel-to!); a tier-2 continuation calls it before it jumps (spec \302\2478.4). */\n"
 "static void rt_engine_travel(obj w);\n"
 "#else\n"
 "RT_EXTVAR void (*rt_raise_hook)(obj e);\n"
@@ -2675,10 +2673,10 @@ static const char *const e35[] = {
 "/* Address tables (write's datum labels, equal? on cycles): entries keyed by one or two object\n"
 " * addresses (b = 0 for one), value 0 when inserted; NULL if absent and !insert. Zero-initialise. */\n"
 "typedef struct { uintptr_t *e; intptr_t cap, n; } rt_addrtab;\n"
-"RT_FN intptr_t *rt_addrtab_get(rt_addrtab *t, obj a, obj b, int insert);\n"
+"RT_FN intptr_t *rt_addrtab_get(rt_addrtab *t, obj a, obj b, int insert);\n",
 "\n"
 "/* ---- compiled calling convention (rt_core.c; spec \302\2478.1, DESIGN.md \302\2474, \302\24711 M0 part B) ----\n"
-" * Every compiled procedure: obj f(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3).\n",
+" * Every compiled procedure: obj f(obj self, intptr_t argc, obj a0, obj a1, obj a2, obj a3).\n"
 " * Arguments beyond a3 are stored by the caller in rt_args[0..argc-5] right before the call\n"
 " * and copied out by the callee at entry, before anything else can call. Tail calls are\n"
 " * `RT_MUSTTAIL return f(...);`. */\n"
@@ -2737,10 +2735,10 @@ static const char *const e35[] = {
 "/* Multiple values spread into a known receiver (normalize.c, call-with-values fallback). */\n"
 "RT_FN obj rt_values_check(obj v, obj nreq, obj rest); /* raises unless v has nreq (or more) values */\n"
 "RT_FN obj rt_values_ref(obj v, obj i);\n"
-"RT_FN obj rt_values_tail(obj v, obj i);               /* list of the values from i on */\n"
+"RT_FN obj rt_values_tail(obj v, obj i);               /* list of the values from i on */\n",
 "\n"
 "/* ---- dynamic state (rt_core.c; spec \302\2478.3, \302\2478.4; DESIGN.md \302\24711 M1 part A) ----\n"
-" * Both are Scheme lists, innermost first, read and written by lib/ through %primitives.\n",
+" * Both are Scheme lists, innermost first, read and written by lib/ through %primitives.\n"
 " * rt_winders: (before . after) frames of dynamic-wind (car is a procedure) and\n"
 " *             (cell . value) frames of parameterize (car is the parameter's cell, a pair\n"
 " *             (converter . global-value)).\n"
@@ -2797,10 +2795,10 @@ static const char *const e35[] = {
 "RT_FN obj rt_string_to_list(obj s, obj start, obj end);\n"
 "RT_FN obj rt_list_to_string(obj l);\n"
 "RT_FN obj rt_string_to_utf8(obj s);\n"
-"RT_FN obj rt_utf8_to_string(obj bv);\n"
+"RT_FN obj rt_utf8_to_string(obj bv);\n",
 "RT_FN obj rt_integer_to_char(obj n);\n"
 "/* (scheme char): ASCII rules, and above 0x7F the Unicode tables of rt_unicode.c when they are\n"
-" * enabled: program mode with RT_UNICODE_FULL (--unicode=full; the file is only appended then),\n",
+" * enabled: program mode with RT_UNICODE_FULL (--unicode=full; the file is only appended then),\n"
 " * tool mode when rt_unicode_full is set (shikra repl/interp --unicode=full). */\n"
 "RT_FN obj rt_char_upcase(obj c);\n"
 "RT_FN obj rt_char_downcase(obj c);\n"
@@ -2871,10 +2869,10 @@ static const char *const e35[] = {
 "RT_FN int rt_parse_number(const char *s, size_t n, int radix, obj *out);\n"
 "RT_FN size_t rt_format_double(double d, char *out); /* >= 32 bytes; no NUL */\n"
 "\n"
-"/* Generic arithmetic: inline fixnum fast path, out-of-line general case. The fast paths are\n"
+"/* Generic arithmetic: inline fixnum fast path, out-of-line general case. The fast paths are\n",
 " * always inlined: since M4-1 a procedure's body holds all its arithmetic, and the C compiler's\n"
 " * heuristics would otherwise leave some of it out of line. */\n"
-"#ifdef RT_UNSAFE /* fixnum overflow wraps (two's complement, through unsigned arithmetic) */\n",
+"#ifdef RT_UNSAFE /* fixnum overflow wraps (two's complement, through unsigned arithmetic) */\n"
 "#define RT_WRAP(a, op, b) ((intptr_t)((uintptr_t)(a) op (uintptr_t)(b)))\n"
 "RT_INLINE RT_ALWAYS obj rt_add(obj a, obj b) { return RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) ? RT_O(RT_WRAP(a, +, b)) : rt_add2(a, b); }\n"
 "RT_INLINE RT_ALWAYS obj rt_sub(obj a, obj b) { return RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) ? RT_O(RT_WRAP(a, -, b)) : rt_sub2(a, b); }\n"
@@ -2933,13 +2931,13 @@ static const char *const e35[] = {
 "#endif\n"
 "RT_INLINE intptr_t rt_fxquo(intptr_t a, intptr_t b) {\n"
 "    RT_SAFE(if (RT_UNLIKELY(b == 0 || (b == -2 && a == (intptr_t)RT_FIX(RT_FIX_MIN)))) return (intptr_t)rt_quotient(RT_O(a), RT_O(b));)\n"
-"    return (intptr_t)RT_FIX(RT_FIXVAL(a) / RT_FIXVAL(b));\n"
+"    return (intptr_t)RT_FIX(RT_FIXVAL(a) / RT_FIXVAL(b));\n",
 "}\n"
 "RT_INLINE intptr_t rt_fxrem(intptr_t a, intptr_t b) {\n"
 "    RT_SAFE(if (RT_UNLIKELY(b == 0)) return (intptr_t)rt_remainder(RT_O(a), RT_O(b));)\n"
 "    return (intptr_t)RT_FIX(RT_FIXVAL(a) % RT_FIXVAL(b));\n"
 "}\n"
-"RT_INLINE intptr_t rt_fxmod(intptr_t a, intptr_t b) {\n",
+"RT_INLINE intptr_t rt_fxmod(intptr_t a, intptr_t b) {\n"
 "    intptr_t r;\n"
 "    RT_SAFE(if (RT_UNLIKELY(b == 0)) return (intptr_t)rt_modulo(RT_O(a), RT_O(b));)\n"
 "    r = RT_FIXVAL(a) % RT_FIXVAL(b);\n"
@@ -2990,14 +2988,14 @@ static const char *const e35[] = {
 "RT_FN void rt_print(obj x, obj port, int mode);\n"
 "RT_FN obj rt_input_port_p(obj x);\n"
 "RT_FN obj rt_output_port_p(obj x);\n"
-"RT_FN obj rt_textual_port_p(obj x);\n"
+"RT_FN obj rt_textual_port_p(obj x);\n",
 "RT_FN obj rt_binary_port_p(obj x);\n"
 "RT_FN obj rt_input_port_open_p(obj port);\n"
 "RT_FN obj rt_output_port_open_p(obj port);\n"
 "RT_FN obj rt_read_char(obj port);\n"
 "RT_FN obj rt_peek_char(obj port);\n"
 "RT_FN obj rt_read_line(obj port);\n"
-"RT_FN obj rt_read_string(obj k, obj port);\n",
+"RT_FN obj rt_read_string(obj k, obj port);\n"
 "RT_FN obj rt_char_ready_p(obj port);\n"
 "RT_FN obj rt_read_u8(obj port);\n"
 "RT_FN obj rt_peek_u8(obj port);\n"
@@ -3053,10 +3051,10 @@ static const char *const e35[] = {
 "RT_INLINE obj rt_boolean_p(obj x) { return RT_BOOL(x == RT_TRUE || x == RT_FALSE); }\n"
 "RT_INLINE obj rt_symbol_p(obj x) { return RT_BOOL(rt_is_symbol(x)); }\n"
 "RT_INLINE obj rt_procedure_p(obj x) { return RT_BOOL(rt_is_proc(x)); }\n"
-"RT_INLINE obj rt_char_p(obj x) { return RT_BOOL(rt_is_char(x)); }\n"
+"RT_INLINE obj rt_char_p(obj x) { return RT_BOOL(rt_is_char(x)); }\n",
 "RT_INLINE obj rt_char_to_integer(obj c) { RT_CHECK(rt_is_char(c), \"char->integer\", \"char\", c); return RT_FIX(RT_CHARVAL(c)); }\n"
 "RT_INLINE obj rt_string_p(obj x) { return RT_BOOL(rt_is_string(x)); }\n"
-"RT_INLINE obj rt_string_length(obj s) { RT_CHECK(rt_is_string(s), \"string-length\", \"string\", s); return RT_FIX(RT_STR(s)->chars); }\n",
+"RT_INLINE obj rt_string_length(obj s) { RT_CHECK(rt_is_string(s), \"string-length\", \"string\", s); return RT_FIX(RT_STR(s)->chars); }\n"
 "RT_INLINE obj rt_vector_p(obj x) { return RT_BOOL(rt_is_vector(x)); }\n"
 "RT_INLINE obj rt_vector_length(obj v) { RT_CHECK(rt_is_vector(v), \"vector-length\", \"vector\", v); return RT_FIX(RT_HLEN(v)); }\n"
 "#define RT_INDEX(c, who, k) do { RT_SAFE(if (RT_UNLIKELY(c)) rt_range_error(who, k);) } while (0)\n"
@@ -3101,12 +3099,12 @@ static const char *const e35[] = {
 "RT_INLINE obj rt_bytevector_u8_set(obj v, obj k, obj b) {\n"
 "    RT_CHECK(rt_is_bytevector(v) && !(RT_HFLAGS(v) & RT_F_RO), \"bytevector-u8-set!\", \"mutable bytevector\", v);\n"
 "    RT_INDEX(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), \"bytevector-u8-set!\", k);\n"
-"    RT_CHECK(rt_is_fix(b) && (uintptr_t)RT_FIXVAL(b) <= 255, \"bytevector-u8-set!\", \"byte\", b);\n"
+"    RT_CHECK(rt_is_fix(b) && (uintptr_t)RT_FIXVAL(b) <= 255, \"bytevector-u8-set!\", \"byte\", b);\n",
 "    RT_PTR(v, rt_bytevector)->b[RT_FIXVAL(k)] = (unsigned char)RT_FIXVAL(b);\n"
 "    return RT_UNSPEC;\n"
 "}\n"
 "RT_INLINE obj rt_box_ref(obj b) { RT_CHECK(rt_is_type(b, RT_T_BOX), \"box-ref\", \"box\", b); return RT_VEC(b)[0]; }\n"
-"RT_INLINE obj rt_box_set(obj b, obj v) { RT_CHECK(rt_is_type(b, RT_T_BOX), \"box-set!\", \"box\", b); RT_VEC(b)[0] = v; return RT_UNSPEC; }\n",
+"RT_INLINE obj rt_box_set(obj b, obj v) { RT_CHECK(rt_is_type(b, RT_T_BOX), \"box-set!\", \"box\", b); RT_VEC(b)[0] = v; return RT_UNSPEC; }\n"
 "RT_INLINE obj rt_record_ref(obj r, obj rtd, obj k) {\n"
 "    RT_SAFE(if (RT_UNLIKELY(!rt_is_type(r, RT_T_RECORD) || RT_VEC(r)[0] != rtd)) rt_record_error(r, rtd);)\n"
 "    (void)rtd;\n"
@@ -3142,10 +3140,10 @@ static const char *const e35[] = {
 "RT_FN obj rt_fx_positive_p(obj); RT_FN obj rt_fx_negative_p(obj); RT_FN obj rt_fx_odd_p(obj); RT_FN obj rt_fx_even_p(obj);\n"
 "RT_FN obj rt_fx_not(obj); RT_FN obj rt_fx_and(obj, obj); RT_FN obj rt_fx_ior(obj, obj); RT_FN obj rt_fx_xor(obj, obj);\n"
 "RT_FN obj rt_fx_ash(obj, obj); RT_FN obj rt_fx_ashl(obj, obj); RT_FN obj rt_fx_ashr(obj, obj); RT_FN obj rt_fx_if(obj, obj, obj);\n"
-"RT_FN obj rt_fx_bit_set_p(obj, obj); RT_FN obj rt_fx_bit_count(obj); RT_FN obj rt_fx_length(obj); RT_FN obj rt_fx_first_set_bit(obj);\n"
+"RT_FN obj rt_fx_bit_set_p(obj, obj); RT_FN obj rt_fx_bit_count(obj); RT_FN obj rt_fx_length(obj); RT_FN obj rt_fx_first_set_bit(obj);\n",
 "RT_FN obj rt_fx_copy_bit(obj, obj, obj); RT_FN obj rt_fx_bit_field(obj, obj, obj); RT_FN obj rt_fx_bit_field_rotate(obj, obj, obj, obj);\n"
 "RT_FN obj rt_fx_bit_field_reverse(obj, obj, obj); RT_FN obj rt_fx_add_carry(obj, obj, obj, obj);\n"
-"RT_FN obj rt_fx_sub_carry(obj, obj, obj, obj); RT_FN obj rt_fx_mul_carry(obj, obj, obj, obj);\n",
+"RT_FN obj rt_fx_sub_carry(obj, obj, obj, obj); RT_FN obj rt_fx_mul_carry(obj, obj, obj, obj);\n"
 "RT_FN obj rt_flonum_p(obj); RT_FN obj rt_fl_add(obj, obj); RT_FN obj rt_fl_sub(obj, obj); RT_FN obj rt_fl_mul(obj, obj);\n"
 "RT_FN obj rt_fl_div(obj, obj); RT_FN obj rt_fl_fma(obj, obj, obj); RT_FN obj rt_fl_max(obj, obj); RT_FN obj rt_fl_min(obj, obj);\n"
 "RT_FN obj rt_fl_eq(obj, obj); RT_FN obj rt_fl_lt(obj, obj); RT_FN obj rt_fl_gt(obj, obj); RT_FN obj rt_fl_le(obj, obj);\n"

@@ -53,6 +53,8 @@ typedef struct {
     int no_cache;           /* --no-cache: expand every library from source */
     const char **links;     /* --link FILE, -l NAME (repeatable): extra link inputs, for define-c */
     int nlinks;
+    int libc;               /* --libc: a hosted build (C library) also on Linux x86-64/arm64 */
+    int hosted;             /* set by emit: define-c, --libc, --link or -l (DESIGN.md "Integration") */
 } options;
 
 int size_command(const char *path, int all, int tsv); /* size.c */
@@ -89,6 +91,8 @@ static void usage(FILE *f) {
           "  --no-cache               do not use the expansion cache\n"
           "  --link FILE              also compile/link FILE (.c, .o, .a, library; repeatable): define-c\n"
           "  -l NAME                  link the library NAME (cc -lNAME; repeatable): define-c\n"
+          "  --libc                   link the C library also on Linux x86-64/arm64, where programs are\n"
+          "                           otherwise static without libc (implied by define-c, --link, -l)\n"
           "  --help, --version\n"
           "environment: SHIKRA_CACHE_DIR (default $XDG_CACHE_HOME/shikra or ~/.cache/shikra)\n", f);
 }
@@ -138,6 +142,7 @@ static void parse_args(int argc, char **argv, options *o) {
         else if (!strcmp(a, "--no-musttail")) o->no_musttail = 1;
         else if (!strcmp(a, "-w")) o->nowarn = 1;
         else if (!strcmp(a, "--no-cache")) o->no_cache = 1;
+        else if (!strcmp(a, "--libc")) o->libc = 1;
         else if (o->cmd == CMD_SIZE && !strcmp(a, "--all")) o->size_all = 1;
         else if (o->cmd == CMD_SIZE && !strcmp(a, "--tsv")) o->size_tsv = 1;
         else if ((v = flag_value(argc, argv, &i, "--keep"))) o->keep[o->nkeep++] = v;
@@ -243,7 +248,8 @@ static void emit_program(options *o, sbuf *out) { /* after the front end */
     eo.unicode_full = o->unicode_full;
     eo.gc_stress = o->gc_stress;
     eo.no_musttail = o->no_musttail;
-    emit_c(p, &eo, out);
+    eo.hosted = o->libc || o->nlinks > 0;
+    o->hosted = emit_c(p, &eo, out);
     phase("emit");
 }
 static void gen_c(options *o, sbuf *out) {
@@ -309,6 +315,27 @@ static void get_target(const options *o, target *t) {
     t->cross = t->os != h.os || t->x64 != h.x64 || t->a64 != h.a64; /* the host itself: no --target (GCC has none) */
 }
 static int nolibc(const target *t) { return t->os == OS_LINUX && (t->x64 || t->a64); }
+/* Apple clang (cc or clang of Xcode / the Command Line Tools, on macOS): the only compiler that
+ * takes -fno-split-cold-code (upstream clang and GCC reject it). The command is looked up in PATH. */
+static int apple_clang(const char *cmd) {
+#ifdef __APPLE__
+    const char *base = strrchr(cmd, '/') ? strrchr(cmd, '/') + 1 : cmd, *path = getenv("PATH"), *e;
+    char full[4096];
+    if (strcmp(base, "cc") && strcmp(base, "clang")) return 0;
+    if (strchr(cmd, '/')) snprintf(full, sizeof full, "%s", cmd);
+    else for (full[0] = 0; path && *path; path = *e ? e + 1 : e) {
+        e = strchr(path, ':');
+        if (!e) e = path + strlen(path);
+        snprintf(full, sizeof full, "%.*s/%s", (int)(e - path), path, cmd);
+        if (access(full, X_OK) == 0) break;
+        full[0] = 0;
+    }
+    return !strncmp(full, "/usr/bin/", 9) || strstr(full, "/CommandLineTools/") || strstr(full, "/Xcode");
+#else
+    (void)cmd;
+    return 0;
+#endif
+}
 
 /* The C compiler command line (spec §11.1 flags; DESIGN.md §11 M0 part B, "M6 Linux as built"). */
 static char **cc_argv(const options *o, const char *cfile, const char *out) {
@@ -323,7 +350,9 @@ static char **cc_argv(const options *o, const char *cfile, const char *out) {
     t = strrchr(av[0], '/');
     zig = !strcmp(t ? t + 1 : av[0], "zig");
     if (tg.cross) {
-        snprintf(tflag, sizeof tflag, "--target=%s", tg.triple);
+        /* a hosted Linux build links a C library: glibc, dynamically (zig cc brings one) */
+        if (tg.os == OS_LINUX && o->hosted) snprintf(tflag, sizeof tflag, "--target=%s-linux-gnu", tg.x64 ? "x86_64" : "aarch64");
+        else snprintf(tflag, sizeof tflag, "--target=%s", tg.triple);
         av[n++] = tflag;
 #ifdef __APPLE__
         if (tg.os == OS_LINUX && !zig) av[n++] = "-fuse-ld=lld"; /* Apple's ld64 cannot link ELF */
@@ -331,16 +360,15 @@ static char **cc_argv(const options *o, const char *cfile, const char *out) {
     }
     av[n++] = "-std=c99";
     av[n++] = optflag;
-    {   /* Apple clang splits every cold path (error calls) into its own function with its own
-         * symbol: 15% of a large program, no measurable speed (DESIGN.md "M4-3 as built") */
-        const char *base = strrchr(av[0], '/') ? strrchr(av[0], '/') + 1 : av[0];
-        if ((tg.os == OS_DARWIN && !tg.cross && !strcmp(base, "cc")) || !strncmp(base, "clang", 5)) { av[n++] = "-Xclang"; av[n++] = "-fno-split-cold-code"; }
-    }
+    /* Apple clang splits every cold path (error calls) into its own function with its own
+     * symbol: 15% of a large program, no measurable speed (DESIGN.md "M4-3 as built") */
+    if (tg.os == OS_DARWIN && apple_clang(av[0])) { av[n++] = "-Xclang"; av[n++] = "-fno-split-cold-code"; }
     av[n++] = "-ffunction-sections";
     av[n++] = "-fdata-sections";
     if (o->debug) av[n++] = "-g";
     else if (zig) av[n++] = "-g0"; /* zig cc adds debug information by default */
-    if (nolibc(&tg)) { /* static, no libc: rt_sys.c's own _start and system calls */
+    if (zig) av[n++] = "-fno-sanitize=undefined"; /* and UBSan at -O0, whose runtime a static build lacks */
+    if (nolibc(&tg) && !o->hosted) { /* static, no libc: rt_sys.c's own _start and system calls */
         av[n++] = "-DSHIKRA_NOLIBC=1";
         av[n++] = "-ffreestanding";
         av[n++] = "-fno-stack-protector";
@@ -358,6 +386,7 @@ static char **cc_argv(const options *o, const char *cfile, const char *out) {
     av[n++] = (char *)out;
     av[n++] = (char *)cfile;
     for (k = 0; k < o->nlinks; k++) av[n++] = (char *)o->links[k]; /* --link, -l (define-c) */
+    if (tg.os == OS_LINUX && o->hosted) av[n++] = "-lm"; /* define-c of libm functions (glibc keeps them apart) */
     av[n] = NULL;
     return av;
 }
@@ -401,7 +430,9 @@ static int cmd_build(options *o) {
         fprintf(stderr, "shikra: C compilation failed; generated C kept in %s\n", cf.s);
         if (o->target)
             fprintf(stderr, "shikra: can '%s' build for %s? Cross-compiling needs a compiler that takes --target, "
-                            "e.g. --cc clang or --cc \"zig cc\"\n", o->cc, o->target);
+                            "e.g. --cc clang or --cc \"zig cc\"%s\n", o->cc, o->target,
+                    o->hosted ? "; a hosted build (define-c, --libc, --link, -l) also needs the target's C library, "
+                                "which zig cc brings" : "");
         return 1;
     }
     if (!o->debug) remove(cf.s);
@@ -425,8 +456,8 @@ static int cmd_run(options *o) {
     const char *dir;
     char flags[160];
     int k;
-    snprintf(flags, sizeof flags, "-O%c u%d b%d f%d g%d s%d t%d w%d", o->opt, o->unsafe, o->gc_bump, o->unicode_full, o->debug,
-             o->gc_stress, o->no_musttail, o->nowarn);
+    snprintf(flags, sizeof flags, "-O%c u%d b%d f%d g%d s%d t%d w%d c%d", o->opt, o->unsafe, o->gc_bump, o->unicode_full, o->debug,
+             o->gc_stress, o->no_musttail, o->nowarn, o->libc);
     dir = cache_dir();
     run_front(o);
     if ((key = cache_program_key())) {

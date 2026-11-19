@@ -56,6 +56,9 @@ STRESS_SCALE=${STRESS_SCALE:-1}
 case "$(uname -s)-$(uname -m)" in
 Linux-x86_64 | Linux-aarch64) CHECK_FLAGS="-DSHIKRA_NOLIBC=1 -ffreestanding" ;;
 esac
+# check_flags FILE.c: CHECK_FLAGS, except for a hosted program (define-c: the C library; its
+# generated C says so in its "build mode" line and refuses SHIKRA_NOLIBC), DESIGN.md "Integration".
+check_flags() { if grep -q '^/\* build mode: hosted' "$1"; then echo; else echo "$CHECK_FLAGS"; fi; }
 TMP=tests/tmp
 mkdir -p "$TMP"
 # the cache directory of build/run (and the expansion cache) stays inside the tree
@@ -171,7 +174,7 @@ run_cases() {
         if [ "$mode" = compiled ]; then
             # shellcheck disable=SC2086
             if $SHIKRA emit-c -O${opt:-2} $flags "$f" > "$TMP/c.c" 2> /dev/null &&
-                $CC -std=c99 -Wall -Wextra -Werror $CHECK_FLAGS -fsyntax-only "$TMP/c.c" 2> "$TMP/cc.err"; then ok
+                $CC -std=c99 -Wall -Wextra -Werror $(check_flags "$TMP/c.c") -fsyntax-only "$TMP/c.c" 2> "$TMP/cc.err"; then ok
             else bad "$f (generated C is not warning-free)"; head -5 "$TMP/cc.err"; fi
         fi
     done
@@ -252,7 +255,7 @@ run_r7rs() {
         if [ "$engine" = compiled ]; then
             # shellcheck disable=SC2086
             if $SHIKRA emit-c -O${opt:-2} $flag "$f" > "$TMP/r7.c" 2> /dev/null &&
-                $CC -std=c99 -Wall -Wextra -Werror $CHECK_FLAGS -fsyntax-only "$TMP/r7.c" 2> "$TMP/cc.err"; then ok
+                $CC -std=c99 -Wall -Wextra -Werror $(check_flags "$TMP/r7.c") -fsyntax-only "$TMP/r7.c" 2> "$TMP/cc.err"; then ok
             else bad "$f (generated C is not warning-free)"; head -5 "$TMP/cc.err"; fi
         fi
     done

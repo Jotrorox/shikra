@@ -87,7 +87,7 @@ static const char *parse_macho(void) {
         }
         lc += (size_t)csz;
     }
-    return cpu == 0x0100000c ? "Mach-O arm64" : cpu == 0x01000007 ? "Mach-O x86-64" : "Mach-O (unknown CPU)";
+    return cpu == 0x0100000c ? "Mach-O arm64 (dynamically linked, libSystem)" : cpu == 0x01000007 ? "Mach-O x86-64 (dynamically linked, libSystem)" : "Mach-O (unknown CPU)";
 }
 
 /* ---- ELF64 ---- */
@@ -123,6 +123,15 @@ static const char *parse_elf(void) {
         }
     }
     return mach == 62 ? "ELF x86-64" : mach == 183 ? "ELF arm64" : "ELF (unknown CPU)";
+}
+/* The build mode (DESIGN.md "Integration"): an ELF program interpreter means dynamic linking;
+ * shikra's own entry shikra_start a static executable without libc. */
+static const char *elf_mode(void) {
+    unsigned long long phoff = rd(0x20, 8), phnum = rd(0x38, 2), i;
+    size_t k;
+    for (i = 0; i < phnum; i++) if (rd((size_t)(phoff + i * 56), 4) == 3) return "hosted: dynamically linked, C library"; /* PT_INTERP */
+    for (k = 0; k < nsyms; k++) if (!strcmp(syms[k].name, "shikra_start")) return "static, no libc";
+    return "hosted: static, C library";
 }
 
 /* ---- runtime components: which runtime source defines a name ---- */
@@ -305,7 +314,13 @@ int size_command(const char *path, int all, int tsv) {
     int kind, limit = all ? 1 << 30 : 12;
     if (!(fb = (unsigned char *)read_file(path, &flen))) die("size: cannot read %s", path);
     if (flen >= 32 && rd(0, 4) == 0xfeedfacfu) fmt_name = parse_macho();
-    else if (flen >= 64 && !memcmp(fb, "\177ELF", 4) && fb[4] == 2 && fb[5] == 1) fmt_name = parse_elf();
+    else if (flen >= 64 && !memcmp(fb, "\177ELF", 4) && fb[4] == 2 && fb[5] == 1) {
+        sbuf b = {0};
+        fmt_name = parse_elf();
+        sb_printf(&b, "%s (%s)", fmt_name, elf_mode());
+        fmt_name = arena_strdup(&sz_arena, b.s);
+        sb_free(&b);
+    }
     else if (flen >= 4 && (rd(0, 4) == 0xbebafecau || rd(0, 4) == 0xcafebabeu)) die("size: %s is a universal (fat) binary; give one architecture", path);
     else die("size: %s is not a 64-bit little-endian Mach-O or ELF executable", path);
     if (!nsyms) die("size: %s has no symbol table (stripped?); shikra size needs the symbols that shikra build keeps", path);

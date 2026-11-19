@@ -3,7 +3,8 @@
  *
  * A (%c-call '(name "c-name" (arg-type ...) result-type) arg ...) is resolved when its definition
  * is compiled to bytecode: dlsym(RTLD_DEFAULT, "c-name") in the running shikra process (so the C
- * library and libm are available, a user's C file is not). The call goes through one plain C
+ * library and libm are available, a user's C file is not; on Linux libm.so.6 is loaded for this,
+ * since the tool itself does not link libm there). The call goes through one plain C
  * function-pointer type with six integer-class and eight double parameters: on AArch64 (AAPCS64,
  * Apple's variant included) and x86-64 System V, integer and floating-point arguments are assigned
  * to their own register files in order, and unused argument registers are ignored by the callee,
@@ -47,7 +48,15 @@ int ffi_resolve(obj desc, obj where) {
     if (nw > 6 || nd > 8 || e.rt == FT_FLOAT)
         cerror(where, "define-c: signature of %s not supported in the interpreter (at most 6 integer, character, string or "
                       "pointer arguments and 8 double arguments, no float); use shikra build", e.who);
-    if (!(e.fn = dlsym(RTLD_DEFAULT, cname)))
+    e.fn = dlsym(RTLD_DEFAULT, cname);
+#ifdef __linux__
+    if (!e.fn) { /* glibc keeps libm apart and the tool does not link it (rt_math.c): load it */
+        static void *libm;
+        if (!libm) libm = dlopen("libm.so.6", RTLD_LAZY);
+        if (libm) e.fn = dlsym(libm, cname);
+    }
+#endif
+    if (!e.fn)
         cerror(where, "define-c: C function %s is not available in the interpreter (only functions of the running process, "
                       "such as the C library's, are); use shikra build", cname);
     if (ntab == captab) {
