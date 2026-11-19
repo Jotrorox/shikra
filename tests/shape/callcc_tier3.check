@@ -1,0 +1,7 @@
+# Tier 3 (M5): stored, returned and re-entered continuations -- every call/cc site of the
+# program is rt_call_cc3 (none is left in tier 2), and the stack-copying runtime is linked.
+all
+no rt_call_cc[(]
+has rt_call_cc3[(]
+nm-has ^_?core_rewind$
+nm-has ^_?core_callcc3_run$

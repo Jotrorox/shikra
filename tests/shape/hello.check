@@ -14,3 +14,4 @@ nm-no ^_?io_(scan|print|label|print_atom)$
 nm-no ^_?P_scheme_base__
 nm-no ^_?bn_
 nm-has ^_?rt_port_write_fd$
+nm-no ^_?(rt_call_cc|rt_call_cc3|core_rewind|core_reenter|core_callcc3_run|core_cont_code)$
