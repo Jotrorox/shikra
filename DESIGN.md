@@ -188,7 +188,8 @@ text; they import the hidden library of %primitives.
 - **Analyze / Optimize** (M4): one monovariant whole-program flow analysis
   (procedures per call site, types per variable; lattice in spec §5.2), then
   the optimizations of spec §5 pass 6. M4-1 built the structural passes (opt.c; "M4-1 as
-  built"): the analysis of M4-2 plugs in after them, before `ir_finish`.
+  built"), M4-2 the analysis, check elimination, specialisation and unboxing (analyze.c, emit.c;
+  "M4-2 as built").
 - **Emit**: one C file (see §3), then `cc`. Until M4 the backend is naive:
   every procedure has the uniform signature and every primitive is checked.
 - Closed world: a top-level definition never `set!` is a constant; `set!` on an
@@ -1754,3 +1755,221 @@ the interpreter and -O0, -O2, -Os and the trampoline.
 **Deviations recorded**: none new. Two entries of §10 are resolved (tree shaking spares user
 code; no trampoline). The front end now notes every identifier lookup in user libraries for
 the unused-import warning (`front_note_use`), which the REPL ignores.
+
+### M4-2 (the flow analysis and what it enables)
+
+**File map** (compiler, counted as in M4-1 without the interpreter: 6,237 → 7,931 lines; `analyze.c`
+1,265 new -- the analysis ~900, representation selection and values structs ~350; emit.c +206,
+opt.c +167, normalize.c +14, ir.h +41; runtime 3,750 → 3,969 (+220:
+(rt.h fixnum/flonum helpers, unchecked accessors and writers, `RT_SAFE`; rt_io.c port cells,
+fd-only writes, flat printing; rt_core.c the handler-less error path, `equal?`); library: port
+parameters and `parameterize`)
+
+```
+src/analyze.c   ir_analyze: lattice, abstract interpretation with path facts, rewrites, diagnostics
+                ir_represent: unboxed fixnums/flonums, private signatures, values structs
+src/opt.c       jump threading, %values folding, provenance of inlined code (N_LIB, V_FAR),
+                one inlining budget across runs
+src/emit.c      representations and conversions, specialised primitives, private signatures,
+                values structs, RT_NO_HANDLERS / RT_NO_FLONUMS
+tests/shape/    sum_to_main, float_loop, values, hello (+ nm-no / nm-has / count directives)
+tests/errors/type_*, tests/warnings/types_*, tests/cases/types_*, tests/fuzz/gen2.scm
+```
+
+**Pass order** (`ir_build`): rewrite_aliases, tree shaking, first forms, unused-definition warnings;
+then rounds of { normalize → `ir_optimize` → `ir_tier1_failures` → up to three times { `ir_analyze`
+→ if it rewrote structurally: `ir_optimize` (the remaining inlining budget) → `ir_tier1_failures` } }
+(a failing tier-1 site rebuilds the round as before); then the final `ir_analyze` (types,
+diagnostics; its rewrites are not followed by the optimizer), `ir_finish`, `ir_represent`, C
+names, counts. The analysis runs only on IR whose tier-1 sites are verified (every jump in the
+function of its join point). `SHIKRA_NOANALYZE=1` skips it (all types unknown), `SHIKRA_NOREPS=1`
+keeps every variable an obj; `SHIKRA_TRACE=1` prints iterations and term walks.
+
+**Lattice.** An abstract value is `{t, f, r, lt}`: `t` a bit set (ir.h `T_*`): fixnum, flonum,
+char, `#t`, `#f`, pair, null, string, symbol, vector, bytevector, procedure, record, eof,
+unspecified, port, the three standard ports (stdin, stdout, stderr: own bits), the three static
+port-parameter cells (pairs with own bits), record-type descriptor, the letrec undefined marker,
+other (boxes, promises, error objects, values objects); `f` the one procedure (lambda) it can be,
+or "many"; `r` the one record type (the `%make-rtd` site, when that site runs at most once: in the
+program body outside loops) or "many"; `lt` the types it can have judging by its procedure's own
+code alone (diagnostics). Join is union; two different procedures join to "many" and both escape;
+meet (refinement) intersects. Monovariant: one value per variable, per procedure result, per box
+(boxed variable), per record field of a record type, per port cell.
+
+**Constraint generation per IR node** (one walk per reached procedure body per round):
+`CONST` its type; `REF` the variable's value met with the innermost fact about it; `LAMBDA`/`FIX`
+`{procedure, that lambda}`; `SET` joins into the variable (globals: closed world, all assignments);
+`PRIM` the result type from prims.def's letter refined per primitive (+ - * on fixnums give
+fixnums -- overflow raises --, any flonum gives flonums; predicates decided by the argument type;
+`eq?`/`eqv?`/`equal?` of disjoint types #f; `%make-record` the record type of its rtd; record
+fields; box contents; port cells; `%uncaught`/`%exit` nothing); a checked argument that can never
+have the right type makes the result empty; `CALL` known (M4-1's `known`, or the one lambda the
+operator can be): arguments into the callee's parameters, the callee's result (the callee is walked
+first in this round if it was not yet: a chain of calls costs no extra rounds); unknown: every
+argument escapes, the result is any; `%apply`/`%call-with-values` with unknown receivers: escape,
+any; `%call/cc`: the receiver gets a continuation (unknown procedure), the result is any; `JUMP`
+arguments into the join parameters, and the jump's facts into the join's facts; `RET` and tail
+calls into the procedure's result. A procedure is reached from the program body, `keep`
+procedures (raise, travel-to!, `--keep`: they also escape), known calls and escapes.
+
+**Where "any" enters**: parameters of escaping procedures (closures that reached unknown code,
+were stored in data, passed to unknown calls or joined with another procedure), results of unknown
+calls, `car`/`cdr`/`vector-ref`/`%values-ref`... of data, record fields of an unknown record type,
+values read from ports, `string->number` (number or #f).
+
+**Refinement.** Facts are a scoped list (at most 64): after a checked primitive returns, each
+checked argument variable has the checked type (`car x` ⇒ x is a pair); in the branches of `if t`
+with `t` a type predicate of x: x ∩ P / x \ P (exact predicates); `record?`: x is that record type;
+`eq?`/`eqv?` with a singleton-type constant both ways; `if x`: x \ #f / x = #f; comparisons
+`< > <= >=` record order relations both ways (x < y and y > x; the negation in the else branch:
+only used for fixnums, so NaN does not matter); results of `length`, `*-length`, `char->integer`,
+`bytevector-u8-ref` are in [0, 2^48). A join point that is not a loop starts with the facts that
+hold at every jump reaching it (so `(when (not (pair? x)) (error ...)) (car x)` is proven: the
+error branch never reaches the join, `error` never returns); a loop join starts with the facts at
+its declaration. Only variables never assigned are refined. Jump threading in the optimizer
+(a join whose body only tests its parameter, entered with a constant, goes to the branch) keeps
+`not`, `and` and `or` from hiding the predicate.
+
+**Rewrites** (final walk of each analysis): a pure primitive whose result is decided (and whose
+checked arguments are proven) becomes the constant; an `if` on a decided test becomes its branch;
+the rest of a term after a call or primitive whose result is empty becomes `return` (it never runs);
+a call whose operator is exactly one procedure with a matching clause becomes a known call (no
+`RT_CALLABLE`, no argc check, direct entry). Then the optimizer runs again (newly known calls are
+inlined, dead join points and procedures vanish). Annotations: refined types on atoms (`ty`), on
+primitives `S_OK(i)` (argument i proven) and `S_NOOVF`.
+
+**Overflow-check elimination** (`S_NOOVF`): `(+ x c)` / `(- x c)` with constant c and proven
+fixnums is unchecked when a dominating relation bounds x: x < y or x <= y with y a constant K and
+K (- 1) + c within the fixnum range; x < y (x > y) with y a fixnum variable and c = 1 (c = -1);
+one step of transitivity through a constant bound on y (lengths are below 2^48). The section 12
+loop `(if (> i n) acc (loop (+ i 1) ...))` has i <= 1000000 in the else branch, so `i + 1` is a
+plain add of tagged words and only `acc + i` is checked.
+
+**Specialisation** (emit.c `special`): both fixnums: `+ - *` on tagged intptr_t words (`rt_fxadd`
+etc.: `__builtin_*_overflow`, the overflow calls `rt_fx_overflow`, which raises "+: fixnum overflow"
+with both irritants, as the generic path), compare directly, `quotient`/`remainder`/`modulo`
+inline (generic call for the raising cases); a flonum and a proven number: double arithmetic
+(`rt_num_dbl` for a number of unknown kind), comparisons when both are flonums (or one is a fixnum
+constant within ±2^53), `sqrt exp log sin cos tan asin acos atan inexact abs negate` straight to
+the platform functions; `car cdr set-car! set-cdr! vector-ref vector-set! string-ref
+bytevector-u8-ref *-length char->integer record-ref record-set!` without the type check when proven
+(bounds and literal checks stay; a record access is one load); boxes are never checked (the
+compiler's own); `eqv?` with a non-flonum side and `equal?` with an immediate/symbol/procedure/
+record side are pointer comparisons; `display`/`write`/`write-char`/`write-string`/`newline`:
+string, char and fixnum writes (`rt_put_*`, no checks) when the port is proven to be the open
+standard output or error port, the checked string/char writers otherwise, `rt_display_flat` /
+`rt_write_flat` (no datum labels) for values proven not to be pairs or non-empty vectors, the
+generic printer only for the rest.
+
+**Representations and boxing points** (`ir_represent`, after `ir_finish`): a variable whose type is
+exactly fixnum is an `intptr_t` holding the tagged word (free conversions); exactly flonum a
+`double`, except that it stays an obj when it would be boxed twice or boxed after being unboxed: a
+boxing use is a non-float primitive argument, an unknown or uniform call's argument, a jump or
+`let` into an obj variable, a return from a procedure with an obj result, a capture by a closure,
+an `if` test; a boxed source is an obj variable, a uniform procedure's parameter, a non-float
+primitive or call result (fixpoint, demotion only). Globals, boxed variables, closure slots and
+`self` are always obj. Flonum literals are static data and C double literals.
+
+**Private calling conventions.** A direct procedure (M4-1 rule: no escape, on no tail-call cycle,
+not a case-lambda) gets parameters in their representations (`intptr_t`/`double`), unused
+parameters dropped, free variables passed as parameters, no closure argument, and its result in
+the representation of its result type (fixnum, flonum: if not boxed twice, or a values struct).
+Tail calls stay proper: a direct procedure is on no cycle of the tail-call graph, so its outgoing
+calls are plain C calls a bounded number of times in a row; one that returns an unboxed value never
+returns the trampoline marker, so its tail calls to uniform procedures are plain calls followed by
+the conversion, and calls to it are not wrapped in `RT_NT`.
+
+**Values struct** (spec §8.5). A direct procedure all of whose returns are `(values a b ...)` of
+the same count n (n >= 2) or tail calls of such procedures, and every one of whose non-tail calls
+binds a variable used only by `%values-check` / `%values-ref` (a known receiver: `let-values`,
+`call-with-values` with a literal lambda), returns `rt_mvN` (`struct { obj v[N]; }`) by value: no
+values object. When the producer is inlined instead, `%values-check`/`%values-ref` of a variable
+bound to `(%values ...)` fold in the optimizer.
+
+**Pay for what you use** (spec §9.1, as implemented):
+
+| Row | Criterion |
+|---|---|
+| Collector | linked iff something reachable references `rt_alloc_slow` (allocation fast paths), and `--gc=bump` not set. Analysis-driven: proven writes to the standard ports go through `rt_port_write_fd` (no string-port branch, which allocates), and with no handler the error path allocates nothing |
+| Exception machinery | `RT_NO_HANDLERS` when no reachable `%set-handlers!` installs a handler (its argument is not the current list or its cdr): runtime errors print and exit directly (`core_die`, no error object, no Scheme `raise`); linked at all only if some reachable check remains |
+| Symbol table | linker: `rt_intern` is referenced only by `string->symbol` and `read` |
+| Float printing | `RT_NO_FLONUMS` unless a flonum literal (also inside quoted data) or a primitive that makes a flonum from non-flonums (`/ expt inexact exp log sin cos tan asin acos atan sqrt current-second string->number read`) is reachable; then the printer is linked only if a printer is (`rt_format_double` from the generic printer, `number->string`, the flat writers) |
+| Float parsing | linker: `string->number`, `read` |
+| Datum reader | linker: `read` |
+| File ports | linker: `(scheme file)` procedures |
+| Cycle detection (datum labels) | linker: `io_scan` from the generic `display`/`write`, linked when one is reachable on a value whose type may be a pair or a non-empty vector, or by the uncaught-error printer (irritants of any type), not by fixnum overflow reports |
+| Stack-copying continuations | not built (tier 3) |
+| Unicode tables | `--unicode=full` |
+
+The port parameters: `current-input-port` etc. are closure-free case-lambdas over static cells
+`rt_port_cells[k]` = `(converter . value)` (rt_io.c, a root range): `(current-output-port)` is
+`RT_CDR(rt_port_cell(1))`, a load. `parameterize` binds them shallowly: their winders frame is a
+dynamic-wind frame whose before/after thunks swap the value in and out of the cell, and
+`parameterize-run` enters and leaves frames with `travel-to!` (before: `%set-winders!` directly),
+so escapes and re-entry swap correctly. The REPL resets the cells with the dynamic state.
+
+**--unsafe** (spec §3.3): `RT_UNSAFE` removes every `RT_CHECK` in the runtime (type checks), the
+bounds checks of the inline accessors (`RT_INDEX`), the record-type check, the literal checks
+(pairs, vectors), `rt_chkdef` (undefined variables), `RT_CALLABLE` (not a procedure), the
+fixnum overflow checks (`rt_add` & co. and `rt_fxadd` wrap, through unsigned arithmetic), the
+division-by-zero fallbacks of the inline integer division; the emitter drops the argc check of
+escaping procedures. The analysis' refinements after checked primitives are trusted as in safe mode.
+Not removed: checks inside out-of-line runtime functions that are not `RT_CHECK` (port state,
+ranges of `substring`, `string->symbol` of a non-string through `io_check`...).
+
+**Diagnostics policy** (spec §11.3). A primitive argument, call operator or record access whose
+type can never be right: a compile error when the proof is local -- the value's type follows from
+the procedure's own code (`lt`: constants, primitive results, its tests; standard library and
+record procedures inlined into it count as primitives, a user procedure's parameter or result does
+not, even when inlined: `V_FAR`, `N_FAR`) -- and the code runs whenever the body does: no undecided
+`if` on the way, not after a handler was installed in the same body (an inlined guard body), and
+the body is the program body, a top-level procedure, or a local procedure only ever called
+directly (not one passed to other code, which may run it under a handler). Otherwise a warning
+("... (an error when it runs)", once per location, silenced by `-w`), and the code still raises.
+Library code guarded by its own test is never reported (deliberate error paths); dead code is
+never reported. Arity mismatches of calls the analysis made known are warnings. Inlined standard
+library code takes the location of the user's call.
+
+**Known imprecision** (examples): values read from input (`(read)`, benchmarks' `hide`) are any,
+so `fib` of the r7rs suite stays generic (it is called with a number read from stdin); a loop
+variable that starts with an unknown value and then gets flonums (`sumfp`: `i` starts as `(hide
+count input1)`) stays an obj and is boxed per iteration; contents of pairs and vectors are any
+(`(vector-ref v i)` of a vector of flonums is generic: spec §12); procedure values joined at one
+site lose both (`(if c f g)` called later is an unknown call; flat lattice, no sets); one record
+type per `%make-rtd` site that runs once (types defined in a procedure are "many"); values from
+`%values-ref` of a struct are any (no per-position types); fields of a record type are joined over
+all records of that type; no interval analysis beyond dominating comparisons and lengths (`(- n 1)`
+after `(= n 0)` keeps its overflow check); facts are not kept for assigned variables; loop joins
+get only the facts of their declaration.
+
+**Numbers** (Apple M5, macOS 27.3, Apple clang; machine shared with other work).
+- Benchmarks (CSV `m4-2-20261119-1220`, `m4-2-unsafe-20261119-1222`; RESULTS.md): 53/53 ok in both
+  modes. Geometric mean Shikra/Chez **0.78** (m4-1 0.91), Shikra/Gambit **0.71** (0.83);
+  unsafe/Chez-unsafe **0.74** (0.98), unsafe/Gambit-unsafe 0.79 (51 common); unsafe/safe 0.88
+  (m4-1: 1.0, nothing was removed). Against m4-1 in that run: 0.86x in geometric mean. Single runs
+  vary by 10-20% on this machine (an earlier full run gave 0.71x Chez), so the main benchmarks were
+  also compared interleaved, best of three, m4-1 binary vs m4-2: mbrot 6.20 → 0.27 s (0.04x:
+  doubles in registers, no boxing), equal 0.87 → 0.30 (0.35x, the in-place switch to the cycle
+  table; the pre-M5 baseline was 0.44), sumfp 4.22 → 2.76 (0.65x), ray 0.83x, pnpoly 0.85x,
+  simplex 0.87x, fibfp 0.88x, nucleic 0.95x, nqueens 0.95x, fib 0.96x, fft, tak, ack, sum, primes
+  1.0x. The fixnum loops gain nothing: the suite passes every input through `(read)` and `hide`,
+  so `fib`, `tak`, `ack`, `sum` see "any" parameters (the same programs with literal arguments
+  compile to the intptr_t loops of the shape tests: `fib` above, spec §12). Worst in the run: cat
+  1.17, divrec 1.11, diviter 1.08 (I/O and list code the analysis does not change: noise).
+- Sizes (bytes, -O2 / -Os): hello world 50,888 / 50,904 (M4-1: 69,928 / 70,424; `__text` 1,568);
+  fib with a literal argument 51,144 / 51,160 (70,216 / 70,552); the section 12 program 51,104 /
+  51,136. No collector, no `raise`, no generic printer in any of them (shape tests `hello`,
+  `sum_to_main` check `nm`).
+- Compile time (`emit-c`, mean of 10): tests/r7rs/base.scm 104 ms (M4-1) → 117 ms (three analyses
+  of 15,600 variables and 2,250 procedures, 4 rounds each, ~19,000 term walks, plus the second
+  optimizer run); nucleic 16.9 → 19.9 ms. `build -O2` of base.scm 1.5 s, `-O0` 0.54 s (cc dominates).
+- Tests: `make test` 831 checks (2 skips as before); `tests/run.sh gcc` with gcc-16; tests/fuzz.sh
+  about 3,000 programs (gen and gen2 for 1,500 seeds at -O0, -O2, -Os and the trampoline): the first
+  1,000 found two bugs, both fixed (an analysis-known call to a closure was inlined where its free
+  variables were out of scope; a `set!` of a local whose binding had been deleted survived), the
+  2,000 after the fixes found none.
+
+**What M4-3 needs**: `shikra size` can attribute the specialised runtime pieces (`rt_put_*`,
+`rt_fx*`, flat printers) and the two config macros; `-g` locations can reuse the inlined-code
+locations (N_LIB copies carry the user's call site); the expansion cache is unaffected (the analysis
+runs on IR).
