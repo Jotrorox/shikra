@@ -78,7 +78,8 @@ static void usage(FILE *f) {
           "  --gc=immix|bump          collector (default immix; bump never frees)\n"
           "  --unicode=ascii|full     character tables (default ascii)\n"
           "  -I dir                   add a library search directory (repeatable)\n"
-          "  --cc=CC                  C compiler command, may include arguments (default cc)\n"
+          "  --cc=CC                  C compiler command, may include arguments\n"
+          "                           (default $SHIKRA_CC, else cc)\n"
           "  --target=TRIPLE          cross-compilation target (default: the host)\n"
           "  -g                       source locations in run-time errors; debug information\n"
           "  -o file                  output file\n"
@@ -106,7 +107,7 @@ static void parse_args(int argc, char **argv, options *o) {
     const char *v;
     memset(o, 0, sizeof *o);
     o->opt = '2';
-    o->cc = "cc";
+    o->cc = getenv("SHIKRA_CC") && *getenv("SHIKRA_CC") ? getenv("SHIKRA_CC") : "cc"; /* --cc default */
     o->incdirs = (const char **)xmalloc(sizeof(char *) * (size_t)argc);
     o->keep = (const char **)xmalloc(sizeof(char *) * (size_t)(argc + 1));
     if (argc < 2) { usage(stderr); exit(2); }
@@ -263,40 +264,88 @@ static void write_text(const char *path, const sbuf *s) {
     if (!f || fwrite(s->s, 1, s->len, f) != s->len || fclose(f) != 0) die("cannot write %s", path);
 }
 
-/* The C compiler command line (spec §11.1 flags; DESIGN.md §11 M0 part B). */
+/* --target (spec §11.1; DESIGN.md "M6 Linux as built"): the triple's architecture and OS, in
+ * any common spelling (x86_64-linux-gnu, x86_64-unknown-linux-musl, amd64-linux, aarch64-linux,
+ * arm64-apple-darwin, ...). Linux on x86-64/arm64 builds static executables without libc. */
+enum { OS_DARWIN = 1, OS_LINUX, OS_OTHER };
+typedef struct { int os, x64, a64, cross; char triple[64]; } target;
+static void get_target(const options *o, target *t) {
+    const char *s = o->target;
+    target h;
+    memset(t, 0, sizeof *t);
+#if defined(__APPLE__)
+    t->os = OS_DARWIN;
+#elif defined(__linux__)
+    t->os = OS_LINUX;
+#else
+    t->os = OS_OTHER;
+#endif
+#if defined(__x86_64__)
+    t->x64 = 1;
+#elif defined(__aarch64__) || defined(__arm64__)
+    t->a64 = 1;
+#endif
+    if (!s) return;
+    h = *t;
+    t->x64 = !strncmp(s, "x86_64", 6) || !strncmp(s, "amd64", 5) || !strncmp(s, "x64", 3);
+    t->a64 = !strncmp(s, "aarch64", 7) || !strncmp(s, "arm64", 5);
+    t->os = strstr(s, "linux") ? OS_LINUX : strstr(s, "darwin") || strstr(s, "apple") || strstr(s, "macos") ? OS_DARWIN : 0;
+    if (!t->os || !(t->x64 || t->a64))
+        die("unsupported target '%s' (supported: x86_64-linux, aarch64-linux, arm64-apple-darwin, x86_64-apple-darwin)", s);
+    /* the form clang and zig cc both understand; the C library part is irrelevant without libc */
+    snprintf(t->triple, sizeof t->triple, "%s-%s", t->x64 ? "x86_64" : t->os == OS_DARWIN ? "arm64" : "aarch64",
+             t->os == OS_LINUX ? "linux-musl" : "apple-darwin");
+    t->cross = t->os != h.os || t->x64 != h.x64 || t->a64 != h.a64; /* the host itself: no --target (GCC has none) */
+}
+static int nolibc(const target *t) { return t->os == OS_LINUX && (t->x64 || t->a64); }
+
+/* The C compiler command line (spec §11.1 flags; DESIGN.md §11 M0 part B, "M6 Linux as built"). */
 static char **cc_argv(const options *o, const char *cfile, const char *out) {
     char **av = (char **)xmalloc(sizeof(char *) * 64), *cc = arena_strdup(&compiler_arena, o->cc), *t;
-    int n = 0, darwin;
-    static char optflag[4] = "-O2";
-    for (t = strtok(cc, " \t"); t && n < 40; t = strtok(NULL, " \t")) av[n++] = t;
+    int n = 0, zig;
+    static char optflag[4] = "-O2", tflag[96];
+    target tg;
+    for (t = strtok(cc, " \t"); t && n < 30; t = strtok(NULL, " \t")) av[n++] = t;
     if (!n) die("--cc is empty");
     optflag[2] = o->opt;
-#ifdef __APPLE__
-    darwin = 1;
-#else
-    darwin = 0;
-#endif
-    if (o->target) {
-        static char tflag[256];
-        snprintf(tflag, sizeof tflag, "--target=%s", o->target);
+    get_target(o, &tg);
+    t = strrchr(av[0], '/');
+    zig = !strcmp(t ? t + 1 : av[0], "zig");
+    if (tg.cross) {
+        snprintf(tflag, sizeof tflag, "--target=%s", tg.triple);
         av[n++] = tflag;
-        darwin = strstr(o->target, "darwin") || strstr(o->target, "apple");
+#ifdef __APPLE__
+        if (tg.os == OS_LINUX && !zig) av[n++] = "-fuse-ld=lld"; /* Apple's ld64 cannot link ELF */
+#endif
     }
     av[n++] = "-std=c99";
     av[n++] = optflag;
     {   /* Apple clang splits every cold path (error calls) into its own function with its own
          * symbol: 15% of a large program, no measurable speed (DESIGN.md "M4-3 as built") */
         const char *base = strrchr(av[0], '/') ? strrchr(av[0], '/') + 1 : av[0];
-        if ((darwin && !strcmp(base, "cc")) || !strncmp(base, "clang", 5)) { av[n++] = "-Xclang"; av[n++] = "-fno-split-cold-code"; }
+        if ((tg.os == OS_DARWIN && !tg.cross && !strcmp(base, "cc")) || !strncmp(base, "clang", 5)) { av[n++] = "-Xclang"; av[n++] = "-fno-split-cold-code"; }
     }
     av[n++] = "-ffunction-sections";
     av[n++] = "-fdata-sections";
     if (o->debug) av[n++] = "-g";
-    av[n++] = darwin ? "-Wl,-dead_strip" : "-Wl,--gc-sections";
+    else if (zig) av[n++] = "-g0"; /* zig cc adds debug information by default */
+    if (nolibc(&tg)) { /* static, no libc: rt_sys.c's own _start and system calls */
+        av[n++] = "-DSHIKRA_NOLIBC=1";
+        av[n++] = "-ffreestanding";
+        av[n++] = "-fno-stack-protector";
+        av[n++] = "-fno-pie";
+        av[n++] = "-fno-asynchronous-unwind-tables";
+        av[n++] = "-fno-unwind-tables";
+        av[n++] = "-static";
+        av[n++] = "-nostdlib";
+        av[n++] = "-Wl,--gc-sections";
+        av[n++] = "-Wl,--build-id=none";
+        av[n++] = "-Wl,-z,norelro";
+        if (!zig) av[n++] = "-Wl,-z,noseparate-code"; /* lld (zig's linker) has it by default and rejects the flag */
+    } else av[n++] = tg.os == OS_DARWIN ? "-Wl,-dead_strip" : "-Wl,--gc-sections";
     av[n++] = "-o";
     av[n++] = (char *)out;
     av[n++] = (char *)cfile;
-    if (!darwin) av[n++] = "-lm"; /* rt_sys_pow; libm is part of libSystem on macOS */
     av[n] = NULL;
     return av;
 }
@@ -338,6 +387,9 @@ static int cmd_build(options *o) {
     write_text(cf.s, &c);
     if (!run_cc(o, cf.s, out)) {
         fprintf(stderr, "shikra: C compilation failed; generated C kept in %s\n", cf.s);
+        if (o->target)
+            fprintf(stderr, "shikra: can '%s' build for %s? Cross-compiling needs a compiler that takes --target, "
+                            "e.g. --cc clang or --cc \"zig cc\"\n", o->cc, o->target);
         return 1;
     }
     if (!o->debug) remove(cf.s);
@@ -375,7 +427,7 @@ static int cmd_run(options *o) {
     }
     emit_program(o, &c);
     if (!key) {
-        sb_printf(&c, "/* cc: %s %s */\n", o->cc, flags); /* the key covers compiler and flags */
+        sb_printf(&c, "/* cc: %s %s %s */\n", o->cc, flags, o->target ? o->target : ""); /* the key covers compiler and flags */
         for (i = 0; i < c.len; i++) h = (h ^ (unsigned char)c.s[i]) * 1099511628211ull;
         sb_printf(&bin, "%s/run-%016llx", dir, h);
     }
