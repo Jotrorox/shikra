@@ -3597,21 +3597,24 @@ static const char *const e31[] = {
 "    rt_port_write(port, s + run, (size_t)(n - run));\n"
 "    rt_port_putc(port, q);\n"
 "}\n"
-"/* A symbol is written without bars unless it would read back as something else: a number,\n"
-" * or what a reader with complex numbers takes for one (+i, -i, and anything beginning with\n"
-" * +inf.0, -inf.0, +nan.0 or -nan.0, in any case). */\n"
+"/* A symbol is written without bars unless it would not read back as that symbol: empty, \".\",\n"
+" * starting with '#', containing a delimiter, or starting like a number -- a digit, or a sign\n"
+" * or '.' followed by a digit, or a sign, '.' and a digit (such text is never an identifier in\n"
+" * R7RS) -- or what a reader with complex numbers takes for a number: +i, -i, and anything\n"
+" * beginning with +inf.0, -inf.0, +nan.0 or -nan.0, in any case. The check is syntactic, so\n"
+" * writing a symbol does not link the number parser. */\n",
 "static int io_ci(const char *s, intptr_t n, const char *lit) {\n"
 "    intptr_t i;\n"
 "    for (i = 0; lit[i]; i++) if (i >= n || (s[i] | 0x20) != lit[i]) return 0;\n"
 "    return 1;\n"
 "}\n"
+"static int io_digit(const char *s, intptr_t n, intptr_t i) { return i < n && s[i] >= '0' && s[i] <= '9'; }\n"
 "static int io_sym_plain(const char *s, intptr_t n) {\n"
-"    obj dummy;\n"
 "    intptr_t i;\n"
-"    if (n == 0 || s[0] == '#' || (n == 1 && s[0] == '.')) return 0;\n",
-"    if (rt_parse_number(s, (size_t)n, 10, &dummy) != -1) return 0;\n"
-"    if ((s[0] == '+' || s[0] == '-') && ((n == 2 && (s[1] | 0x20) == 'i') || io_ci(s + 1, n - 1, \"inf.0\") || io_ci(s + 1, n - 1, \"nan.0\")))\n"
-"        return 0;\n"
+"    int sign = n > 0 && (s[0] == '+' || s[0] == '-');\n"
+"    if (n == 0 || s[0] == '#' || (n == 1 && s[0] == '.') || io_digit(s, n, 0)) return 0;\n"
+"    if ((sign || s[0] == '.') && (io_digit(s, n, 1) || (sign && n > 2 && s[1] == '.' && io_digit(s, n, 2)))) return 0;\n"
+"    if (sign && ((n == 2 && (s[1] | 0x20) == 'i') || io_ci(s + 1, n - 1, \"inf.0\") || io_ci(s + 1, n - 1, \"nan.0\"))) return 0;\n"
 "    for (i = 0; i < n; i++) {\n"
 "        unsigned char c = (unsigned char)s[i];\n"
 "        const char *d;\n"
@@ -3660,7 +3663,7 @@ static const char *const e31[] = {
 "            }\n"
 "        }\n"
 "        for (;;) { /* the next child of the innermost open object */\n"
-"            if (!sp) return;\n"
+"            if (!sp) return;\n",
 "            x = RT_O(st[sp - 2]);\n"
 "            i = (intptr_t)st[sp - 1]++;\n"
 "            n = rt_is_pair(x) ? 2 : RT_HLEN(x);\n"
@@ -3674,7 +3677,7 @@ static const char *const e31[] = {
 "    intptr_t *v = L ? rt_addrtab_get(&L->t, x, 0, 0) : 0;\n"
 "    return v && (*v & IO_LABEL) ? v : 0;\n"
 "}\n"
-"/* Writes #n# and returns 1 if x already has a label; writes #n= first if it gets one now. */\n",
+"/* Writes #n# and returns 1 if x already has a label; writes #n= first if it gets one now. */\n"
 "static int io_label(io_labels *L, obj x, obj port) {\n"
 "    intptr_t *v = io_marked(L, x);\n"
 "    if (!v) return 0;\n"
@@ -3736,7 +3739,7 @@ static const char *const e31[] = {
 "        rt_port_puts(port, \"#u8(\");\n"
 "        for (i = 0; i < RT_HLEN(x); i++) {\n"
 "            if (i) rt_port_putc(port, ' ');\n"
-"            io_fix(port, RT_PTR(x, rt_bytevector)->b[i]);\n"
+"            io_fix(port, RT_PTR(x, rt_bytevector)->b[i]);\n",
 "        }\n"
 "        rt_port_putc(port, ')');\n"
 "        return;\n"
@@ -3744,7 +3747,7 @@ static const char *const e31[] = {
 "    case RT_T_RTD: rt_port_puts(port, \"#<record-type \"); io_print(RT_VEC(x)[0], port, 0, 0); rt_port_putc(port, '>'); return;\n"
 "    case RT_T_ERROR: rt_port_puts(port, \"#<error \"); rt_print(RT_VEC(x)[0], port, 1); rt_port_putc(port, '>'); return;\n"
 "    case RT_T_PORT: rt_port_puts(port, \"#<port>\"); return;\n"
-"    case RT_T_PROMISE: rt_port_puts(port, \"#<promise>\"); return;\n",
+"    case RT_T_PROMISE: rt_port_puts(port, \"#<promise>\"); return;\n"
 "    case RT_T_BOX: rt_port_puts(port, \"#<box>\"); return;\n"
 "    case RT_T_VALUES: rt_port_puts(port, \"#<values>\"); return;\n"
 "    default: rt_port_puts(port, \"#<object>\"); return;\n"
@@ -3801,7 +3804,7 @@ static const char *const e31[] = {
 "    rt_print(x, port, RT_PRINT_WRITE | RT_PRINT_SIMPLE);\n"
 "    return RT_UNSPEC;\n"
 "}\n"
-"/* Strings and chars also have their own primitives (rt_write_string, rt_write_char), so a call\n"
+"/* Strings and chars also have their own primitives (rt_write_string, rt_write_char), so a call\n",
 " * whose argument type is known (M4) links neither the general printer nor the label pre-pass. */\n"
 "RT_FN obj rt_display(obj x, obj port) {\n"
 "    io_check(port, RT_PF_OUT, \"display\");\n"
@@ -3811,7 +3814,7 @@ static const char *const e31[] = {
 "    return RT_UNSPEC;\n"
 "}\n"
 "RT_FN obj rt_newline(obj port) { io_check(port, RT_PF_OUT, \"newline\"); rt_port_putc(port, '\\n'); return RT_UNSPEC; }\n"
-"RT_FN obj rt_flush_output_port(obj port) { io_check(port, RT_PF_OUT | IO_ANY, \"flush-output-port\"); rt_flush(port); return RT_UNSPEC; }\n",
+"RT_FN obj rt_flush_output_port(obj port) { io_check(port, RT_PF_OUT | IO_ANY, \"flush-output-port\"); rt_flush(port); return RT_UNSPEC; }\n"
 "",
 0};
 static const char *const e32[] = {

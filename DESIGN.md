@@ -208,6 +208,8 @@ tests/run.sh [compiled|r7rs|interp|stress|expand|all]   driver used by `make tes
 tests/cases/NAME.scm + NAME.out             program + expected stdout (+ NAME.exit,
                                             + NAME.err: expected stderr substring,
                                             + NAME.in: stdin, else /dev/null,
+                                            + NAME.flags: extra shikra flags (M5),
+                                            + NAME.args: program arguments (M5),
                                             + NAME.stress-interval: see M2 "Stress mode",
                                             + NAME.interp-stress-interval: M3 "Stress mode",
                                             + NAME.compiled-only: reason the interpreter
@@ -216,7 +218,8 @@ tests/repl/NAME.in + NAME.out (+ NAME.args) input piped into `shikra repl`, whol
 tests/errors/NAME.scm + NAME.err            expected compile diagnostics (substring)
 tests/expand/NAME.scm + NAME.out            core forms as `,expand` prints them
 tests/r7rs/                                 adapted Chibi r7rs-tests, split by library
-tests/r7rs/expected/FILE.ENGINE             pinned summary line + failing tests (r7rs mode)
+tests/r7rs/expected/FILE.ENGINE             pinned summary line + failing tests (r7rs mode;
+                                            since M5 every file under both engines)
 ```
 
 Every feature lands with a test. From M3 on, every case runs under both
@@ -279,6 +282,19 @@ engines and the outputs must be identical.
 - *Interpreter stack overflow is not catchable* (M3): beyond 2^25 slots (256 MB) the VM
   prints "Error: stack overflow" and returns to the prompt (`shikra interp`: exits 70);
   there is no room left to run a handler. Compiled programs crash on C stack overflow.
+- *M5 libraries* (details in "M5 libraries as built"): no complex numbers, so `sqrt`, `log`,
+  `asin`, `acos` of a real outside the function's real domain return `+nan.0` (R7RS: a complex
+  result); `current-second` is POSIX time (UTC), not TAI; `force` of a non-promise returns it;
+  `string-downcase`'s final sigma looks at the neighbouring characters only (no skipping of
+  case-ignorable characters) and the language-specific mappings (Turkish, Lithuanian) are not
+  applied; a ratio whose denominator has more than 780 significant digits is not a number
+  Shikra can represent (`string->number` gives `#f`).
+- *Generic `display` and the uncaught-error printer link the datum-label pre-pass* (§9.1:
+  hello world never prints a cycle): both must terminate on circular data. Hello world's
+  `__text` still shrank in M5 (21,060 → 20,368 bytes: the float parser is no longer linked and
+  the printer is smaller); the file grew by 264 bytes of symbol table (70,144 → 70,408). M4's
+  type narrowing of `display` can drop the pre-pass (strings and chars already have their own
+  primitives).
 - *Stress mode collects at every allocation for all but five cases* (§13 M2 "done when"):
   the r7rs gate and 36 of the 41 programs in tests/cases collect at every allocation, at
   -O2 and -O0; five whose live set or allocation count makes a full collection per
@@ -390,12 +406,8 @@ both. String ports in both directions; `rt_open_input_file/output_file` exist (r
 FILE errors). Binary and bytevector ports: M1 part B.
 
 **Open issues / known gaps**
-- Float printing/parsing is interim (`TODO(M5)` in rt_num.c): double-double scaling.
-  300k random doubles round-trip exactly and print shortest for all normal numbers;
-  subnormals may print one digit longer; parsing truncates beyond 19 significant
-  digits, so it is not guaranteed correctly rounded.
-- `equal?` and `write` do not terminate on circular data (M5: union-find equal?,
-  write-shared/datum labels in rt_print).
+- (Done in M5: shortest float printing, correctly rounded parsing; `equal?`, `write` and
+  `display` terminate on circular data. See "M5 libraries as built".)
 - (Fixed in M1 part B: every open output port is flushed at exit.)
 - `exact`/integer division on flonums outside ±2^62 raise an error.
 - (Done in M2: the Immix collector, `--gc`, immortal mode.)
@@ -1322,3 +1334,185 @@ bug was found.
 - Circular data given to `eval` loops in the copy.
 - `,c` text extraction relies on the emitter's comment and naming conventions; `define-record-type`
   or `define-values` names are not recognised by `,c` (only `define`).
+
+### M5 libraries (all "Full" libraries of spec §3.1 except tier-3 continuations)
+
+**File map** (runtime 3,225 → 3,724 lines in `rt.h` + `rt_*.c`, not counting the generated
+`rt_unicode.c`: 393 lines, of which ~45 are code and 6.3 KB are table data; Scheme library +190)
+
+```
+src/rt_num.c      decimal conversion: small fixed big integers (bn_*), Burger-Dybvig printing,
+                  exact-ratio parsing; (scheme inexact) primitives over rt_sys_* math
+src/rt_io.c       datum labels (io_scan pre-pass, io_print with labels), write-shared/-simple,
+                  binary file ports, file-exists?, delete-file, file errors; symbol bar rule
+src/rt_core.c     address tables (rt_addrtab_get), equal? on cycles, promises, command line,
+                  environment, clocks; the symbol table moved to OS memory (see bugs below)
+src/rt_str.c      (scheme char): classes, simple and full case mappings, ASCII or Unicode
+src/rt_unicode.c  GENERATED by tools/mkunicode.c (UCD 18.0.0), committed; --unicode=full only
+src/rt_sys.c      rt_sys_{exp,log,sin,cos,tan,asin,acos,atan2,sqrt}, rt_sys_exists/remove/environ
+src/expand.c      delay / delay-force lowered to %make-promise
+lib/scheme/{char,file,inexact,lazy,read,time}.sld, process-context.sld and write.sld completed
+tools/mkunicode.c generator (Makefile: make unicode UCD=dir)
+```
+
+**Promises** (`(scheme lazy)`). A promise is a heap object `RT_T_PROMISE` with one field, a
+*state pair* `(done? . value)`, or `(#f . thunk)` while pending. `(delay-force e)` expands to
+`(%make-promise #f (lambda () e))`, `(delay e)` to `(delay-force (%make-promise #t e))`
+(expand.c, keywords exported by `(scheme lazy)`). `force` is Scheme, the R7RS reference
+algorithm: call the thunk; unless the promise got done meanwhile (reentrant force), copy the
+returned promise's state into this one's state pair and make the returned promise share that
+pair; loop (a self tail call: a C `goto` compiled, constant VM stack interpreted). A chain of
+10^7 `delay-force` steps runs in 2.6 MB RSS compiled under a 256 KB C stack, and in the
+interpreter. `make-promise` returns a promise unchanged; `force` of a non-promise returns it.
+
+**Datum labels** (`write`, `display`, `write-shared`, `write-simple`; rt_io.c). `rt_print(x,
+port, mode)` with `RT_PRINT_WRITE` / `_SHARED` / `_SIMPLE`. A scalar, or SIMPLE, prints directly.
+Otherwise a pre-pass walks the pairs and non-empty vectors depth first with an explicit stack
+(a raw heap buffer of (object, next child) words, so long lists do not recurse) and records each
+object in an address table with flags SEEN, OPEN (on the current path) and LABEL. An object met
+again while OPEN (a back edge, i.e. a cycle) gets LABEL; with SHARED, any object met again does.
+The printer then writes `#n=` at the first occurrence of a LABEL object (numbers from 0 in print
+order, kept in the table) and `#n#` afterwards; a labelled object in a list's cdr position ends
+the list with ` . #n#`. So `write` labels exactly the cycle targets ("labels only when there are
+cycles"), shared acyclic structure prints in full, and `display` and the error printer (irritants
+are printed with `write`) terminate on cycles. Records, ports, promises print opaquely and are
+not traversed. *Address tables* (`rt_addrtab_get`, rt_core.c) are open-addressing tables in a raw
+heap buffer, keyed by one or two object addresses; the buffer is reached from the C stack and
+the keyed objects from the caller's arguments, and the collector does not move objects, so no
+rooting is needed.
+
+**equal?** First a plain recursive comparison (recursing on cars and vector elements, iterating
+on cdrs and the last vector element) with a budget of 100,000 pairs/vectors and a depth limit of
+1,000; if either runs out, a second comparison records every (a, b) pair of compound objects it
+enters in an address table and treats a pair met again as equal. That is the bisimulation (the
+greatest fixed point), which is R7RS's `equal?` on infinite trees, and it terminates because the
+table only grows. Deeply car-nested acyclic data still recurses on the C stack (as before).
+
+**Float printing and parsing** (rt_num.c, no libc). Big integers: `num_big`, 130 32-bit limbs
+(4,160 bits), little-endian, normalised; operations set, multiply-add by a small number, times
+10^k, bit length, shift left, shift right by one, compare, subtract, add -- each `RT_NOINLINE`
+(inlined copies doubled the text size at -O2).
+- *Printing*: Burger & Dybvig's free-format algorithm with exact r/s/m+/m- (the half gaps;
+  unequal gaps at powers of two), the decimal exponent estimated as ceil((e2 - 1) log10 2) with a
+  32-bit fixed-point constant (never too large; one fixup step), digit generation with the
+  IEEE round-half-even acceptance of the interval ends, ties in the last digit rounding up.
+  Output: positional for 1e-7 <= |x| < 1e21 (`0.0000001`, `123.456`, `100000000000000000000.0`),
+  otherwise `d.ddd` + `e` + sign + exponent with at least one fraction digit (`1.0e+21`,
+  `5.0e-324`, `1.7976931348623157e+308`). That exponent form is the one spelling that satisfies
+  every `test-precision` of tests/r7rs/write.scm (which accepts `5.0e-324` but not `5e-324`, and
+  `1.7976931348623157e+308` but not `...e308`) and the `test-numeric-syntax` spellings of
+  read.scm; no test conflicts with it.
+- *Parsing*: the significant digits (at most 780; further digits only set a sticky digit) and
+  the exponent make an exact ratio num/den (decimal exponent applied to the side where it is
+  positive; radix 2/8/16 and inexact ratios `#i1/3` likewise); early outs for values beyond
+  1e310 (infinity) or below 1e-325 (zero). The quotient's 54 leading bits are computed by
+  restoring division (55 compare/subtract/shift steps), the shift chosen from the bit lengths
+  and clamped at 2^-1075 for subnormals; round to nearest even with the remainder as sticky
+  bit; the double's bits are `((lsb exponent + 1074) << 52) + mantissa`, so a carry into the
+  exponent and the subnormal/normal boundary need no special case. Exponent markers `e s f d l`
+  (any case) are all accepted as `e` (R7RS 7.1.1).
+- *Validation*: tests/unit/rt_unit.c (part of `make test`) compares against the host libc:
+  100,000 random bit patterns must print text that `strtod` reads back to the same bits and that
+  is no longer than the shortest `%.*e` that round-trips, plus 2 x 100,000 parses (`%.Ne` of
+  random doubles, random 1-30 digit strings with exponents -360..340) against `strtod`, plus
+  every power of two and its neighbours, plus the classic hard cases (2^-1074, 5e-324 and the
+  halfway point 2.4703282292062327/8e-324, 2.2250738585072011e-308, DBL_MAX and the overflow
+  boundary, 9007199254740993, 0.1+0.2, 1e23, 8.41e21, 7.2057594037927933e16, the exact halfway
+  decimal of 1 + 2^-53 and its neighbours). A throw-away harness additionally checked 10^6
+  random bit patterns (0 failures, 0 longer than the libc shortest, 2.25 million parses equal to
+  `strtod`) and 180,000 exact halfway points between adjacent doubles (and the decimals just
+  above and below them, up to ~1,700 digits) generated with Python's `decimal` (all equal to
+  `strtod`). tests/cases/float_text.scm checks the same through `number->string`,
+  `string->number` and the reader in both engines.
+
+**Unicode tables** (`--unicode=full`; spec §3.1, §9.1, §11.1). tools/mkunicode.c reads
+UnicodeData, SpecialCasing, CaseFolding, PropList and DerivedCoreProperties of UCD 18.0.0 (URLs in
+its header) and writes src/rt_unicode.c: *run tables* -- varint sequences of (gap, count*2 +
+stride-1[, zigzag delta]) over code points >= 0x80, stride 1 or 2 (stride-2 runs capture the
+alternating upper/lower blocks), decoded linearly -- for Alphabetic, Uppercase, Lowercase,
+White_Space and Nd (digit value = index in the run mod 10, checked by the generator), and the
+simple upper, lower and fold (C+S) maps; plus the unconditional full mappings of SpecialCasing
+(upper: 103 entries such as ß → SS, ǰ → J̌; lower: İ → i̇). Full case folding (status F) is
+derived at run time as "simple-fold each character of the full upper case of the lower case"
+(after the full lower case, for İ); the generator verifies that rule for every code point and
+would emit the exceptions as a table (there are none in 18.0.0). Sizes: Alphabetic 1,643 bytes,
+Uppercase 395, Lowercase 452, White_Space 19, Nd 186, upper map 796, lower 738, fold 827, full
+upper 1,236, full lower 12 (6.3 KB). A throw-away check compared all 8 lookups for all 1,113,984
+code points >= 0x80 with values computed independently from the UCD files: 0 mismatches (it
+found a decoder off-by-one in stride-2 runs during development). A lookup decodes ~0.5 µs on
+average. `string-downcase` turns Σ into ς when the previous character is cased and the next one
+is not (R7RS allows either form; the tests accept both).
+
+*Gating.* ASCII rules are in rt_str.c (`str_prop`, `str_map`): non-ASCII characters are caseless,
+not alphabetic/numeric/whitespace without the tables. Program mode: the emitter appends
+rt_unicode.c and defines `RT_UNICODE_FULL` only with `--unicode=full` (`RT_HAVE_UNICODE` guards
+every reference), and cond-expand/`features` then see `full-unicode`. Tool mode: the tables are
+always compiled in; `shikra repl` and `shikra interp` take `--unicode=full`, which sets
+`rt_unicode_full` and the feature (default ascii, the same as compiled programs).
+`char-ci*`/`string-ci*` compare `char-foldcase` / `string-foldcase` results (so `(string-ci=?
+"STRASSE" "straße")` with full Unicode).
+
+**Other libraries.** `(scheme inexact)`: one primitive per function over one platform function
+each; `(atan y x)`; `(log z b)` = log z / log b; `sqrt` of an exact non-negative integer that is
+a perfect square is exact (via `exact-integer-sqrt`), otherwise a flonum. `(scheme file)`: file
+ports are OS-descriptor ports (textual or binary); open and delete failures raise errors of kind
+FILE ("open-input-file: cannot open file" + the name); `call-with-*` use `call-with-port`;
+`with-input-from-file`/`with-output-to-file` parameterize the current port and close the file
+when the thunk returns. `(scheme read)`: `read` = `%read` on the current input port (the shared
+reader; programs that do not call it link neither the reader nor the symbol table).
+`(scheme process-context)`: `command-line` is argv (`shikra run FILE a b` / `shikra interp FILE a
+b`: FILE, a, b); `get-environment-variables` is an alist in `environ` order. `(scheme time)`:
+`current-second` is POSIX time as a flonum, jiffies are monotonic nanoseconds,
+`jiffies-per-second` is 10^9. `write` puts bars around symbols that would not read back as
+themselves, by a syntactic rule (a leading digit, a sign or `.` before a digit, `+i`/`-i`,
+infnan prefixes) that no longer calls the number parser. The REPL's default environment imports
+every built-in library (base, case-lambda, char, cxr, file, inexact, lazy, process-context, read,
+time, write, eval, load, repl).
+
+**What M6 must provide in the platform layer** (no libc): `rt_sys_pow`, `rt_sys_exp`,
+`rt_sys_log`, `rt_sys_sin`, `rt_sys_cos`, `rt_sys_tan`, `rt_sys_asin`, `rt_sys_acos`,
+`rt_sys_atan2` (also used for one-argument `atan` as atan2(x, 1)), `rt_sys_sqrt` (the hardware
+instruction is enough: IEEE sqrt is correctly rounded); `rt_sys_exists` (stat or access),
+`rt_sys_remove` (unlink), `rt_sys_environ` (envp from the initial stack), `rt_sys_clock_ns` for
+both clocks (clock_gettime), plus the M2/M3 list (write, read, open, close, poll, exit, mmap,
+munmap, the setjmp equivalent, mem*). Float printing and parsing need nothing from libc.
+
+**Pay for use** (spec §9.1; Apple clang, macOS arm64). Hello world: 70,144 → 70,408 bytes
+(`__text` 21,060 → 20,368; the file grows only by symbol-table entries of the new small
+functions): the float printer got smaller and the parser is no longer linked (the symbol bar
+check is syntactic); the datum-label pre-pass (generic `display`, uncaught-error printer) is new
+(see Deviations). A `--unicode=full` build of tests/cases/char_unicode is 91,008 bytes against
+74,144 for the ASCII build of the same body. `nm` of hello world and of a program using only
+fixnums, strings, lists and `display`: no `rt_read`, `rt_intern`/symbol table, `io_open_file`,
+`rt_open_*_file`, `rt_uni_*`, `rt_sys_exp`/math, `num_convert`/`num_ratio`; `rt_format_double`
+and the `bn_*` helpers it needs are linked because generic `display` can print a flonum (M4).
+`--unicode=full` adds the 6.3 KB of tables only to programs built with it.
+
+**Tests.** `tests/run.sh r7rs` runs every tests/r7rs program in both engines with pinned
+expected files (char-unicode with `--unicode=full`; eval in the interpreter); the stress pass
+runs all of them too. New tests/cases: write_labels, read_datums (+ stdin), float_text, files,
+process_time (`NAME.args`, `NAME.exit`), char_ascii / char_unicode (shared body
+inc/chars.scm; `NAME.flags`), lazy_space (10^7-step chain, R7RS and SRFI 45 streams,
+reentrancy; stress interval 1,000); tests/errors/malformed_delay. Driver: `NAME.flags` (extra
+flags for build and interp), `NAME.args` (program arguments). rt_unit: the float corpus.
+
+**Bugs found in existing code**: (1) the symbol table was a heap vector rooted by one global;
+when it grew while the REPL front end allocated in unscanned ("pure") immortal mode, the new
+vector was unscanned and mortal symbols in it were collected (the REPL crashed in `,c` once
+more libraries were loaded): it now lives in OS memory as a dynamic root range. (2) The REPL's
+default import form was built before switching to immortal mode and then recorded in the
+unscanned `recorded` list (`,c` printed a mangled import). (3) `equal?` recursed on circular
+data forever (known gap, fixed). (4) Writing symbols like `+i`, `-i`, `+NaN.0abc` without bars.
+
+**Known gaps**
+- Conservative stack scanning can keep a lazy stream alive: a stream head left in a stale slot
+  or callee-saved register of a compiled caller frame retains the forced prefix (SRFI 45's
+  "filter that skips 10^6 elements" retains ~175 MB compiled, 7 MB interpreted; when the
+  stream is created inside the consuming procedure the compiled run is constant too). Stack
+  space is constant in both engines. Spec §15 lists this risk of conservative scanning.
+- Run-table lookups are linear (~0.5 µs per non-ASCII character).
+- Datum labels cost a hash-table entry per pair/vector printed (write of compound data is a few
+  times slower than M4 will need for large outputs; `write-simple` skips it).
+- `char-ready?`, `read-line` etc. on file ports are unchanged from M1; there is no `O_EXCL`,
+  append mode, or directory listing (not R7RS).
+- Tier-3 continuations remain (the pinned failure in tests/r7rs/expected/base.compiled).

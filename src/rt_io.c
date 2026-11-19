@@ -311,21 +311,24 @@ static void io_escaped(obj port, const char *s, intptr_t n, char q) {
     rt_port_write(port, s + run, (size_t)(n - run));
     rt_port_putc(port, q);
 }
-/* A symbol is written without bars unless it would read back as something else: a number,
- * or what a reader with complex numbers takes for one (+i, -i, and anything beginning with
- * +inf.0, -inf.0, +nan.0 or -nan.0, in any case). */
+/* A symbol is written without bars unless it would not read back as that symbol: empty, ".",
+ * starting with '#', containing a delimiter, or starting like a number -- a digit, or a sign
+ * or '.' followed by a digit, or a sign, '.' and a digit (such text is never an identifier in
+ * R7RS) -- or what a reader with complex numbers takes for a number: +i, -i, and anything
+ * beginning with +inf.0, -inf.0, +nan.0 or -nan.0, in any case. The check is syntactic, so
+ * writing a symbol does not link the number parser. */
 static int io_ci(const char *s, intptr_t n, const char *lit) {
     intptr_t i;
     for (i = 0; lit[i]; i++) if (i >= n || (s[i] | 0x20) != lit[i]) return 0;
     return 1;
 }
+static int io_digit(const char *s, intptr_t n, intptr_t i) { return i < n && s[i] >= '0' && s[i] <= '9'; }
 static int io_sym_plain(const char *s, intptr_t n) {
-    obj dummy;
     intptr_t i;
-    if (n == 0 || s[0] == '#' || (n == 1 && s[0] == '.')) return 0;
-    if (rt_parse_number(s, (size_t)n, 10, &dummy) != -1) return 0;
-    if ((s[0] == '+' || s[0] == '-') && ((n == 2 && (s[1] | 0x20) == 'i') || io_ci(s + 1, n - 1, "inf.0") || io_ci(s + 1, n - 1, "nan.0")))
-        return 0;
+    int sign = n > 0 && (s[0] == '+' || s[0] == '-');
+    if (n == 0 || s[0] == '#' || (n == 1 && s[0] == '.') || io_digit(s, n, 0)) return 0;
+    if ((sign || s[0] == '.') && (io_digit(s, n, 1) || (sign && n > 2 && s[1] == '.' && io_digit(s, n, 2)))) return 0;
+    if (sign && ((n == 2 && (s[1] | 0x20) == 'i') || io_ci(s + 1, n - 1, "inf.0") || io_ci(s + 1, n - 1, "nan.0"))) return 0;
     for (i = 0; i < n; i++) {
         unsigned char c = (unsigned char)s[i];
         const char *d;
