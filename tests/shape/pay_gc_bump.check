@@ -1,4 +1,5 @@
 flags --gc=bump
 all
-nm-has ^_?rt_alloc_slow$
+# GCC inlines the first name away (Linux run, DESIGN.md "Final verification"): either symbol shows the piece is linked
+nm-has ^_?(rt_alloc_slow|rt_alloc_raw)$
 nm-no ^_?gc_(run|mark|mark_any|scan|push|size|add_chunk)$

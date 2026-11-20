@@ -320,6 +320,7 @@ command -v "$GCC" > /dev/null 2>&1 || GCC=gcc
 #   count N REGEX  exactly N lines of the selection match
 #   nm-no REGEX  no symbol defined in the binary (nm) matches;  nm-has REGEX  some symbol does (M4-2:
 #                what is linked, spec §9.1)
+#   nm-has-clang REGEX  nm-has, checked only when the program compiler is clang
 # REGEX is an extended regular expression without spaces (use [[:space:]]; "(" as [(]).
 shape_select() { # $1 directive, $2 argument; selection in $TMP/sel, program in $TMP/prog.fns
     case $1 in
@@ -365,6 +366,10 @@ run_shape() {
                 nm-no) if nm_defined "$TMP/shape" | grep -Eq -- "$arg"; then
                            failed="nm-no $arg: $(nm_defined "$TMP/shape" | grep -E -- "$arg" | head -3 | tr '\n' ' ')"; fi ;;
                 nm-has) nm_defined "$TMP/shape" | grep -Eq -- "$arg" || failed="nm-has $arg" ;;
+                # nm-has-clang: as nm-has, but only when clang builds the program: GCC inlines every
+                # single-caller static function, so no symbol of the piece is left to look for
+                nm-has-clang) if ${SHIKRA_CC:-cc} --version 2> /dev/null | grep -qi clang; then
+                           nm_defined "$TMP/shape" | grep -Eq -- "$arg" || failed="nm-has-clang $arg"; fi ;;
                 *) failed="unknown directive $dir" ;;
                 esac
                 [ -n "$failed" ] && break

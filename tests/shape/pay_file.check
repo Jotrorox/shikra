@@ -1,2 +1,4 @@
 all
-nm-has ^_?io_file_error$
+# GCC inlines the whole file-port code into its callers and leaves no symbol of it (Linux run,
+# DESIGN.md "Final verification"), so the positive check is for clang builds only
+nm-has-clang ^_?io_file_error$
