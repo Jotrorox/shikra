@@ -242,14 +242,18 @@ engines and the outputs must be identical.
 ## 10. Deviations from the spec
 
 - *"No generated sources"*: `src/embed.c` is generated but committed, so the
-  build itself has no generation step (§2). C99 cannot embed text otherwise.
+  build itself has no generation step (§2). C99 cannot embed text otherwise. Likewise
+  `src/rt_unicode.c` (the `--unicode=full` tables) is generated from the Unicode Character
+  Database by `tools/mkunicode.c` (`make unicode UCD=...`) and committed.
 - *Conservative scan accepts interior and untagged pointers*, not only tagged
   pointers to object starts (§5): required for correctness under `cc -O2`.
 - *Known top-level procedures exist from program start* (M0 part B): they are static
   closures, so calling one before its `define` has been reached works instead of
   raising "used before its definition" (spec §3.3 asks safe mode to detect "it is an
-  error" situations). Other globals and early `letrec*` references are checked. M4 can
-  detect the remaining case statically (a call reachable from an earlier top-level form).
+  error" situations). Other globals and early `letrec*` references are checked. The
+  interpreter does the same, so both engines agree. The static detection that M4 could have
+  added (a call reachable from an earlier top-level form) was not built: `shikra check` is
+  silent on `(display (f 1)) (define (f x) x)`, which prints 1.
 - (Resolved in M2: quoted pairs are read-only too. All literals are `static const`; literal
   pairs sit in one array and `set-car!`/`set-cdr!` raise "expected mutable pair" for them.
   In the interpreter (M3) quoted pairs are immortal heap pairs, and `RT_LITPAIR` in tool mode
@@ -264,7 +268,7 @@ engines and the outputs must be identical.
   loop that recurses through `call/cc` grows the C stack. Tier-1 sites in tail position are
   proper (the receiver body is inlined). (M5: tier 3 copies the C stack, so `rt_call_cc3` keeps
   its frame too; this stays a deviation for tiers 2 and 3. Fixing it needs heap-allocated frames,
-  i.e. CPS conversion, the spec's §15 fallback.)
+  i.e. CPS conversion, the spec's §14 fallback.)
 - *`guard` clause tests see the raiser's parameter values* (R7RS 4.2.7 says the guard's
   dynamic environment; M1 part A): spec §8.3 evaluates the clauses on top of the raising
   frame, before unwinding; they run with the guard's handler stack, but the winders list
@@ -312,10 +316,14 @@ engines and the outputs must be identical.
   warning and the code raises at run time, so no valid program is rejected. Likewise an arity
   mismatch at a call only the analysis made known is a warning (syntactically known calls remain
   errors, M0).
-- *Stress mode collects at every allocation for all but five cases* (§13 M2 "done when"):
-  the r7rs gate and 36 of the 41 programs in tests/cases collect at every allocation, at
-  -O2 and -O0; five whose live set or allocation count makes a full collection per
-  allocation quadratic use a per-case interval (M2 "Stress mode" lists them and why).
+- *Stress mode collects at every allocation for all but seven cases* (§13 M2 "done when"):
+  every compiled r7rs run and 79 of the 86 programs in tests/cases collect at every allocation,
+  at -O2 and -O0; seven whose live set or allocation count makes a full collection per
+  allocation quadratic use a per-case interval: tail_calls, gc_cons, gc_mixed, gc_reach,
+  gc_deep (M2 "Stress mode" lists them and why), lazy_space (10^7-step chain, interval 1,000;
+  M5) and write_labels (lists of 2·10^4 and 6·10^4 elements live, interval 1,000; M5). (The
+  compiled gc_bump is built with `--gc=bump`, which has no collector to stress; its interpreter
+  run stresses the tool's collector as usual.)
 - *1,000-2,000-line programs exceed 200 KB at -O2 on macOS* (spec §9.3; M4-3): scheme (1,055 lines)
   241 KB and dynamic (2,328) 311 KB at -O2, 176 KB and 181 KB at -Os; parsing and slatex are inside
   the range at both levels; tests/r7rs/base.scm (a 658-case test suite, 1,600 small procedures) is
@@ -328,7 +336,7 @@ engines and the outputs must be identical.
   non-moving collector keeps the lines of sparse survivors, and a smaller heap costs more collections
   than the speed goal allows. Every other allocation-heavy benchmark is within 1.3x of Chez except
   earley (1.4-1.8x). "M4-3 as built", Collector.
-- *Tier 3 is not available under hardware shadow stacks* (spec §15 risk; M5): copying the C stack
+- *Tier 3 is not available under hardware shadow stacks* (spec §14 risk; M5): copying the C stack
   back invalidates the return addresses a shadow stack (Intel CET, Arm GCS) has recorded, so a
   re-entry would fault. Programs must be built without shadow-stack enforcement; the CPS fallback
   the spec names is not implemented. Tiers 1 and 2 are unaffected (setjmp/longjmp is supported).
@@ -345,6 +353,49 @@ engines and the outputs must be identical.
   `rt_math.c` (portable fallback present). That branch also uses GNU C attributes (`used`,
   `returns_twice`, `optimize` for GCC) and `__builtin_mem*`. Everything else stays C99, and the
   macOS build contains none of it.
+- *Generated programs use more than "two compiler builtins hidden behind macros"* (spec §5.4: checked
+  addition and the guaranteed tail call). Besides `__builtin_*_overflow` and `musttail`, the runtime
+  text pasted into every program uses, each behind `__GNUC__`/`__clang__`/`__has_builtin` tests with a
+  portable fallback: `__builtin_expect` (`RT_LIKELY`), `__builtin_setjmp` (tier-2 escapes; else
+  `sigsetjmp`), `__builtin_clzll`, `__builtin_popcountll`, `__builtin_fma`, `__builtin_unreachable`,
+  `__builtin_inf`/`__builtin_nan`, the attributes `noinline`, `always_inline`, `noreturn`, `unused`, and
+  asm labels for `define-c` names (plain names otherwise). The generated C compiles warning-free with
+  `-std=c99 -Wall -Wextra -pedantic` (Apple clang 21, checked in the compliance audit).
+- *A program or library may define a name it imports* (R7RS 5.6.1: an error; spec §4.1 "primitives stay
+  primitive", §3.3 "detects"): `(import (scheme base)) (define (square x) ...)` is accepted and the
+  definition shadows the import for that program's (library's) own code. Every other library keeps the
+  built-in, so library code -- and with it the "primitives stay primitive" property for the standard
+  library -- is unaffected; `set!` on an imported binding is the compile-time error of §11.3. Kept
+  because ordinary R7RS code (and books, spec §1.1 goal 3) defines helpers such as `square` (in `(scheme
+  base)` since R7RS) after importing `(scheme base)`, and three suite programs do (tests/warnings/clean.scm,
+  tests/errors/arity_known.scm, tests/cases/ext_ffi_user.scm). A compile-time error was tried in the
+  compliance audit; it rejected exactly those programs (and none of the 53 r7rs-benchmarks).
+- *Parameter objects are closures* (spec §6.1 lists "parameter" among the fixed-field heap objects):
+  `make-parameter` returns a procedure over a cell that `parameterize` binds in the winders list (M1 part
+  A); header type `RT_T_PARAMETER` is reserved and unused. `procedure?` is true of a parameter, as R7RS
+  requires.
+- *Two internal libraries are visible to programs* (spec §10 names five `(shikra ...)` libraries):
+  `(shikra primitives)` (the %primitives every built-in library imports) and `(shikra dynamic)`
+  (`travel-to!`, the winders walk) can be imported by a program; tests/cases/exceptions.scm imports
+  `%read` and `%handlers` from the first. Standard programs never see them.
+- *`--target` accepts four targets* (spec §11.1: "a target triple for cross-compiling"): Linux and
+  macOS on x86-64 and arm64, in the usual spellings; any other triple is refused ("unsupported
+  target"), because the runtime's platform layer (`rt_sys.c`) exists only for those.
+- *The line budgets of spec §1.1 and §5.2 are exceeded for the runtime and the analysis* (compliance
+  audit, `wc -l`): the runtime proper (`rt.h`, `rt_core/gc/io/num/str/read/sys.c`, `prims.def`) is
+  4,886 lines against "about 4,000"; with the later additions -- `rt_ext.c` (extensions), `rt_math.c`
+  (own libm for static Linux), `rt_big.c` (`--bignum`) -- 6,356, plus 393 lines of generated Unicode
+  tables. `analyze.c` is 1,754 lines against "under about 1,000". The compiler (10,294 including driver,
+  cache and `shikra size`) and the interpreter (1,616) are inside their budgets. docs/COMPLIANCE.md
+  has the table.
+- *The compiler frees some scratch buffers* (spec §5.4: "allocates from arenas and frees nothing until
+  exit"): IR, datums and front-end data come from the arena; a few growable arrays (analysis work
+  lists, string buffers, file contents) use `malloc`/`realloc`/`free`.
+- *Additions to the command line* (spec §11): besides `--bignum` (below) the driver has `-o`, `-w` (no
+  warnings), `--no-cache`, `--link FILE`, `-l NAME` and `--libc` (define-c), `size --all/--tsv`, the
+  environment variables `SHIKRA_CC` (default of `--cc`) and `SHIKRA_CACHE_DIR`, and hidden testing
+  commands (`interp`, `debug-read`, `debug-expand`, `debug-core`, `debug-ir`) and flags (`--gc-stress`,
+  `--no-musttail`, `--keep`). The six commands and every flag of the spec's table are as specified.
 
 - *A Linux program that uses `define-c` is not libc-free* (spec §9.2 says Linux executables are static
   with no libc; "Linux integration as built"): the C functions it binds live in the C library, so such a program
@@ -1082,7 +1133,7 @@ search at the first block. If more than half of the block heap is still in use, 
 of the heap is added (the heap doubles). Large-object allocation collects first once more bytes
 than max(live large bytes, block heap size, 4 MB) were allocated since the last collection. The
 heap never shrinks (free blocks are reused, not returned to the OS); there is no defragmentation
-(non-moving; spec §15 risk).
+(non-moving; spec §14 risk).
 
 **Enable flag, tool mode.** Collection is on in programs and off in the tool
 (`rt_gc_enable(1)` turns it on: M3's REPL); compile commands therefore allocate through the same
@@ -1187,7 +1238,7 @@ buffer was not a root, and `rt_init` allocated (ports, symbol table) for every p
 - The standard ports cost 12 KB of zero-fill (`__bss`), not file size.
 
 **Known gaps**
-- No compaction or block release to the OS; fragmentation under long runs is untested (spec §15).
+- No compaction or block release to the OS; fragmentation under long runs is untested (spec §14).
 - The mark-stack rescan is quadratic for deep structures built top-down beyond 2^20 pending
   entries (never seen in the suite).
 - Quoted data in the REPL (immortal heap pairs) are mutable (no `RT_LITPAIR` there).
@@ -1576,7 +1627,7 @@ data forever (known gap, fixed). (4) Writing symbols like `+i`, `-i`, `+NaN.0abc
   or callee-saved register of a compiled caller frame retains the forced prefix (SRFI 45's
   "filter that skips 10^6 elements" retains ~175 MB compiled, 7 MB interpreted; when the
   stream is created inside the consuming procedure the compiled run is constant too). Stack
-  space is constant in both engines. Spec §15 lists this risk of conservative scanning.
+  space is constant in both engines. Spec §14 lists this risk of conservative scanning.
 - Run-table lookups are linear (~0.5 µs per non-ASCII character).
 - Datum labels cost a hash-table entry per pair/vector printed (write of compound data is a few
   times slower than M4 will need for large outputs; `write-simple` skips it).
@@ -3218,9 +3269,12 @@ slatex with clang (160-163 KB): the -O2 inlining budget, as on macOS (deviation,
 **macOS** (`make test` at commit 37723ec, Apple clang 21): check-embed ok; 1,327 passed, 0 failed,
 2 skipped (the same two). Hello world 50,888 bytes (pin 52,000).
 
-**Line counts of the merged tree** (`wc -l`): compiler and tool (src/*.c, *.h without the runtime,
-embed.c and rt_unicode.c) 11,822; runtime (rt.h, rt_*.c without rt_unicode.c) 5,315 (incl. rt_math.c 454 and rt_ext.c 515). The
-per-milestone file maps above are snapshots of their time.
+**Line counts of the merged tree** (`wc -l`, re-counted by the compliance audit; the figures of this
+step were stale): compiler and driver (main, library, expand, normalize, analyze, opt, emit, cache, size,
+util, front.h, ir.h, util.h, embed.h) 10,294; interpreter (bytecode, vm, repl, ffi, interp.h) 1,616;
+runtime (rt.h, rt_*.c, prims.def) 6,749, of which rt_unicode.c (generated tables) 393, rt_ext.c 518,
+rt_math.c 454, rt_big.c 498. docs/COMPLIANCE.md has the table against the spec's budgets (deviation,
+§10). The per-milestone file maps above are snapshots of their time.
 
 **Open.** No hardware shadow-stack check for tier 3 (deviation). Hosted cross builds with plain
 clang need a target sysroot (not tested; zig cc brings glibc). On amd64 the stress passes run at 20×
