@@ -57,3 +57,8 @@ complex numbers, and exact integers are 63-bit fixnums unless you build with `--
 - [`docs/shikra-spec-0.1.pdf`](docs/shikra-spec-0.1.pdf): the specification.
 - [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md): the spec, statement by statement, against what is built.
 - [`DESIGN.md`](DESIGN.md): architecture and deviations from the spec.
+
+## License
+
+[MIT](LICENSE). The R7RS test suite in `tests/r7rs/upstream/` is from Chibi Scheme and keeps
+its BSD license.
