@@ -249,6 +249,9 @@ int ir_ffi_type(obj sym);              /* FT_*, -1 if unknown */
 int ir_ccall_type(ir_node *p, int i);  /* FT_* of C argument i (i = -1: the result) */
 
 /* Back end (emit.c): the complete C translation unit (DESIGN.md §3). */
-typedef struct { int unsafe, debug, gc_bump, unicode_full, gc_stress, no_musttail, bignum; } emit_opts;
-void emit_c(ir_program *p, const emit_opts *o, sbuf *out);
+typedef struct { int unsafe, debug, gc_bump, unicode_full, gc_stress, no_musttail, bignum, hosted; } emit_opts;
+/* hosted: --libc, --link or -l was given. Returns 1 if the program is a hosted build (it calls C
+ * through define-c, or hosted was set): on Linux x86-64/arm64 it then links the C library instead
+ * of being static without libc (DESIGN.md "Integration"). */
+int emit_c(ir_program *p, const emit_opts *o, sbuf *out);
 #endif

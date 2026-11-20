@@ -207,7 +207,10 @@ programs. Never linked into compiled programs. As built: "M3 as built" in §11.
 ## 9. Tests
 
 ```
-tests/run.sh [compiled|r7rs|interp|stress|expand|all]   driver used by `make test`
+tests/run.sh MODE                           driver used by `make test`; MODE: reader unit amalg
+                                            expand compiled compiled2 r7rs levels interp stress
+                                            tramp shape size cache debug driver gcc, or all
+                                            (everything but gcc); tests/linux.sh runs it on Linux
 tests/cases/NAME.scm + NAME.out             program + expected stdout (+ NAME.exit,
                                             + NAME.err: expected stderr substring,
                                             + NAME.in: stdin, else /dev/null,
@@ -225,6 +228,9 @@ tests/r7rs/expected/FILE.ENGINE             pinned summary line + failing tests 
                                             since M5 every file under both engines)
 tests/size/*.elf                            ELF fixtures for `shikra size` (M4-3; size mode)
 tests/debug/NAME.scm + NAME.expected        -g run-time error locations (M4-3; debug mode)
+tests/shape/NAME.scm + NAME.check + NAME.out  structural checks of the emitted C (M4-1; shape)
+tests/warnings/NAME.scm + NAME.warn         expected warnings (M4-1)
+tests/unit/                                 rt_unit.c, math_unit.c (M6), flmath.scm (extensions)
 ```
 M4-3 modes of tests/run.sh: `size`, `cache` (expansion cache, private directory), `debug` (-g),
 `driver` (commands and flags); all four are part of `all`. The runner sets `SHIKRA_CACHE_DIR` to
@@ -314,7 +320,10 @@ engines and the outputs must be identical.
   241 KB and dynamic (2,328) 311 KB at -O2, 176 KB and 181 KB at -Os; parsing and slatex are inside
   the range at both levels; tests/r7rs/base.scm (a 658-case test suite, 1,600 small procedures) is
   539 / 476 KB. Binaries keep their local symbols (10-26% of the file) because `shikra size` needs them.
-  bench/SIZES.md has the table and what was tried.
+  bench/SIZES.md has the table and what was tried. On Linux (static; spec: 60-150 KB) likewise: on x86-64
+  -Os is inside the range with GCC and clang (parsing with GCC below it), -O2 is above it for scheme and
+  dynamic with both compilers (186-312 KB) and for slatex with clang; on arm64 clang's -Os scheme and
+  dynamic are above too (169 / 155 KB). bench/SIZES.md, "Linux", has the numbers.
 - *graphs' peak RSS is 6.4x Chez's* (M4-3's goal was a small factor of Chez and of the live data): the
   non-moving collector keeps the lines of sparse survivors, and a smaller heap costs more collections
   than the speed goal allows. Every other allocation-heavy benchmark is within 1.3x of Chez except
@@ -337,6 +346,10 @@ engines and the outputs must be identical.
   `returns_twice`, `optimize` for GCC) and `__builtin_mem*`. Everything else stays C99, and the
   macOS build contains none of it.
 
+- *A Linux program that uses `define-c` is not libc-free* (spec §9.2 says Linux executables are static
+  with no libc; "Linux integration as built"): the C functions it binds live in the C library, so such a program
+  (and one built with `--link`, `-l` or `--libc`) is a hosted build -- libc's start-up, the libc
+  platform layer of rt_sys.c, dynamic linking. Programs without `define-c` are unaffected.
 - *Extensions* (details in "Extensions as built"): `define-c` in the interpreter calls only functions
   of the running process (dlsym) with at most 6 integer-class and 8 `double` arguments and no `float`,
   through one function-pointer type that relies on the AAPCS64 / x86-64 System V register assignment
@@ -2082,7 +2095,9 @@ binary (bench/SIZES.md), which the report shows.
 **Size work** (bench/SIZES.md has the table). Hello world 50,888 bytes, pinned at 52,000 by
 `tests/run.sh size`. `shikra size` found two avoidable costs: Apple clang's splitting of every cold
 path into its own function and symbol (now `-Xclang -fno-split-cold-code` whenever the C compiler is
-`cc` on Darwin or a `clang`; not for gcc or `zig cc`), and one symbol per literal (now one struct
+Apple clang -- since the integration only Apple's: `cc`/`clang` resolving to /usr/bin, Xcode or the
+Command Line Tools, for a Darwin target; upstream clang and GCC reject the option and do not split
+by default, "Linux integration as built"), and one symbol per literal (now one struct
 `rt_lits`; equal strings, flonums by bit pattern and bytevectors share a member across libraries).
 scheme 294 -> 241 KB, nucleic 437 -> 239 KB, r7rs/base 588 -> 539 KB at -O2. The -O2 inlining budget
 was left as it was (a quarter or half of it saves 30% on dynamic but measured slower), and
@@ -2219,8 +2234,9 @@ now checks that its diagnostics equal `build`'s for every error and warning test
 file that `cc out.c` and `gcc-16 out.c` build with no flags (tested). `--target` handling is the Linux
 port's and was not touched.
 
-**Tests** (`make test` adds the modes size, cache, debug, driver to `all`): see the headers of each
-mode in tests/run.sh. `make test`: 1,020 checks pass (831 at the start of M4-3), 2 skips as before.
+**Tests** (M4-3 added the modes size, cache, debug, driver to `all`): see the headers of each
+mode in tests/run.sh. `make test` at the end of M4-3: 1,020 checks pass (831 at the start of M4-3), 2 skips
+as before (current totals: "Linux integration as built").
 
 **Benchmarks** (M4's done-when; bench/RESULTS.md). Series `m4-3` / `m4-3-unsafe` (CSV
 `m4-3-20261119-1616`, `m4-3-unsafe-20261119-1619`; an earlier pair at 15:39/15:42 is kept too): 53/53
@@ -2257,7 +2273,7 @@ src/emit.c      rt_call_cc3 for N_TIER3 sites, #define RT_TIER3
 src/rt_core.c   core_cont_code's dead path (CORE_DEAD), rt_call_cc3, core_callcc3_run,
                 core_reenter, core_rewind; rt_continuation_live_p is #f for compiled continuations
 src/rt_gc.c     RT_T_CONT objects scanned conservatively (flagged mark-stack ranges)
-src/rt.h        rt_call_cc3; rt_program_main never inlined into main under RT_TIER3
+src/rt.h        rt_call_cc3; rt_program_main never inlined into main (always, since the integration)
 lib/scheme/base/control.scm   the escape procedure travels only where the engine does not
 tests/cases/{gen_fringe,coroutines,amb,reentry*,tier3_escape}.scm, tests/shape/callcc_tier{2,3},
 tests/fuzz/gen3.scm
@@ -2395,12 +2411,16 @@ byte-identical in size and symbol list at -O2 and -Os (hello world 50,880 bytes,
 grows 72,784 → 89,440 bytes at -O2 (one more 16 KB text page), 72,944 → 73,136 at -Os;
 tests/r7rs/base.scm 588,272 → 588,512.
 
-**Portability** (what the Linux port must check). Plain C99 plus the existing jump-buffer wrappers;
-no assembly. Assumptions, each checked or stated: the stack grows down (checked at every capture,
+**Portability** (what the Linux port must check; checked at the integration, see "Linux integration as built": all
+tier-3 cases pass on Linux arm64 and x86-64 with GCC's `__builtin_setjmp` and with clang, in the
+static no-libc build whose `_start` passes the initial stack pointer as the base). Plain C99 plus the
+existing jump-buffer wrappers; no assembly of its own (static Linux with clang on arm64 uses
+rt_sys.c's `shikra_setjmp`). Assumptions, each checked or stated: the stack grows down (checked at every capture,
 with the capture frame below the base: else a catchable error); the base given to `rt_init` lies
 above every frame that can be live in Scheme code (main passes the address of its `argc`, and
-under `RT_TIER3` `rt_program_main` is never inlined into `main`; an own `_start` must pass an
-address above every frame it creates); memory between `lo` and the base stays mapped (it was
+`rt_program_main` is never inlined into `main` -- since the integration in every program, not only
+under `RT_TIER3`; the static Linux `_start` passes the kernel's initial stack pointer, above every
+frame); memory between `lo` and the base stays mapped (it was
 stack when captured); `longjmp` to a frame above the current stack pointer (glibc's
 `__longjmp_chk` under `_FORTIFY_SOURCE` accepts that; mangled pointers in `jmp_buf` are restored
 bit for bit); no shadow stack (deviation). The `__builtin_setjmp` path (GCC) and the `sigsetjmp`
@@ -2448,7 +2468,7 @@ timings, so they are compared interleaved).
   programs without tier-3 sites pay only the classification.
 - tests/fuzz.sh: 300 gen3 programs (seeds 41-340) and 300 gen/gen2 programs (seeds 5000-5149):
   no failure.
-- `make test` (each mode of `tests/run.sh all` plus check-embed): 960 checks, 0 failures, no skip
+- `make test` at the end of tier 3, before the merge (each mode of `tests/run.sh all` plus check-embed): 960 checks, 0 failures, no skip
   left (the interpreter runs reentry.scm too); `tests/run.sh gcc` (gcc-16): 192 checks, 0 failures.
 ### M6 Linux as built (static Linux without libc, x86-64 and arm64; `--target`, `--cc`)
 
@@ -2485,7 +2505,8 @@ and `get-environment-variables` scan envp; `command-line` is argv, as before.
 `optimize("no-tree-loop-distribute-patterns")` so it cannot turn them into calls to themselves)
 for the calls the compiler emits; the runtime's `rt_mem*` use `__builtin_mem*`. Nothing needs
 libgcc on either architecture (64-bit division and float conversions are instructions; no
-`__int128`, no long double arithmetic), and `-nostdlib` would make a stray helper a link error.
+`__int128`, no long double arithmetic), and `-nostdlib` would make a stray helper a link error
+(which is how the extensions' popcount was caught at the integration; "Integration").
 **Non-local exits**: `__builtin_setjmp` with GCC (both architectures) and clang on x86-64, as
 before; clang has no `__builtin_setjmp` on arm64, so `shikra_setjmp/shikra_longjmp` (26
 instructions: x19-x30, sp, d8-d15 into `rt_jmpbuf`; `returns_twice`) replace `sigsetjmp` there.
@@ -2623,7 +2644,8 @@ unit test's collector check now runs below main's frame (GCC on arm64 put main's
 (`__has_attribute(musttail)` is 0), so every GCC build on Linux takes the trampoline path; clang
 19 takes `musttail`.
 
-*arm64* (native, podman machine `applehv`, kernel 7.2.7), every mode in full, both compilers:
+(The counts below are M6's, before the merge with M4-3, tier 3 and the extensions; the merged tree's
+are in "Linux integration as built".) *arm64* (native, podman machine `applehv`, kernel 7.2.7), every mode in full, both compilers:
 reader 35, unit 3, amalg 1, expand 1, levels 439, shape 34, interp 65 (+1 skip), tramp 64,
 stress 192 (+1 skip): **834 passed, 0 failed, 2 skipped** with GCC and the same with clang (macOS:
 832; the difference is the two Linux size pins).
@@ -2650,8 +2672,8 @@ outputs and exit statuses right on both; six of them built with Apple clang + Ho
 `(features)`, a `cond-expand` on `linux`/`x86-64`/`arm64`, `command-line`, an environment variable
 and math identities gives the expected per-target output.
 
-**Known gaps.** No libc means no `define-c` to libc functions in static Linux programs (the FFI is
-not built yet; a libc variant would have to be selectable then). `clock_gettime` is a real system
+**Known gaps.** (`define-c` on Linux, open here, was resolved at the integration: a program with
+`define-c` is a hosted build; "Linux integration as built".) `clock_gettime` is a real system
 call (no vDSO), so each `current-jiffy` or `current-second` enters the kernel. Errors from system calls
 are not distinguished (as before: "cannot open file"). Only x86-64 and arm64 Linux are targets;
 another Linux architecture would need its system-call numbers and `_start`, and other Unixes use
@@ -2782,8 +2804,9 @@ own error; bounds pinned in the file):
 | fl+*, flremainder, flremquo, fladjacent, make-flonum, flexponent | exact (bit-identical to libm) | | | |
 
 Ranges: Bessel n in 0..10 with x in (0,1), (1,25), (25,200), and n in 0..60 with x in (0,50). The
-log-gamma reference is log |tgamma| for x < 0 (macOS lgamma is off by 2.5e-13 near x = -1). The figures
-depend on the platform's exp/log/pow; on Linux (libm-free rt_math.c) the bounds may need adjusting.
+log-gamma reference is log |tgamma| for x < 0 (macOS lgamma is off by 2.5e-13 near x = -1). On Linux
+(rt_math.c's exp/log/pow, glibc as the reference) every figure stays within these bounds except flcbrt
+(3 ulp, glibc's cbrt error) and fltanh (4 ulp: glibc 1.9 ulp the other way); "Linux integration as built".
 
 **(shikra f64vector)** -- 8 names. Object: header type `RT_T_F64VECTOR` (raw class: never scanned,
 length = 8·elements), doubles after the header. Primitives: make (fill: any real, default 0.0), `?`,
@@ -2838,15 +2861,14 @@ returning int, long, double, bool, char, string, pointer or void, on AArch64 and
 interpreter (...); use shikra build"; a symbol not in the process: "define-c: C function NAME is not
 available in the interpreter ...; use shikra build" -- both at definition time (REPL: back to the
 prompt; tests/repl/ffi). Test marker: tests/cases/ext_ffi_user.compiled-only (functions in a user C file).
-dlsym is tool code (on glibc older than 2.34 the tool needs -ldl).
+dlsym is tool code (on glibc older than 2.34 the tool needs -ldl). On Linux the tool does not link
+libm (rt_math.c), so a symbol not found in the process is looked up in `dlopen("libm.so.6")`.
 
-**Open point for the Linux no-libc target** (integration with the M6 work): a program that uses
-`define-c` needs the C library that provides the function, so it cannot be a libc-free static
-executable. Expected resolution: programs whose IR contains a `%c-call` (the emitter knows: `RT_EXT` +
-`ffi_protos`) are linked against libc on Linux (dynamically, or statically with libc), and the asm-label
-prototypes keep working (empty `__USER_LABEL_PREFIX__` on ELF). Not done here. Also on Linux: the
-accuracy bounds of tests/unit/flmath.scm were measured against macOS libm and over the macOS platform
-math; they may need adjusting for rt_math.c / glibc.
+**Linux** (was the open point of this section; resolved at the integration, "Linux integration as built"): a program
+whose IR contains a `%c-call` is a hosted build on Linux -- linked against glibc (and libm) dynamically,
+through rt_sys.c's libc layer -- and the asm-label prototypes work unchanged (empty
+`__USER_LABEL_PREFIX__` on ELF). tests/unit/flmath.scm keeps its macOS bounds except two that are
+explicit per platform: glibc's own cbrt (3 ulp) and tanh (2 ulp) errors.
 
 **Shape tests** (tests/shape/ext_*): `ext_fx_loop` -- the loop of `(fx<? i n) (fx+ i 1) (fx+ acc i)`
 with n of unknown type is
@@ -2936,7 +2958,7 @@ the C. Both fixed.
 - `fl+*` is a call into exact integer code on targets without a hardware fused multiply-add.
 - Results of the special functions near their zeros are accurate in absolute, not relative, terms
   (Bessel, log-gamma below -2), as is inherent in their evaluation by recurrences and reflection.
-- `make test`: 1,323 checks, 0 failures, 2 skips (ext_ffi_user in the interpreter and its stress run,
+- `make test` (at the extensions merge; current totals in "Linux integration as built"): 1,323 checks, 0 failures, 2 skips (ext_ffi_user in the interpreter and its stress run,
   marked compiled-only); `tests/run.sh gcc` (gcc-16): 222 checks, 0 failures. `shikra size` attributes
   rt_ext.c symbols to the component "extensions (shikra ...)".
 
@@ -3073,3 +3095,133 @@ from unbounded arithmetic, so it is "fixnum or bignum" and runs generic code: `m
   fixnum-heavy recursive code such as `fib` runs slightly slower under `--bignum` (see above).
 - `tests/run.sh gcc` could not be run: gcc-16 is no longer installed on this machine (the mode falls
   back to `gcc` = Apple clang); the Linux runs above used GCC 14.
+### Linux integration as built ("Integration": the merged tree on Linux; `--libc`; build modes)
+
+The four parallel branches (M4-3, tier 3, M6 Linux, extensions) were merged on macOS; this step ran
+the merged tree on Linux x86-64 and arm64 for the first time and closed M6's *Done when* ("the suite
+passes on macOS arm64, Linux x86-64 and Linux arm64").
+
+**Build modes.** On Linux x86-64/arm64 a program is one of two kinds, decided by the emitter:
+- *static without libc* (spec §9.2; "M6 Linux as built"): the default.
+- *hosted* (deviation, §10): the program's IR still contains a `%c-call` after tree shaking (a used
+  `define-c` binding: `ffi_protos` is non-empty), or `--link`, `-l` or the new `--libc` was given.
+  The driver then omits `-DSHIKRA_NOLIBC` and the static/no-libc flags, links like an ordinary C
+  program (glibc, dynamically, PIE by the compiler's default) and appends `-lm` (glibc keeps
+  `hypot`, `ldexp`, `fmin`, ... in libm). The runtime is rt_sys.c's libc branch with rt_math.c's
+  math (as in the `shikra` tool on Linux), so results are identical to the static build. A
+  cross build for Linux in hosted mode passes `--target=ARCH-linux-gnu` (zig cc brings glibc;
+  plain clang needs a sysroot), the static one `ARCH-linux-musl` as before.
+`emit_c` returns the mode and writes it as a comment (`/* build mode: hosted ... */`, with an
+`#error` if such a file is compiled with `SHIKRA_NOLIBC`, or `/* build mode: static without libc
+... */`); `shikra size` prints it on its first line (ELF: a `PT_INTERP` segment means dynamically
+linked; `shikra_start` present means static without libc; Mach-O: libSystem). An unused `define-c`
+binding is shaken out and leaves the program static. macOS is hosted in every mode, as before.
+Evidence (arm64 and x86-64 containers, GCC and clang): ext_ffi built is `dynamically linked,
+interpreter /lib/ld-linux-*.so` (`ldd`: libm, libc), hello world is `statically linked` (4.7 / 7.6 KB
+arm64); hello world with `--libc` is a dynamic PIE of 17 KB on x86-64 and 72 KB on arm64 (GNU ld's 64 KB
+segment alignment); ext_ffi is 98 / 109 KB (x86-64, GCC / clang) and 155 / 152 KB (arm64); ext_ffi_user with `--link` passes; the interpreter's `define-c` (one function-pointer type,
+register-file convention) passes ext_ffi and mixed integer/double signatures (`ldexp`, `fma`,
+`strtol`) on both architectures. run.sh's driver mode checks the emit-c comment everywhere and, on
+Linux, `shikra size`'s mode line for a static, a `--libc` and a `define-c` build; the warning check
+of generated C compiles hosted programs without `SHIKRA_NOLIBC`.
+
+**Bugs found and fixed** (all only visible on Linux or with non-Apple compilers; all but the popcount
+were fixed in commits 92036fe and 11dec67 and are described from them; the `zig cc` fix could not be
+re-checked here, as this host has no zig):
+- *Every clang build on Linux failed*: M4-3's driver passed `-Xclang -fno-split-cold-code` to every
+  compiler named `clang*`; upstream clang rejects it. Now only for Apple clang (`cc`/`clang`
+  resolving to /usr/bin, Xcode or the Command Line Tools) and a Darwin target (`apple_clang` in main.c).
+- *`shikra size` found no program body* in static Linux programs built with GCC: GCC inlined the
+  once-called `rt_program_main` into `shikra_start` / `main`. `rt_program_main` is now `RT_NOINLINE`
+  in every program (before: only under `RT_TIER3`, where it is also needed so that no program frame
+  shares main's frame above the stack base). Cost: one call; macOS hello world unchanged at 50,888.
+- *A `define-c` result converted with an unset representation* (emit.c): `assign(dest, drep,
+  ccall(r, &erep), erep, ...)` read `erep` in the same argument list in which `ccall` sets it --
+  unspecified order in C (a compiler may read `erep` before the call sets it). Now sequenced.
+- *`zig cc` builds at -O0 failed to link*: zig enables UBSan in debug builds and a static program has
+  no UBSan runtime; the driver passes `-fno-sanitize=undefined` to `zig cc`.
+- *Interpreter `define-c` of libm functions failed on Linux* ("not available in the interpreter"): the
+  tool does not link libm there (rt_math.c), so `hypot` etc. are not in the process; ffi.c falls back
+  to `dlopen("libm.so.6")`.
+- *ext_fixnum_ref did not link on Linux x86-64 with GCC* (found in this step's first amd64 run):
+  `fxbit-count`'s `__builtin_popcountll` is a call to libgcc's `__popcountdi2` when the target has no
+  POPCNT instruction (GCC's x86-64 baseline), and static programs link no libgcc. rt_ext.c now uses
+  the builtin only where it is an instruction (`__POPCNT__`, AArch64) and a branch-free SWAR count
+  otherwise (checked against the builtin on 10^7 values). Clang inlines its own sequence, arm64 has
+  `cnt`; nothing else in the runtime needs libgcc (every ext case at -O2/-O0/-Os links with both
+  compilers on x86-64).
+- *flmath accuracy bounds* (tests/unit/flmath.scm) were measured against macOS libm: on Linux the
+  reference is glibc, whose cbrt is up to 3 ulp and tanh up to 2 ulp off; those two bounds are
+  per platform (3 and 4 ulp on Linux; 1 and 3 elsewhere), every other bound is unchanged.
+
+**Platform-specific test expectations** (explicit, in tests/run.sh): the generated-C warning check
+compiles the nolibc variant only for static programs; the Linux-only size pins (hello world under
+30,000 bytes, shape mode) and build-mode checks (driver mode); macOS-only the 52,000-byte hello
+world pin (size mode); the flmath bounds above. Nothing was weakened on all platforms.
+
+**Linux test results** (`tests/linux.sh ARCH all`, one container per architecture × program
+compiler, Debian trixie: GCC 14.2, clang 19.1.7, glibc 2.41; podman machine applehv, kernel 7.2.7;
+arm64 native, amd64 under qemu-user; measured at commit 37723ec, the last commit of this step that changes code or tests -- later
+commits changed documentation only). Every
+mode of `all`: reader unit (rt_unit, math_unit, flmath) amalg expand levels (compiled cases at
+-O2/-O0/-Os + r7rs) shape size cache debug driver interp (+ repl) tramp stress.
+
+| mode | arm64 GCC | arm64 clang | x86-64 GCC | x86-64 clang |
+|---|---|---|---|---|
+| reader | 35 | 35 | 35 | 35 |
+| unit (rt_unit, flush at exit, math_unit, flmath) | 4 | 4 | 4 | 4 |
+| amalg | 1 | 1 | 1 | 1 |
+| expand | 1 | 1 | 1 | 1 |
+| levels (cases -O2/-O0/-Os + C warning check, r7rs both engines) | 576 | 576 | 576 | 576 |
+| shape (incl. tier-3, extension shapes, two hello-world size pins) | 61 | 61 | 61 | 61 |
+| size | 27 | 27 | 27 | 27 |
+| cache | 99 | 99 | 99 | 99 |
+| debug (-g) | 30 | 30 | 30 | 30 |
+| driver (incl. 6 build-mode checks) | 70 | 70 | 70 | 70 |
+| interp (+ repl) | 87 + 1 skip | 87 + 1 skip | 87 + 1 skip | 87 + 1 skip |
+| tramp | 85 | 85 | 85 | 85 |
+| stress | 255 + 1 skip | 255 + 1 skip | 255 + 1 skip (20× intervals) | 255 + 1 skip (20×) |
+| **total** | **1,331 passed, 0 failed, 2 skipped** | **1,331, 0, 2** | **1,331, 0, 2** | **1,331, 0, 2** |
+
+Skips: ext_ffi_user in the interpreter and in its stress pass (marked compiled-only: its C functions
+are in a user C file). arm64 runs every mode at full intervals (stress: a collection at every
+allocation). x86-64 is emulated (qemu-user, `QEMU_STACK_SIZE=64 MB` as in M6) and runs the stress
+mode with `STRESS_SCALE=20` (a collection every 20 allocations; every per-case interval times 20),
+the only reduction; every other mode is identical to arm64. The one-line build (`-Werror`) is
+warning-free with GCC and clang in all four containers. A first run at commit 9af1958 (before the
+popcount fix) gave the same 1,331 / 0 / 2 on arm64 with both compilers and found the x86-64 GCC
+link failure; that amd64 run was stopped after it. macOS has 1,327 checks: the four Linux-only
+checks (two size pins in shape, three Linux build-mode checks in driver) less the macOS hello-world
+pin (size).
+
+**Cross-compilation re-check from macOS.** This host has neither `zig` nor `ld.lld` (nor Homebrew
+GCC), so the macOS side was Apple clang 21 through `shikra build --target x86_64-linux|aarch64-linux
+--cc WRAPPER`, where the wrapper ran Apple clang with shikra's exact compile flags plus `-c`
+(`--target=ARCH-linux-musl -std=c99 -O2 -ffunction-sections -fdata-sections -DSHIKRA_NOLIBC=1
+-ffreestanding -fno-stack-protector -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables`,
+no `-fno-split-cold-code`) and recorded the link flags (`-static -nostdlib -fuse-ld=lld
+-Wl,--gc-sections -Wl,--build-id=none -Wl,-z,norelro -Wl,-z,noseparate-code`), which were then
+applied with GNU ld in the container of the target architecture. Executed there: hello, gen_fringe
+(tier 3), ext_fixnum, ext_flonum, ext_f64vector, ext_assume -- 6/6 outputs right on each
+architecture; tests/debug/locations.scm built with `-g` (8/8 error locations, exit 70) and
+handler.scm right on both. `shikra size` on macOS reads all 16 ELF files (`ELF x86-64 (static, no
+libc)`, rows add up to the file size). The full `zig cc` / ld.lld paths were last exercised by M6
+(above) and are not re-run here.
+
+**Sizes**: bench/SIZES.md, "Linux" (all 40 Linux cells re-measured in this step from the code of
+9af1958; the later popcount change is in rt_ext.c, which these programs do not contain). Hello world 3.0-7.7 KB (under 30 KB). The 60-150 KB range (spec
+§9.3) is met at -Os by all four 1,000-2,500-line programs on x86-64 with both compilers (parsing
+with GCC is below it) and on arm64 with GCC; not by clang's arm64 -Os scheme (169 KB) and dynamic
+(155 KB), nor at -O2 by scheme and dynamic (186-312 KB, both compilers and architectures) and by
+slatex with clang (160-163 KB): the -O2 inlining budget, as on macOS (deviation, §10).
+
+**macOS** (`make test` at commit 37723ec, Apple clang 21): check-embed ok; 1,327 passed, 0 failed,
+2 skipped (the same two). Hello world 50,888 bytes (pin 52,000).
+
+**Line counts of the merged tree** (`wc -l`): compiler and tool (src/*.c, *.h without the runtime,
+embed.c and rt_unicode.c) 11,822; runtime (rt.h, rt_*.c without rt_unicode.c) 5,315 (incl. rt_math.c 454 and rt_ext.c 515). The
+per-milestone file maps above are snapshots of their time.
+
+**Open.** No hardware shadow-stack check for tier 3 (deviation). Hosted cross builds with plain
+clang need a target sysroot (not tested; zig cc brings glibc). On amd64 the stress passes run at 20×
+intervals only (emulation; see the table).

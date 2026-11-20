@@ -60,12 +60,15 @@ RT_INLINE obj rt_fxbitsetw(intptr_t k, intptr_t a, const char *w) { return RT_BO
 /* bit-level operations on the untagged value: the 63-bit two's complement pattern */
 static intptr_t ext_sx63(uint64_t u) { return (intptr_t)(u << 1) >> 1; } /* sign-extend from bit 62 */
 static int ext_popcount(uint64_t u) {
-#if defined(__GNUC__) || defined(__clang__)
+    /* The builtin only where it is an instruction: GCC on x86-64 without POPCNT calls libgcc's
+     * __popcountdi2, which a static program without libc does not link (DESIGN.md "Integration"). */
+#if (defined(__GNUC__) || defined(__clang__)) && (defined(__POPCNT__) || defined(__aarch64__))
     return __builtin_popcountll(u);
 #else
-    int n = 0;
-    for (; u; u &= u - 1) n++;
-    return n;
+    u = u - ((u >> 1) & 0x5555555555555555u);
+    u = (u & 0x3333333333333333u) + ((u >> 2) & 0x3333333333333333u);
+    u = (u + (u >> 4)) & 0x0f0f0f0f0f0f0f0fu;
+    return (int)((u * 0x0101010101010101u) >> 56);
 #endif
 }
 static int ext_clz(uint64_t u) { /* u != 0 */

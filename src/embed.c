@@ -2654,14 +2654,12 @@ static const char *const e35[] = {
 "RT_EXTVAR int rt_argc;\n"
 "RT_EXTVAR char **rt_argv;\n"
 "#ifdef SHIKRA_PROGRAM\n"
-"/* Provided by the generated code: the program body (rt_sys.c's main calls it). Tier 3 copies the\n"
-" * stack up to the base main passes to rt_init (the address of a local of main), so no frame of the\n"
-" * program may share main's frame (GCC inlines static functions called once). */\n"
-"#ifdef RT_TIER3\n"
+"/* Provided by the generated code: the program body (rt_sys.c's main / shikra_start calls it).\n"
+" * Never inlined into its caller (GCC inlines static functions called once): tier 3 copies the\n"
+" * stack up to the base main passes to rt_init (the address of a local of main), so no frame of\n"
+" * the program may share main's frame; and `shikra size` finds the program body under its own\n"
+" * symbol instead of inside main or shikra_start (DESIGN.md \"Integration\"). */\n"
 "static RT_NOINLINE void rt_program_main(void);\n"
-"#else\n"
-"static void rt_program_main(void);\n"
-"#endif\n"
 "#endif\n"
 "\n"
 "/* ---- error path (rt_core.c; DESIGN.md \302\2473 \"Engine boundary\") ----\n"
@@ -2690,10 +2688,10 @@ static const char *const e35[] = {
 "/* ---- core objects (rt_core.c) ---- */\n"
 "RT_FN obj rt_list_p(obj x);\n"
 "RT_FN obj rt_length(obj x);\n"
-"RT_FN intptr_t rt_list_length(obj x, const char *who); /* checked proper list */\n"
+"RT_FN intptr_t rt_list_length(obj x, const char *who); /* checked proper list */\n",
 "RT_FN obj rt_reverse(obj x);\n"
 "RT_FN obj rt_eqv_p(obj a, obj b);\n"
-"RT_FN obj rt_equal_p(obj a, obj b);\n",
+"RT_FN obj rt_equal_p(obj a, obj b);\n"
 "RT_FN int rt_eqv(obj a, obj b);\n"
 "RT_FN int rt_equal(obj a, obj b);\n"
 "RT_FN obj rt_intern(const char *s, size_t nbytes);\n"
@@ -2747,8 +2745,8 @@ static const char *const e35[] = {
 " * from a direct-signature procedure (never on a tail-call cycle, so a plain call is enough),\n"
 " * RT_NT wraps every other call. Without musttail (or with SHIKRA_NO_MUSTTAIL, the hidden\n"
 " * --no-musttail flag) tail calls go through a trampoline (spec \302\2478.1): the caller stores the\n"
-" * callee and its arguments and returns RT_TRAMP; RT_NT calls pending callees until a real\n"
-" * value comes back. Arguments beyond a3 stay in rt_args meanwhile (nothing runs between). */\n",
+" * callee and its arguments and returns RT_TRAMP; RT_NT calls pending callees until a real\n",
+" * value comes back. Arguments beyond a3 stay in rt_args meanwhile (nothing runs between). */\n"
 "#ifdef RT_HAVE_MUSTTAIL\n"
 "#define RT_TAIL(f, s, n, a0, a1, a2, a3) RT_MUSTTAIL return f(s, n, a0, a1, a2, a3)\n"
 "#define RT_DTAIL(f, s, n, a0, a1, a2, a3) return f(s, n, a0, a1, a2, a3)\n"
@@ -2810,9 +2808,9 @@ static const char *const e35[] = {
 "RT_FN obj rt_handlers_set(obj h);\n"
 "RT_FN obj rt_parameter_binding(obj cell); /* innermost frame for cell, else cell; cdr = value */\n"
 "RT_FN obj rt_continuation_live_p(obj k);  /* #t: the library walks the winders before invoking k (VM);\n"
-"                                             #f for compiled continuations, which walk them themselves */\n"
+"                                             #f for compiled continuations, which walk them themselves */\n",
 "#ifdef SHIKRA_PROGRAM\n"
-"/* The compiled engine's %call/cc (tier 2): calls f with an escape procedure that restores\n",
+"/* The compiled engine's %call/cc (tier 2): calls f with an escape procedure that restores\n"
 " * the winders and handler lists and jumps back here with its arguments as the result. */\n"
 "RT_FN obj rt_call_cc(obj f);\n"
 "#ifdef RT_TIER3\n"
@@ -2873,8 +2871,8 @@ static const char *const e35[] = {
 "#if !defined(SHIKRA_PROGRAM) || defined(RT_UNICODE_FULL)\n"
 "#define RT_HAVE_UNICODE 1\n"
 "RT_FN int rt_uni_prop(int c, int p);          /* RT_UNI_DIGIT: digit value or -1, else 1/0 */\n"
-"RT_FN int rt_uni_map(int c, int m);           /* simple mapping, m: 0 upper, 1 lower, 2 fold */\n"
-"RT_FN int rt_uni_full(int c, int m, int *out); /* full mapping into out[3]: count, 0 if none */\n",
+"RT_FN int rt_uni_map(int c, int m);           /* simple mapping, m: 0 upper, 1 lower, 2 fold */\n",
+"RT_FN int rt_uni_full(int c, int m, int *out); /* full mapping into out[3]: count, 0 if none */\n"
 "#endif\n"
 "#ifndef SHIKRA_PROGRAM\n"
 "RT_EXTVAR int rt_unicode_full;\n"
@@ -2940,11 +2938,11 @@ static const char *const e35[] = {
 "RT_INLINE RT_ALWAYS obj rt_add(obj a, obj b) {\n"
 "    intptr_t r;\n"
 "    if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) && !rt_add_ovf((intptr_t)a, (intptr_t)b, &r)) return RT_O(r);\n"
-"    return rt_add2(a, b);\n"
+"    return rt_add2(a, b);\n",
 "}\n"
 "RT_INLINE RT_ALWAYS obj rt_sub(obj a, obj b) {\n"
 "    intptr_t r;\n"
-"    if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) && !rt_sub_ovf((intptr_t)a, (intptr_t)b, &r)) return RT_O(r);\n",
+"    if (RT_LIKELY(rt_is_fix(a) && rt_is_fix(b)) && !rt_sub_ovf((intptr_t)a, (intptr_t)b, &r)) return RT_O(r);\n"
 "    return rt_sub2(a, b);\n"
 "}\n"
 "RT_INLINE RT_ALWAYS obj rt_mul(obj a, obj b) {\n"
@@ -3007,8 +3005,8 @@ static const char *const e35[] = {
 "/* --bignum: proven fixnums whose sum may not be one (the analysis says \"fixnum or bignum\"); the\n"
 " * overflow branch goes to the out-of-line slow path, which promotes. */\n"
 "RT_INLINE RT_ALWAYS obj rt_fxaddb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_add_ovf(a, b, &r)) ? RT_O(r) : rt_add2(RT_O(a), RT_O(b)); }\n"
-"RT_INLINE RT_ALWAYS obj rt_fxsubb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_sub_ovf(a, b, &r)) ? RT_O(r) : rt_sub2(RT_O(a), RT_O(b)); }\n"
-"RT_INLINE RT_ALWAYS obj rt_fxmulb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_mul_ovf(RT_FIXVAL(a), b, &r)) ? RT_O(r) : rt_mul2(RT_O(a), RT_O(b)); }\n",
+"RT_INLINE RT_ALWAYS obj rt_fxsubb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_sub_ovf(a, b, &r)) ? RT_O(r) : rt_sub2(RT_O(a), RT_O(b)); }\n",
+"RT_INLINE RT_ALWAYS obj rt_fxmulb(intptr_t a, intptr_t b) { intptr_t r; return RT_LIKELY(!rt_mul_ovf(RT_FIXVAL(a), b, &r)) ? RT_O(r) : rt_mul2(RT_O(a), RT_O(b)); }\n"
 "/* quotient of proven fixnums: fixnum-least / -1 promotes, with --unsafe too (semantics, not a check) */\n"
 "RT_INLINE RT_ALWAYS obj rt_fxquob(intptr_t a, intptr_t b) {\n"
 "    if (RT_UNLIKELY(b == (intptr_t)RT_FIX(-1) && a == (intptr_t)RT_FIX(RT_FIX_MIN))) return rt_quotient(RT_O(a), RT_O(b));\n"
@@ -3057,10 +3055,10 @@ static const char *const e35[] = {
 "RT_FN void rt_port_puts(obj port, const char *s);\n"
 "RT_FN void rt_flush(obj port);\n"
 "RT_FN void rt_flush_all(void);\n"
-"#define RT_PRINT_WRITE 1  /* rt_print modes: external representation (else display) */\n"
+"#define RT_PRINT_WRITE 1  /* rt_print modes: external representation (else display) */\n",
 "#define RT_PRINT_SHARED 2 /* datum labels for all shared pairs and vectors (else for cycles only) */\n"
 "#define RT_PRINT_SIMPLE 4 /* no datum labels */\n"
-"RT_FN void rt_print(obj x, obj port, int mode);\n",
+"RT_FN void rt_print(obj x, obj port, int mode);\n"
 "RT_FN obj rt_input_port_p(obj x);\n"
 "RT_FN obj rt_output_port_p(obj x);\n"
 "RT_FN obj rt_textual_port_p(obj x);\n"
@@ -3122,9 +3120,9 @@ static const char *const e35[] = {
 "RT_INLINE obj rt_set_cdr_u(obj x, obj v) { RT_CHECK_MUTABLE_PAIR(x, \"set-cdr!\"); RT_CDR(x) = v; return RT_UNSPEC; }\n"
 "RT_INLINE obj rt_pair_p(obj x) { return RT_BOOL(rt_is_pair(x)); }\n"
 "RT_INLINE obj rt_null_p(obj x) { return RT_BOOL(x == RT_NIL); }\n"
-"RT_INLINE obj rt_eq_p(obj a, obj b) { return RT_BOOL(a == b); }\n"
+"RT_INLINE obj rt_eq_p(obj a, obj b) { return RT_BOOL(a == b); }\n",
 "RT_INLINE obj rt_boolean_p(obj x) { return RT_BOOL(x == RT_TRUE || x == RT_FALSE); }\n"
-"RT_INLINE obj rt_symbol_p(obj x) { return RT_BOOL(rt_is_symbol(x)); }\n",
+"RT_INLINE obj rt_symbol_p(obj x) { return RT_BOOL(rt_is_symbol(x)); }\n"
 "RT_INLINE obj rt_procedure_p(obj x) { return RT_BOOL(rt_is_proc(x)); }\n"
 "RT_INLINE obj rt_char_p(obj x) { return RT_BOOL(rt_is_char(x)); }\n"
 "RT_INLINE obj rt_char_to_integer(obj c) { RT_CHECK(rt_is_char(c), \"char->integer\", \"char\", c); return RT_FIX(RT_CHARVAL(c)); }\n"
@@ -3171,8 +3169,8 @@ static const char *const e35[] = {
 "    RT_INDEX((uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), \"bytevector-u8-ref\", k);\n"
 "    return RT_FIX(RT_PTR(v, rt_bytevector)->b[RT_FIXVAL(k)]);\n"
 "}\n"
-"RT_INLINE obj rt_bytevector_u8_set(obj v, obj k, obj b) {\n"
-"    RT_CHECK(rt_is_bytevector(v) && !(RT_HFLAGS(v) & RT_F_RO), \"bytevector-u8-set!\", \"mutable bytevector\", v);\n",
+"RT_INLINE obj rt_bytevector_u8_set(obj v, obj k, obj b) {\n",
+"    RT_CHECK(rt_is_bytevector(v) && !(RT_HFLAGS(v) & RT_F_RO), \"bytevector-u8-set!\", \"mutable bytevector\", v);\n"
 "    RT_INDEX(!rt_is_fix(k) || (uintptr_t)RT_FIXVAL(k) >= (uintptr_t)RT_HLEN(v), \"bytevector-u8-set!\", k);\n"
 "    RT_CHECK(rt_is_fix(b) && (uintptr_t)RT_FIXVAL(b) <= 255, \"bytevector-u8-set!\", \"byte\", b);\n"
 "    RT_PTR(v, rt_bytevector)->b[RT_FIXVAL(k)] = (unsigned char)RT_FIXVAL(b);\n"
@@ -3219,8 +3217,8 @@ static const char *const e35[] = {
 "#define RT_F64(x) (RT_PTR(x, rt_f64vector)->d)\n"
 "RT_FN obj rt_fx_add(obj, obj); RT_FN obj rt_fx_sub(obj, obj); RT_FN obj rt_fx_mul(obj, obj); RT_FN obj rt_fx_neg(obj);\n"
 "RT_FN obj rt_fx_abs(obj); RT_FN obj rt_fx_square(obj); RT_FN obj rt_fx_quotient(obj, obj); RT_FN obj rt_fx_remainder(obj, obj);\n"
-"RT_FN obj rt_fx_max(obj, obj); RT_FN obj rt_fx_min(obj, obj); RT_FN obj rt_fx_eq(obj, obj); RT_FN obj rt_fx_lt(obj, obj);\n"
-"RT_FN obj rt_fx_gt(obj, obj); RT_FN obj rt_fx_le(obj, obj); RT_FN obj rt_fx_ge(obj, obj); RT_FN obj rt_fx_zero_p(obj);\n",
+"RT_FN obj rt_fx_max(obj, obj); RT_FN obj rt_fx_min(obj, obj); RT_FN obj rt_fx_eq(obj, obj); RT_FN obj rt_fx_lt(obj, obj);\n",
+"RT_FN obj rt_fx_gt(obj, obj); RT_FN obj rt_fx_le(obj, obj); RT_FN obj rt_fx_ge(obj, obj); RT_FN obj rt_fx_zero_p(obj);\n"
 "RT_FN obj rt_fx_positive_p(obj); RT_FN obj rt_fx_negative_p(obj); RT_FN obj rt_fx_odd_p(obj); RT_FN obj rt_fx_even_p(obj);\n"
 "RT_FN obj rt_fx_not(obj); RT_FN obj rt_fx_and(obj, obj); RT_FN obj rt_fx_ior(obj, obj); RT_FN obj rt_fx_xor(obj, obj);\n"
 "RT_FN obj rt_fx_ash(obj, obj); RT_FN obj rt_fx_ashl(obj, obj); RT_FN obj rt_fx_ashr(obj, obj); RT_FN obj rt_fx_if(obj, obj, obj);\n"
@@ -4600,12 +4598,15 @@ static const char *const e38[] = {
 "/* bit-level operations on the untagged value: the 63-bit two's complement pattern */\n"
 "static intptr_t ext_sx63(uint64_t u) { return (intptr_t)(u << 1) >> 1; } /* sign-extend from bit 62 */\n"
 "static int ext_popcount(uint64_t u) {\n"
-"#if defined(__GNUC__) || defined(__clang__)\n"
+"    /* The builtin only where it is an instruction: GCC on x86-64 without POPCNT calls libgcc's\n"
+"     * __popcountdi2, which a static program without libc does not link (DESIGN.md \"Integration\"). */\n"
+"#if (defined(__GNUC__) || defined(__clang__)) && (defined(__POPCNT__) || defined(__aarch64__))\n"
 "    return __builtin_popcountll(u);\n"
 "#else\n"
-"    int n = 0;\n"
-"    for (; u; u &= u - 1) n++;\n"
-"    return n;\n"
+"    u = u - ((u >> 1) & 0x5555555555555555u);\n"
+"    u = (u & 0x3333333333333333u) + ((u >> 2) & 0x3333333333333333u);\n"
+"    u = (u + (u >> 4)) & 0x0f0f0f0f0f0f0f0fu;\n"
+"    return (int)((u * 0x0101010101010101u) >> 56);\n"
 "#endif\n"
 "}\n"
 "static int ext_clz(uint64_t u) { /* u != 0 */\n"
@@ -4633,7 +4634,7 @@ static const char *const e38[] = {
 "static ext_u128 ext_add128(ext_u128 a, ext_u128 b) { ext_u128 r; r.lo = a.lo + b.lo; r.hi = a.hi + b.hi + (r.lo < a.lo); return r; }\n"
 "static ext_u128 ext_neg128(ext_u128 a) { ext_u128 r; r.lo = ~a.lo + 1; r.hi = ~a.hi + (r.lo == 0); return r; }\n"
 "static ext_u128 ext_mul128(uint64_t a, uint64_t b) { /* unsigned 64 x 64 -> 128 */\n"
-"    uint64_t a0 = a & 0xFFFFFFFFu, a1 = a >> 32, b0 = b & 0xFFFFFFFFu, b1 = b >> 32;\n"
+"    uint64_t a0 = a & 0xFFFFFFFFu, a1 = a >> 32, b0 = b & 0xFFFFFFFFu, b1 = b >> 32;\n",
 "    uint64_t p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;\n"
 "    uint64_t mid = (p00 >> 32) + (p01 & 0xFFFFFFFFu) + (p10 & 0xFFFFFFFFu);\n"
 "    ext_u128 r;\n"
@@ -4641,7 +4642,7 @@ static const char *const e38[] = {
 "    r.hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);\n"
 "    return r;\n"
 "}\n"
-"static obj ext_carry(int op, obj i_, obj j_, obj k_, obj sel, const char *w) {\n",
+"static obj ext_carry(int op, obj i_, obj j_, obj k_, obj sel, const char *w) {\n"
 "    intptr_t i, j, k, r;\n"
 "    ext_u128 s;\n"
 "    rt_fxchk(i_, w); rt_fxchk(j_, w); rt_fxchk(k_, w);\n"
@@ -4689,9 +4690,9 @@ static const char *const e38[] = {
 "EXT_FX2(rt_fx_ashl, \"fxarithmetic-shift-left\", RT_O(rt_fxashlw(a, b, \"fxarithmetic-shift-left\")))\n"
 "EXT_FX2(rt_fx_ashr, \"fxarithmetic-shift-right\", RT_O(rt_fxashrw(a, b, \"fxarithmetic-shift-right\")))\n"
 "EXT_FX2(rt_fx_bit_set_p, \"fxbit-set?\", rt_fxbitsetw(a, b, \"fxbit-set?\"))\n"
-"EXT_FX1(rt_fx_bit_count, \"fxbit-count\", RT_FIX(ext_popcount((uint64_t)(a < 0 ? ~RT_FIXVAL(a) : RT_FIXVAL(a)))))\n"
+"EXT_FX1(rt_fx_bit_count, \"fxbit-count\", RT_FIX(ext_popcount((uint64_t)(a < 0 ? ~RT_FIXVAL(a) : RT_FIXVAL(a)))))\n",
 "EXT_FX1(rt_fx_length, \"fxlength\", RT_FIX(RT_FIXVAL(a) == 0 || RT_FIXVAL(a) == -1 ? 0 : 64 - ext_clz((uint64_t)(a < 0 ? ~RT_FIXVAL(a) : RT_FIXVAL(a)))))\n"
-"EXT_FX1(rt_fx_first_set_bit, \"fxfirst-set-bit\", RT_FIX(a == 0 ? -1 : 63 - ext_clz((uint64_t)RT_FIXVAL(a) & (0 - (uint64_t)RT_FIXVAL(a)))))\n",
+"EXT_FX1(rt_fx_first_set_bit, \"fxfirst-set-bit\", RT_FIX(a == 0 ? -1 : 63 - ext_clz((uint64_t)RT_FIXVAL(a) & (0 - (uint64_t)RT_FIXVAL(a)))))\n"
 "RT_FN obj rt_fx_if(obj m, obj i, obj j) {\n"
 "    rt_fxchk(m, \"fxif\"); rt_fxchk(i, \"fxif\"); rt_fxchk(j, \"fxif\");\n"
 "    return RT_O(((intptr_t)m & (intptr_t)i) | (~(intptr_t)m & (intptr_t)j));\n"
@@ -4748,10 +4749,10 @@ static const char *const e38[] = {
 "#define EXT_SIGN ((uint64_t)1 << 63)\n"
 "#define EXT_2P52 4503599627370496.0\n"
 "RT_INLINE double rt_flcopysign(double x, double y) { return ext_dbl((ext_bits(x) & ~EXT_SIGN) | (ext_bits(y) & EXT_SIGN)); }\n"
-"RT_INLINE intptr_t rt_flsignbit(double x) { return (intptr_t)(ext_bits(x) >> 63); }\n"
+"RT_INLINE intptr_t rt_flsignbit(double x) { return (intptr_t)(ext_bits(x) >> 63); }\n",
 "RT_INLINE double rt_fltrunc(double x) { return rt_flabs(x) < EXT_2P52 ? rt_flcopysign((double)(int64_t)x, x) : x; }\n"
 "RT_INLINE double rt_flfloor(double x) { double t = rt_fltrunc(x); return t > x ? t - 1.0 : t; }\n"
-"RT_INLINE double rt_flceil(double x) { double t = rt_fltrunc(x); return t < x ? t + 1.0 : t; }\n",
+"RT_INLINE double rt_flceil(double x) { double t = rt_fltrunc(x); return t < x ? t + 1.0 : t; }\n"
 "RT_INLINE double rt_flround(double x) { /* to nearest, ties to even (the default rounding of + and -) */\n"
 "    double a = rt_flabs(x);\n"
 "    return a < EXT_2P52 ? rt_flcopysign((a + EXT_2P52) - EXT_2P52, x) : x;\n"
@@ -4801,7 +4802,7 @@ static const char *const e38[] = {
 "#else\n"
 "static ext_u128 ext_shl128(ext_u128 a, int k) { /* 0 <= k < 128 */\n"
 "    ext_u128 r;\n"
-"    if (k == 0) return a;\n"
+"    if (k == 0) return a;\n",
 "    if (k >= 64) { r.hi = a.lo << (k - 64); r.lo = 0; return r; }\n"
 "    r.hi = (a.hi << k) | (a.lo >> (64 - k));\n"
 "    r.lo = a.lo << k;\n"
@@ -4809,7 +4810,7 @@ static const char *const e38[] = {
 "}\n"
 "static ext_u128 ext_shr128s(ext_u128 a, intptr_t k) { /* right shift, OR of the lost bits into bit 0 */\n"
 "    ext_u128 r;\n"
-"    uint64_t lost;\n",
+"    uint64_t lost;\n"
 "    if (k <= 0) return a;\n"
 "    if (k >= 128) { r.hi = 0; r.lo = (a.hi | a.lo) != 0; return r; }\n"
 "    if (k >= 64) {\n"
@@ -4868,14 +4869,14 @@ static const char *const e38[] = {
 "        m = q.lo;\n"
 "        if (ext_lt128(half, rem) || (rem.hi == half.hi && rem.lo == half.lo && (m & 1))) m++;\n"
 "    }\n"
-"    return rt_flldexp(neg ? -(double)m : (double)m, E1 + sh);\n"
+"    return rt_flldexp(neg ? -(double)m : (double)m, E1 + sh);\n",
 "}\n"
 "#endif\n"
 "/* exact fmod (nearest = 0) and IEEE remainder (nearest = 1); *q: the low bits of the quotient */\n"
 "RT_FN double rt_flrem(double x, double y, int nearest, intptr_t *q) {\n"
 "    intptr_t ex, ey, d;\n"
 "    uint64_t mx, my, qu = 0;\n"
-"    double ax = rt_flabs(x), ay = rt_flabs(y), r;\n",
+"    double ax = rt_flabs(x), ay = rt_flabs(y), r;\n"
 "    *q = 0;\n"
 "    if (x != x || y != y || y == 0 || ax - ax != 0) return (x * y) / (x * y);\n"
 "    if (ay - ay != 0) return x;\n"
@@ -4932,12 +4933,12 @@ static const char *const e38[] = {
 "EXT_FL1(rt_fl_sin, \"flsin\", EXT_MK(rt_sys_sin(a)))\n"
 "EXT_FL1(rt_fl_cos, \"flcos\", EXT_MK(rt_sys_cos(a)))\n"
 "EXT_FL1(rt_fl_tan, \"fltan\", EXT_MK(rt_sys_tan(a)))\n"
-"EXT_FL1(rt_fl_asin, \"flasin\", EXT_MK(rt_sys_asin(a)))\n"
+"EXT_FL1(rt_fl_asin, \"flasin\", EXT_MK(rt_sys_asin(a)))\n",
 "EXT_FL1(rt_fl_acos, \"flacos\", EXT_MK(rt_sys_acos(a)))\n"
 "EXT_FL1(rt_fl_atan, \"flatan\", EXT_MK(rt_sys_atan2(a, 1.0)))\n"
 "EXT_FL2(rt_fl_atan2, \"flatan\", EXT_MK(rt_sys_atan2(a, b)))\n"
 "EXT_FL2(rt_fl_expt, \"flexpt\", EXT_MK(rt_sys_pow(a, b)))\n"
-"EXT_FL2(rt_fl_copysign, \"flcopysign\", EXT_MK(rt_flcopysign(a, b)))\n",
+"EXT_FL2(rt_fl_copysign, \"flcopysign\", EXT_MK(rt_flcopysign(a, b)))\n"
 "EXT_FL2(rt_fl_adjacent, \"fladjacent\", EXT_MK(rt_flnext(a, b)))\n"
 "EXT_FL1(rt_fl_sign_bit, \"flsign-bit\", RT_FIX(rt_flsignbit(a)))\n"
 "EXT_FL1(rt_fl_exponent, \"flexponent\", EXT_MK(rt_fllogb(a)))\n"
@@ -4998,14 +4999,14 @@ static const char *const e38[] = {
 "RT_FN obj rt_f64vector_to_list(obj v) {\n"
 "    obj l = RT_NIL;\n"
 "    intptr_t i;\n"
-"    rt_f64chk(v, \"f64vector->list\");\n"
+"    rt_f64chk(v, \"f64vector->list\");\n",
 "    for (i = (RT_HLEN(v) >> 3) - 1; i >= 0; i--) l = rt_cons(rt_make_flonum(RT_F64(v)[i]), l);\n"
 "    return l;\n"
 "}\n"
 "RT_FN obj rt_list_to_f64vector(obj l) {\n"
 "    intptr_t n = rt_list_length(l, \"list->f64vector\"), i;\n"
 "    obj v;\n"
-"    for (v = l; v != RT_NIL; v = RT_CDR(v)) rt_f64num(RT_CAR(v), \"list->f64vector\");\n",
+"    for (v = l; v != RT_NIL; v = RT_CDR(v)) rt_f64num(RT_CAR(v), \"list->f64vector\");\n"
 "    v = ext_f64n(n);\n"
 "    for (i = 0; i < n; i++, l = RT_CDR(l)) RT_F64(v)[i] = rt_num_dbl(RT_CAR(l));\n"
 "    return v;\n"

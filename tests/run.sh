@@ -56,6 +56,9 @@ STRESS_SCALE=${STRESS_SCALE:-1}
 case "$(uname -s)-$(uname -m)" in
 Linux-x86_64 | Linux-aarch64) CHECK_FLAGS="-DSHIKRA_NOLIBC=1 -ffreestanding" ;;
 esac
+# check_flags FILE.c: CHECK_FLAGS, except for a hosted program (define-c: the C library; its
+# generated C says so in its "build mode" line and refuses SHIKRA_NOLIBC), DESIGN.md "Integration".
+check_flags() { if grep -q '^/\* build mode: hosted' "$1"; then echo; else echo "$CHECK_FLAGS"; fi; }
 TMP=tests/tmp
 mkdir -p "$TMP"
 # the cache directory of build/run (and the expansion cache) stays inside the tree
@@ -174,7 +177,7 @@ run_cases() {
         if [ "$mode" = compiled ]; then
             # shellcheck disable=SC2086
             if $SHIKRA emit-c -O${opt:-2} $flags "$f" > "$TMP/c.c" 2> /dev/null &&
-                $CC -std=c99 -Wall -Wextra -Werror $CHECK_FLAGS -fsyntax-only "$TMP/c.c" 2> "$TMP/cc.err"; then ok
+                $CC -std=c99 -Wall -Wextra -Werror $(check_flags "$TMP/c.c") -fsyntax-only "$TMP/c.c" 2> "$TMP/cc.err"; then ok
             else bad "$f (generated C is not warning-free)"; head -5 "$TMP/cc.err"; fi
         fi
     done
@@ -262,7 +265,7 @@ run_r7rs() {
         if [ "$engine" = compiled ]; then
             # shellcheck disable=SC2086
             if $SHIKRA emit-c -O${opt:-2} $flag "$f" > "$TMP/r7.c" 2> /dev/null &&
-                $CC -std=c99 -Wall -Wextra -Werror $CHECK_FLAGS -fsyntax-only "$TMP/r7.c" 2> "$TMP/cc.err"; then ok
+                $CC -std=c99 -Wall -Wextra -Werror $(check_flags "$TMP/r7.c") -fsyntax-only "$TMP/r7.c" 2> "$TMP/cc.err"; then ok
             else bad "$f (generated C is not warning-free)"; head -5 "$TMP/cc.err"; fi
         fi
     done
@@ -553,9 +556,24 @@ run_driver() {
     if (cd "$D" && ../../../$SHIKRA build -w -I one -I two --cc "$CC -DSHIKRA_TEST_FLAG=1" main.scm) && [ -x "$D/main" ]; then ok
     else bad "build: default output name, -I, --cc with arguments"; fi
     if $SHIKRA --version | grep -q '^shikra 0'; then ok; else bad "--version"; fi
-    if $SHIKRA --help > "$TMP/help" && for w in build run repl check emit-c size -O0 --unsafe --gc --unicode --bignum -I --cc --target -g; do
+    if $SHIKRA --help > "$TMP/help" && for w in build run repl check emit-c size -O0 --unsafe --gc --unicode --bignum -I --cc --target -g --libc; do
            grep -q -- " $w" "$TMP/help" || exit 1; done; then ok; else bad "--help does not list every command and flag"; fi
     if ! $SHIKRA build --no-such-flag tests/cases/hello.scm 2> "$TMP/flag.err" && grep -q 'unknown flag' "$TMP/flag.err"; then ok; else bad "unknown flag"; fi
+    # build mode (DESIGN.md "Integration"): a program with define-c, or built with --libc, is a hosted
+    # build (the C library); every other program is static without libc on Linux x86-64/arm64
+    for m in "hosted:tests/cases/ext_ffi.scm" "hosted:--libc tests/cases/hello.scm" "static without libc:tests/cases/hello.scm"; do
+        # shellcheck disable=SC2086
+        if $SHIKRA emit-c -w ${m#*:} | grep -q "^/\* build mode: ${m%%:*}"; then ok; else bad "emit-c build mode comment: ${m#*:} is not ${m%%:*}"; fi
+    done
+    if [ -n "$CHECK_FLAGS" ]; then
+        for m in "static, no libc:tests/cases/hello.scm" "hosted: dynamically linked:--libc tests/cases/hello.scm" "hosted: dynamically linked:tests/cases/ext_ffi.scm"; do
+            # shellcheck disable=SC2086
+            f=${m##*[ :]}
+            if $SHIKRA build -w ${m##*:} -o "$TMP/mode" && "$TMP/mode" > "$TMP/mode.out" 2> /dev/null && cmp -s "$TMP/mode.out" "${f%.scm}.out" &&
+                $SHIKRA size "$TMP/mode" | head -1 | grep -qF "(${m%:*}"; then ok
+            else bad "build mode on Linux: ${m##*:} should be ${m%:*}: $($SHIKRA size "$TMP/mode" 2>&1 | head -1)"; fi
+        done
+    fi
 }
 
 # run_stress: cases and r7rs files with a collection at every allocation, at -O2 and -O0.

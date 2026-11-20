@@ -72,16 +72,23 @@
               (loop (cdr gs) err worst)
               (let* ((x ((car gs))) (e (measure (mine x) (ref x))))
                 (if (fl>? e err) (inner (+ i 1) e x) (inner (+ i 1) err worst))))))))
+;; The reference is the host libm, so two bounds are per platform (DESIGN.md "Integration"): on Linux
+;; it is glibc's, whose cbrt is up to 3 ulp off (at -3.451216910111361 glibc gives -1.5112074476162218,
+;; the exact value is -1.51120744761622124..., flcbrt -1.5112074476162212) and whose tanh is up to 2
+;; ulp off (at 0.22472308731815804: glibc -1.91 ulp, fltanh +2.09 ulp from the exact value; macOS +0.09).
+(define linux? (cond-expand (linux #t) (else #f)))
+(define cbrt-bound (if linux? 3.0 1.0))
+(define tanh-bound (if linux? 4.0 3.0))
 (define specials '(0.0 -0.0 +inf.0 -inf.0 +nan.0 1.0 -1.0 0.5 2.0 1e-310 -1e-310 1e-300 1e300 -1e300 709.5 -745.0))
 
-(check1 "flcbrt" flcbrt c-cbrt ulps 1.0 " ulp" (list (lambda () (unif -10.0 10.0)) (lambda () (logu 1e-300 1e300)) (lambda () (fl- 0.0 (logu 1e-310 1e-290)))) specials)
+(check1 "flcbrt" flcbrt c-cbrt ulps cbrt-bound " ulp" (list (lambda () (unif -10.0 10.0)) (lambda () (logu 1e-300 1e300)) (lambda () (fl- 0.0 (logu 1e-310 1e-290)))) specials)
 (check1 "flexp-1" flexp-1 c-expm1 ulps 2.0 " ulp" (list (lambda () (unif -1.0 1.0)) (lambda () (logu 1e-20 1e-3)) (lambda () (unif -40.0 709.0))) specials)
 (check1 "fllog1+" fllog1+ c-log1p ulps 2.0 " ulp" (list (lambda () (unif -0.9 1.0)) (lambda () (fl* (if (fxodd? (rnd)) 1.0 -1.0) (logu 1e-20 1e-3))) (lambda () (logu 1.0 1e300))) specials)
 (check1 "fllog2" fllog2 c-log2 ulps 3.0 " ulp" (list (lambda () (unif 0.5 2.0)) (lambda () (logu 1e-310 1e308))) specials)
 (check1 "fllog10" fllog10 c-log10 ulps 3.0 " ulp" (list (lambda () (unif 0.5 2.0)) (lambda () (logu 1e-310 1e308))) specials)
 (check1 "flsinh" flsinh c-sinh ulps 3.0 " ulp" (list (lambda () (unif -2.0 2.0)) (lambda () (logu 1e-20 1e-3)) (lambda () (unif -710.0 710.0))) specials)
 (check1 "flcosh" flcosh c-cosh ulps 3.0 " ulp" (list (lambda () (unif -2.0 2.0)) (lambda () (unif -710.0 710.0))) specials)
-(check1 "fltanh" fltanh c-tanh ulps 3.0 " ulp" (list (lambda () (unif -2.0 2.0)) (lambda () (logu 1e-20 1e-3)) (lambda () (unif -25.0 25.0))) specials)
+(check1 "fltanh" fltanh c-tanh ulps tanh-bound " ulp" (list (lambda () (unif -2.0 2.0)) (lambda () (logu 1e-20 1e-3)) (lambda () (unif -25.0 25.0))) specials)
 (check1 "flasinh" flasinh c-asinh ulps 3.0 " ulp" (list (lambda () (unif -4.0 4.0)) (lambda () (logu 1e-20 1e-3)) (lambda () (logu 1.0 1e300))) specials)
 (check1 "flacosh" flacosh c-acosh ulps 3.0 " ulp" (list (lambda () (unif 1.0 4.0)) (lambda () (fl+ 1.0 (logu 1e-15 1e-3))) (lambda () (logu 1.0 1e300))) specials)
 (check1 "flatanh" flatanh c-atanh ulps 3.0 " ulp" (list (lambda () (unif -1.0 1.0)) (lambda () (logu 1e-20 1e-3)) (lambda () (fl- 1.0 (logu 1e-16 1e-3)))) specials)

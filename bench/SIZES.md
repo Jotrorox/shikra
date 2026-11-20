@@ -87,3 +87,46 @@ after the changes above, r7rs/base 155 KB); `strip app` removes them, after whic
 refuses the binary ("has no Shikra symbols: it was stripped, or it was not built by shikra
 build"). `shikra size` prints the symbol table's own share as a separate line, so the cost of
 keeping it is visible.
+
+## Linux (static, no libc), merged tree (integration)
+
+Spec §9.3, Linux x86-64 column: hello world "under 30 KB, statically linked"; "1,000 to 2,000
+lines: 60 to 150 KB". Measured in the `tests/linux.sh` containers (Debian trixie: GCC 14.2,
+clang 19.1.7, GNU ld 2.44; arm64 native, x86-64 under qemu-user -- emulation does not change the
+output), `shikra build -O2` / `-Os`, the same assembled benchmark programs as above; bytes as
+written / after `strip` (symbols are kept by default for `shikra size`). KB = 1,000 bytes, the
+range check is on the file as written. macOS (Apple clang, from the table above) for comparison.
+
+| Program | Lines | Compiler | x86-64 -O2 | x86-64 -Os | arm64 -O2 | arm64 -Os | macOS -O2 / -Os |
+|---|---|---|---|---|---|---|---|
+| hello world | 3 | GCC | 3,248 / 2,088 | 3,024 / 1,864 | 4,672 / 2,488 | 4,168 / 2,056 | 50,888 / 50,904 |
+| | | clang | 6,408 / 4,936 | 6,440 / 4,936 | 7,608 / 4,936 | 7,664 / 4,936 | |
+| parsing | 936 | GCC | 75,736 / 68,624 | 52,416 / 44,560 | 82,536 / 69,712 | 61,016 / 47,680 | 121,760 / 105,904 |
+| | | clang | 84,976 / 78,688 | 62,568 / 55,488 | 81,448 / 70,680 | 66,288 / 54,112 | |
+| scheme | 1,055 | GCC | 201,512 / 170,736 | 119,696 / 88,016 | 233,824 / 182,576 | 144,784 / 95,888 | 241,360 / 175,680 |
+| | | clang | 237,920 / 208,416 | 145,544 / 115,568 | 241,752 / 196,640 | 169,368 / 123,040 | |
+| dynamic | 2,328 | GCC | 192,664 / 177,008 | 93,584 / 74,768 | 186,488 / 160,608 | 108,576 / 78,688 | 310,816 / 181,456 |
+| | | clang | 312,464 / 297,552 | 149,920 / 131,936 | 288,368 / 264,520 | 154,744 / 126,072 | |
+| slatex | 2,354 | GCC | 128,760 / 116,592 | 88,320 / 74,608 | 139,240 / 118,032 | 100,592 / 78,688 | 175,184 / 143,344 |
+| | | clang | 163,128 / 152,416 | 112,520 / 100,528 | 159,888 / 142,592 | 122,680 / 103,264 | |
+
+**Verdicts** (60-150 KB, file as written):
+- Hello world: 3.0-7.7 KB everywhere, under 30 KB (pinned by `tests/run.sh shape` on Linux).
+- `-Os`: inside the range on x86-64 with both compilers (clang's dynamic just: 149,920); parsing
+  with GCC is below it (52 KB). On arm64 GCC is inside for all four; clang's scheme (169 KB) and
+  dynamic (155 KB) are above.
+- `-O2`: parsing is inside everywhere, slatex inside with GCC (129 / 139 KB) and above with clang
+  (159-163 KB); scheme and dynamic are above with both compilers on both architectures (186-312 KB):
+  the `-O2` inlining budget, as on macOS (where they are 241 and 311 KB). Stripping does not bring
+  them into the range either.
+
+**Size flags on Linux.** M4-3's size finding for macOS was Apple clang's cold-path splitting
+(`-Xclang -fno-split-cold-code`). Neither Linux compiler needs an equivalent: upstream clang 19
+rejects that option (the driver passed it to every `clang` before the integration, which broke
+every clang build on Linux) and does not split cold code by default (0 `.cold` symbols in scheme
+-O2); GCC 14's `-freorder-blocks-and-partition` produced no `.cold` parts here either (no unwind
+tables), and `-fno-reorder-blocks-and-partition` leaves scheme, dynamic and slatex byte-identical.
+So the flag is now passed only to Apple clang, and the Linux build line is unchanged. The literal
+sharing (one `rt_lits` struct) applies on every platform. A program that uses `define-c` is a
+hosted build (glibc, dynamic): hello world built with `--libc` is 17 KB on x86-64 and 72 KB on arm64 (GNU ld's 64 KB
+page alignment of the separate segments) -- the static sizes above are for programs without FFI.
