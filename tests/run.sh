@@ -559,6 +559,36 @@ run_driver() {
     if $SHIKRA --help > "$TMP/help" && for w in build run repl check emit-c size -O0 --unsafe --gc --unicode --bignum -I --cc --target -g --libc; do
            grep -q -- " $w" "$TMP/help" || exit 1; done; then ok; else bad "--help does not list every command and flag"; fi
     if ! $SHIKRA build --no-such-flag tests/cases/hello.scm 2> "$TMP/flag.err" && grep -q 'unknown flag' "$TMP/flag.err"; then ok; else bad "unknown flag"; fi
+    # flag values of spec §11.1: anything else is refused with a message naming the flag
+    for m in "-O3:unknown flag" "-O x:-O takes 0, 2 or s" "--gc=mark:--gc takes immix or bump" "--unicode=utf8:--unicode takes ascii or full" \
+             "--target=riscv64-linux:unsupported target" "--cc=:--cc is empty"; do
+        # shellcheck disable=SC2086
+        if ! $SHIKRA build ${m%%:*} tests/cases/hello.scm -o "$TMP/flag" 2> "$TMP/flag.err" && grep -qF -- "${m#*:}" "$TMP/flag.err"; then ok
+        else bad "bad flag value ${m%%:*}: $(cat "$TMP/flag.err")"; fi
+    done
+    # spec §4.3: (import (geometry vec)) is geometry/vec.sld in the program's directory, then in each
+    # -I directory in order, then the built-ins; a user library shadows a built-in one of that name
+    D=$TMP/drvlib
+    rm -rf "$D"; mkdir -p "$D/prog/geometry" "$D/i1/geometry" "$D/i2/geometry" "$D/i2/extra" "$D/i1/scheme"
+    for d in prog i1 i2; do
+        printf '(define-library (geometry vec) (export who) (import (scheme base)) (begin (define who "%s")))\n' $d > "$D/$d/geometry/vec.sld"
+    done
+    printf '(define-library (extra x) (export x) (import (scheme base)) (begin (define x "i2-extra")))\n' > "$D/i2/extra/x.sld"
+    printf '(define-library (scheme cxr) (export caddr) (import (scheme base)) (begin (define (caddr x) "i1-cxr")))\n' > "$D/i1/scheme/cxr.sld"
+    printf '(import (scheme base) (scheme write) (geometry vec) (extra x) (scheme cxr))\n(write (list who x (caddr (list 1 2 3))))\n' > "$D/prog/main.scm"
+    for m in '-I i1 -I i2:("prog" "i2-extra" "i1-cxr")' 'rm prog/geometry:-I i1 -I i2:("i1" "i2-extra" "i1-cxr")' \
+             '-I i2 -I i1:("i2" "i2-extra" "i1-cxr")' 'rm i1/scheme:-I i1 -I i2:("i1" "i2-extra" 3)'; do
+        case $m in rm\ *) r=${m%%:*}; rm -r "$D/${r#rm }"; m=${m#*:} ;; esac
+        # shellcheck disable=SC2086
+        if out=$(cd "$D" && ../../../$SHIKRA run -w ${m%%:*} prog/main.scm) && [ "$out" = "${m#*:}" ]; then ok
+        else bad "library search order (${m%%:*}): $out, expected ${m#*:}"; fi
+    done
+    # spec §3.4: --target sets the operating-system and architecture feature identifiers (emit-c needs
+    # no cross compiler)
+    printf '(import (scheme base) (scheme write))\n(cond-expand ((and linux x86-64) (display "F-LINUX-X64")) ((and linux aarch64 arm64) (display "F-LINUX-A64"))\n  ((and darwin arm64) (display "F-DARWIN-A64")) (else (display "F-OTHER")))\n' > "$TMP/feat.scm"
+    for m in x86_64-linux-gnu:F-LINUX-X64 aarch64-linux:F-LINUX-A64 arm64-apple-darwin:F-DARWIN-A64; do
+        if $SHIKRA emit-c -w --target="${m%%:*}" "$TMP/feat.scm" | grep -q "\"${m#*:}\""; then ok; else bad "--target=${m%%:*}: features"; fi
+    done
     # build mode (DESIGN.md "Integration"): a program with define-c, or built with --libc, is a hosted
     # build (the C library); every other program is static without libc on Linux x86-64/arm64
     for m in "hosted:tests/cases/ext_ffi.scm" "hosted:--libc tests/cases/hello.scm" "static without libc:tests/cases/hello.scm"; do
