@@ -1,0 +1,9 @@
+flags --keep go
+all
+no P_scheme_cxr__
+fn P_main__go[(]
+no RT_NT[(]
+no RT_PROC[(]
+no rt_arity_error[(]area
+has rt_mul[(]
+has RT_CDR[(]

@@ -1,0 +1,3 @@
+flags --unicode=full
+all
+nm-has ^_?uni_(tou|alpha)$

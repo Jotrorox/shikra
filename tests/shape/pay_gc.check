@@ -1,0 +1,3 @@
+all
+nm-has ^_?rt_alloc_slow$
+nm-has ^_?gc_(run|mark)$

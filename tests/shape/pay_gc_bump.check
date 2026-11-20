@@ -1,0 +1,4 @@
+flags --gc=bump
+all
+nm-has ^_?rt_alloc_slow$
+nm-no ^_?gc_(run|mark|mark_any|scan|push|size|add_chunk)$

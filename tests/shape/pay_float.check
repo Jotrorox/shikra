@@ -1,0 +1,4 @@
+all
+nm-has ^_?rt_format_double$
+nm-no ^_?core_symslot$
+nm-no ^_?rd_item$

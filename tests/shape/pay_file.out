@@ -1,0 +1,1 @@
+";; Spec §9.1 \"File ports: (scheme file) procedures are reachable\": opening a file links the file"
