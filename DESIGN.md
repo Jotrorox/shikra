@@ -3028,7 +3028,7 @@ an `obj` added by one `rt_add`, no overflow-error call) and `big_hello` (no bign
 `--bignum` (no bignum symbol survives dead-code elimination); the spec §12 program 51,104 -> 69,184
 bytes with `--bignum` (its `display` is generic and links the printer and `rt_big_to_string`);
 tests/cases/big_arith.scm 122,816 bytes, of which `shikra size` attributes 10,096 to the `(runtime)`
-component "bignums (--bignum)" (6,852 at -Os). src/rt_big.c is 497 lines; the hooks elsewhere about
+component "bignums (--bignum)" (6,852 at -Os). src/rt_big.c is 498 lines; the hooks elsewhere about
 190 lines of `#ifdef RT_HAVE_BIG` (rt_num.c, rt.h, rt_core.c, rt_io.c).
 
 **Tests.** tests/cases `big_*` (`NAME.flags` = `--bignum`; expected outputs written by
