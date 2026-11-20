@@ -1,0 +1,2 @@
+(r7rs shikra ieee-float os arch ascii no-ratios no-exact-complex)
+(#t #t #t #t #t #f #f #f)
