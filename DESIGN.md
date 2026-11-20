@@ -3046,7 +3046,8 @@ engines); the other r7rs files also run with `--bignum` in both engines (r7rs pa
 except three pinned `base.scm` differences (`expected/base.*.bignum`, reasons in EXCLUSIONS.md: two
 rewritten tests that assert the default mode's overflow error, and `#x4000000000000001/3e1`, whose
 numerator now fits, read as the nearest flonum). Linux: the `big_*` cases pass as static no-libc
-executables built by GCC 14 on arm64 (native) and x86-64 (qemu).
+executables built by GCC 14 on arm64 (native) and x86-64 (qemu). `make test`: 1,485 checks, 0 failures,
+2 skips (the existing ext_ffi_user compiled-only skips).
 
 **Benchmarks** (r7rs-benchmarks, bench/run.sh series `shikra-bignum`, which enables `pi` and
 `chudnovsky`; they stay `unsupported` in the default series; `compiler` stays unsupported for its
