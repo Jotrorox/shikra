@@ -53,7 +53,7 @@ M5 libraries without the optimizer, run on a quiet machine: the reference for wh
 changed), `m4-1` / `m4-1-unsafe` (the structural optimizer, DESIGN.md "M4-1 as built") and
 `m4-2` / `m4-2-unsafe` (the flow analysis, "M4-2 as built"), `m4-3` / `m4-3-unsafe` (the end of
 M4: collector, literals, cold paths; "M4-3 as built");
-RESULTS.md is generated with `SHIKRA_LABEL=m4-3 SHIKRA_UNSAFE_LABEL=m4-3-unsafe sh bench/report.sh`.
+RESULTS.md was generated that way for M4-3; it is now generated with plain `sh bench/report.sh` from the 2026-11-20 series.
 Binary sizes against the spec's targets: `SIZES.md`. The M4-3 series ran with
 `SHIKRA_CACHE_DIR` pointing to a scratch directory. `report.sh` uses the newest
 `shikra`/`shikra-unsafe` CSVs for the Shikra columns and, once those exist, adds

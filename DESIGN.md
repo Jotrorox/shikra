@@ -3308,14 +3308,17 @@ compilers; compiled programs static without libc, hosted for `define-c`):
   times 20), as before; arm64 runs stress at full intervals. The x86-64 run was split into four
   container jobs (per compiler: stress, and all other modes) to fit the time limit.
 - Not available on the development machine at this point, so not re-checked on the final tree:
-  Homebrew GCC on macOS (`tests/run.sh gcc`), `zig cc` and `ld.lld` cross-linking, Gambit.
+  Homebrew GCC on macOS (`tests/run.sh gcc`), `zig cc` and `ld.lld` cross-linking. (Gambit was
+  reinstalled for the benchmark re-run below.)
 
-**Benchmarks** (`bench/RESULTS.md`, r7rs-benchmarks, idle machine, Chez and Shikra back to back):
-53 of 57 benchmarks run (`pi`, `chudnovsky` need `--bignum`; `mbrotZ`, `compiler` need complex
-numbers); geometric mean Shikra/Chez **0.99** (safe), 0.88 (`--unsafe` vs Chez optimize-level 3),
-0.44 of the pre-optimizer baseline's time. Slowest against Chez: ack 5.1x, ctak 3.6x, fibc 3.1x,
-divrec 2.9x, cpstak 2.5x, primes 2.4x. With `--bignum`: pi 0.24 s (Chez 0.21 s), chudnovsky
-0.087 s (Chez 0.109 s). The ratios quoted in earlier sections (0.78-0.79 against Chez) were
-measured while the machine was loaded and the Chez reference had been slowed more than the
-Shikra runs; 0.99 is the comparable figure. The Gambit columns are not comparable (see the note
-at the top of `bench/RESULTS.md`).
+**Benchmarks** (`bench/RESULTS.md`, r7rs-benchmarks; re-recorded 2026-11-20 16:13-16:27 with Chez,
+Gambit and Shikra back to back in one session, Gambit reinstalled for it; Chez and Shikra ran within
+3 % of the morning's idle-machine series, so the conditions match): 53 of 57 benchmarks run (`pi`,
+`chudnovsky` need `--bignum`; `mbrotZ`, `compiler` need complex numbers); geometric mean Shikra/Chez
+**0.99** (safe), Shikra/Gambit **0.88**, 0.94 (`--unsafe` vs Chez optimize-level 3; 0.88 in the
+morning series: between runs unsafe Chez varied by 5 %), 0.92 against Gambit `(not safe)` (51
+common: Gambit unsafe crashes on `graphs` and `matrix`). Slowest against Chez: ack 5.1x, ctak 3.7x,
+fibc 3.0x, divrec 2.8x, primes 2.7x, cpstak 2.6x. With `--bignum`: pi 0.24 s (Chez 0.20 s, Gambit
+0.33 s), chudnovsky 0.11 s (Chez 0.09 s, Gambit 0.15 s). The ratios quoted in earlier sections
+(0.78-0.79 against Chez, 0.71-0.75 against Gambit) were measured while the machine was loaded and
+the references had been slowed more than the Shikra runs; 0.99 and 0.88 are the comparable figures.
