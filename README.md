@@ -133,6 +133,8 @@ every 20 allocations instead of every one; DESIGN.md "Linux integration as built
 
 - [`DESIGN.md`](DESIGN.md): architecture contract, deviations from the spec, "as built" notes
   per milestone.
+- [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md): the spec, statement by statement, against what is
+  built (conforms / deviates / not implemented, with the test or command for each).
 - [`tests/r7rs/EXCLUSIONS.md`](tests/r7rs/EXCLUSIONS.md): R7RS suite tests that do not apply
   (no exact rationals, no complex numbers, ...), each with its reason; the bignum tests run under
   `--bignum` (`tests/r7rs/bignum.scm`).
