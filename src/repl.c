@@ -330,6 +330,7 @@ static void meta(const char *text) {
     if ((size_t)(e - w) == 4 && !strncmp(w, "quit", 4)) rt_exit(0);
     if ((size_t)(e - w) == 6 && !strncmp(w, "expand", 6)) {
         if ((x = read_one(e)) && x != RT_EOF) protect(expand_cb, &x);
+        else if (x) say("usage: ,expand EXPR", NULL, NULL);
         return;
     }
     if ((size_t)(e - w) == 1 && *w == 'c') {

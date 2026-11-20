@@ -1,0 +1,11 @@
+shikra> ,expand
+usage: ,expand EXPR
+shikra> ,c
+usage: ,c NAME
+shikra> ,c (not a name)
+usage: ,c NAME
+shikra> ,frob
+unknown command (commands: ,expand EXPR  ,c NAME  ,quit)
+shikra> (+ 1 2)
+3
+shikra> ,quit
