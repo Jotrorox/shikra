@@ -3279,3 +3279,43 @@ rt_math.c 454, rt_big.c 498. docs/COMPLIANCE.md has the table against the spec's
 **Open.** No hardware shadow-stack check for tier 3 (deviation). Hosted cross builds with plain
 clang need a target sysroot (not tested; zig cc brings glibc). On amd64 the stress passes run at 20×
 intervals only (emulation; see the table).
+
+### Final verification (merged tree, 2026-11-20)
+
+All milestone branches are merged; these are the results for the final code (compiler and
+runtime as of `8a25b8d`; the commits after it change only tests, the benchmark report and docs).
+
+**macOS arm64** (Apple clang): `make test` at `8a25b8d`: 1,566 passed, 0 failed, 2 skipped (the
+documented `ext_ffi_user` interpreter skips).
+
+**Linux** (`tests/linux.sh`, Debian trixie containers, GCC 14.2 and clang 19.1 as program
+compilers; compiled programs static without libc, hosted for `define-c`):
+
+| | GCC | clang |
+|---|---|---|
+| arm64 (native), `all` at `8a25b8d` | 1,563 passed, 7 failed, 2 skipped | 1,570 passed, 0 failed, 2 skipped |
+| arm64, `shape` re-run at `3ce6e3d` | 94 passed, 0 failed | 94 passed, 0 failed |
+| x86-64 (qemu-user), every mode at `3ce6e3d` | 1,570 passed, 0 failed, 2 skipped | 1,570 passed, 0 failed, 2 skipped |
+
+- The 7 arm64/GCC failures were all `nm-has` shape checks added after the previous Linux pass
+  (bignums, the audit's §9.1 tests). Each looked for one named runtime function; GCC inlines
+  single-caller static functions, so the name is absent although the code is linked (verified by
+  listing the binaries' symbols in the container). `3ce6e3d` makes the checks accept a symbol
+  both compilers keep; for file ports GCC leaves no file-specific symbol at all, so that positive
+  check is clang-only (`nm-has-clang`). Only test files changed, so the other arm64/GCC modes
+  were not re-run.
+- x86-64 runs under emulation: GC stress there uses `STRESS_SCALE=20` (every collection interval
+  times 20), as before; arm64 runs stress at full intervals. The x86-64 run was split into four
+  container jobs (per compiler: stress, and all other modes) to fit the time limit.
+- Not available on the development machine at this point, so not re-checked on the final tree:
+  Homebrew GCC on macOS (`tests/run.sh gcc`), `zig cc` and `ld.lld` cross-linking, Gambit.
+
+**Benchmarks** (`bench/RESULTS.md`, r7rs-benchmarks, idle machine, Chez and Shikra back to back):
+53 of 57 benchmarks run (`pi`, `chudnovsky` need `--bignum`; `mbrotZ`, `compiler` need complex
+numbers); geometric mean Shikra/Chez **0.99** (safe), 0.88 (`--unsafe` vs Chez optimize-level 3),
+0.44 of the pre-optimizer baseline's time. Slowest against Chez: ack 5.1x, ctak 3.6x, fibc 3.1x,
+divrec 2.9x, cpstak 2.5x, primes 2.4x. With `--bignum`: pi 0.24 s (Chez 0.21 s), chudnovsky
+0.087 s (Chez 0.109 s). The ratios quoted in earlier sections (0.78-0.79 against Chez) were
+measured while the machine was loaded and the Chez reference had been slowed more than the
+Shikra runs; 0.99 is the comparable figure. The Gambit columns are not comparable (see the note
+at the top of `bench/RESULTS.md`).
