@@ -2986,7 +2986,9 @@ register-file convention) passes ext_ffi and mixed integer/double signatures (`l
 Linux, `shikra size`'s mode line for a static, a `--libc` and a `define-c` build; the warning check
 of generated C compiles hosted programs without `SHIKRA_NOLIBC`.
 
-**Bugs found and fixed** (all only visible on Linux or with non-Apple compilers):
+**Bugs found and fixed** (all only visible on Linux or with non-Apple compilers; all but the popcount
+were fixed in commits 92036fe and 11dec67 and are described from them; the `zig cc` fix could not be
+re-checked here, as this host has no zig):
 - *Every clang build on Linux failed*: M4-3's driver passed `-Xclang -fno-split-cold-code` to every
   compiler named `clang*`; upstream clang rejects it. Now only for Apple clang (`cc`/`clang`
   resolving to /usr/bin, Xcode or the Command Line Tools) and a Darwin target (`apple_clang` in main.c).
