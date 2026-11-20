@@ -96,6 +96,20 @@ into an overflow test:
 | 834–839 | `(let ((a (- (expt 2 1000) 1)) (b (inexact (expt 2 1000))) (c (+ (expt 2 1000) 1))) (test #t (if (and (= a b) (= b c)) (= a c) #t)))` | 2^1000 is a bignum (§3.2). The comment block above it (lines 825–833) was removed with it. |
 | 849–857 | `(define single-float-epsilon ...)` `(let* ((a (/ 10.0 single-float-epsilon)) (j (exact a))) (test #t ...))` | `(exact a)` with a ≈ 1.1e-15 needs an exact rational result (§3.2 "No exact rationals"). The helper definition was used only here and was removed with the test. |
 
+**Run under `--bignum`.** The seven bignum tests above (lines 215–233 and
+834–839, not the rational one at 849–857) are restored verbatim, in upstream
+order, in `bignum.scm`, which `tests/run.sh` runs with `--bignum` in both
+engines and every compiled mode (pinned in `expected/bignum.compiled` and
+`expected/bignum.interp`: `7 tests, 7 passed, 0 failed`). The other files
+also run once with `--bignum` in both engines; all pass unchanged except
+three `base.scm` tests, pinned in `expected/base.{compiled,interp}.bignum`:
+
+| line | test | result under `--bignum` | why |
+|-----:|------|-------------------------|-----|
+| 922 | `(test-error (/ -4611686018427387904 -1))` (rewritten) | `4611686018427387904` | The rewrite asserts the fixnum-overflow error of the default mode; with bignums the result is upstream's answer. |
+| 923 | `(test-error (quotient -4611686018427387904 -1))` (rewritten) | `4611686018427387904` | Same. |
+| 2460 | `(test #f (string->number "#x4000000000000001/3e1"))` | `4644195386130300.0` | Without bignums the numerator 2^62+1 does not fit, so the default mode gives `#f` like upstream. With bignums it fits, and the non-integral ratio is read as the nearest flonum (§3.2 "no exact rationals"), the same rule that makes `(string->number "#x10/3")` 5.333…; the full-tower answer would be the exact 4611686018427387905/993. |
+
 No complex numbers: `(scheme complex)` is omitted, and complex literals have
 no meaning in Shikra (§3, §3.1 table, §3.4 "never sees ... exact-complex"):
 

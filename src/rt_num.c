@@ -21,30 +21,52 @@ static uint64_t num_dbits(double d) { union { uint64_t u; double d; } x; x.d = d
 
 static double num_d(obj x, const char *who) {
     if (rt_is_fix(x)) return (double)RT_FIXVAL(x);
+#ifdef RT_HAVE_BIG
+    if (rt_is_big(x)) return rt_big_to_double(x);
+#endif
     RT_CHECK(rt_is_flo(x), who, "number", x);
     (void)who;
     return RT_FLO(x);
 }
 static RT_NORETURN void num_overflow(const char *who, obj a, obj b) { rt_fx_overflow(who, a, b); }
 static obj num_fix(intptr_t v, const char *who, obj a, obj b) {
+#ifdef RT_HAVE_BIG
+    if ((v < RT_FIX_MIN || v > RT_FIX_MAX) && RT_BIG_ON) return rt_big_fromi(v);
+#endif
     if (v < RT_FIX_MIN || v > RT_FIX_MAX) num_overflow(who, a, b);
     return RT_FIX(v);
 }
+/* --bignum: both operands exact (bignums exist only when promotion is on) */
+#ifdef RT_HAVE_BIG
+#define NUM_BIG2(a, b) (RT_BIG_ON && rt_is_exact(a) && rt_is_exact(b))
+#endif
 
 /* ---- arithmetic (slow paths of the inline rt_add & co. in rt.h) ---- */
 RT_FN obj rt_add2(obj a, obj b) {
+#ifdef RT_HAVE_BIG
+    if (NUM_BIG2(a, b)) return rt_big_add(a, b);
+#endif
     if (rt_is_fix(a) && rt_is_fix(b)) num_overflow("+", a, b);
     return rt_make_flonum(num_d(a, "+") + num_d(b, "+"));
 }
 RT_FN obj rt_sub2(obj a, obj b) {
+#ifdef RT_HAVE_BIG
+    if (NUM_BIG2(a, b)) return rt_big_sub(a, b);
+#endif
     if (rt_is_fix(a) && rt_is_fix(b)) num_overflow("-", a, b);
     return rt_make_flonum(num_d(a, "-") - num_d(b, "-"));
 }
 RT_FN obj rt_mul2(obj a, obj b) {
+#ifdef RT_HAVE_BIG
+    if (NUM_BIG2(a, b)) return rt_big_mul(a, b);
+#endif
     if (rt_is_fix(a) && rt_is_fix(b)) num_overflow("*", a, b);
     return rt_make_flonum(num_d(a, "*") * num_d(b, "*"));
 }
 RT_FN obj rt_div(obj a, obj b) {
+#ifdef RT_HAVE_BIG
+    if (NUM_BIG2(a, b) && (rt_is_big(a) || rt_is_big(b))) return rt_big_div(a, b);
+#endif
     if (rt_is_fix(a) && rt_is_fix(b)) {
         intptr_t x = RT_FIXVAL(a), y = RT_FIXVAL(b);
         if (y == 0) rt_error("/", "division by zero", rt_cons(a, rt_cons(b, RT_NIL)));
@@ -67,6 +89,14 @@ static int num_cmp_id(intptr_t i, double d) {
 RT_FN int rt_numcmp(obj a, obj b, const char *who) {
     double x, y;
     if (rt_is_fix(a) && rt_is_fix(b)) return (intptr_t)a < (intptr_t)b ? -1 : (intptr_t)a > (intptr_t)b;
+#ifdef RT_HAVE_BIG /* exact: transitive like the fixnum/flonum comparison */
+    if (rt_is_big(a) || rt_is_big(b)) {
+        if (rt_is_exact(a) && rt_is_exact(b)) return rt_big_cmp(a, b);
+        if (rt_is_big(a)) return rt_big_cmpd(a, num_d(b, who));
+        x = num_d(a, who);
+        return x != x ? 2 : -rt_big_cmpd(b, x);
+    }
+#endif
     x = num_d(a, who);
     y = num_d(b, who);
     if (x != x || y != y) return 2;
@@ -96,6 +126,9 @@ static double num_round(double x) { /* round half to even */
 static obj num_unary(obj x, int op, const char *who) {
     double d, r;
     if (rt_is_fix(x)) return x;
+#ifdef RT_HAVE_BIG
+    if (rt_is_big(x)) return x;
+#endif
     d = num_d(x, who);
     switch (op) {
     case 0: r = num_floor(d); break;
@@ -121,6 +154,11 @@ static intptr_t num_int(obj x, const char *who, int *inexact) {
 }
 static obj num_idiv(obj a, obj b, int op, const char *who) {
     int inexact = 0;
+#ifdef RT_HAVE_BIG /* a bignum, or an integral flonum beyond the fixnum range */
+    if (RT_BIG_ON && (!rt_is_fix(a) || !rt_is_fix(b)) &&
+        (rt_is_big(a) || rt_is_big(b) || !(rt_flabs(num_d(a, who)) < NUM_2P62 && rt_flabs(num_d(b, who)) < NUM_2P62)))
+        return rt_big_idiv(a, b, op, who);
+#endif
     intptr_t x = num_int(a, who, &inexact), y = num_int(b, who, &inexact), r;
     if (y == 0) rt_error(who, "division by zero", rt_cons(a, rt_cons(b, RT_NIL)));
     switch (op) {
@@ -139,13 +177,22 @@ RT_FN obj rt_floor_quotient(obj a, obj b) { return num_idiv(a, b, 3, "floor-quot
 /* Negation and abs: the most negative fixnum has no fixnum opposite. */
 static obj num_neg(obj x, const char *who) {
     if (rt_is_fix(x)) {
+#ifdef RT_HAVE_BIG
+        if (RT_FIXVAL(x) == RT_FIX_MIN && RT_BIG_ON) return rt_big_fromi(-RT_FIX_MIN);
+#endif
         if (RT_FIXVAL(x) == RT_FIX_MIN) rt_error(who, "fixnum overflow", rt_cons(x, RT_NIL));
         return RT_FIX(-RT_FIXVAL(x));
     }
+#ifdef RT_HAVE_BIG
+    if (rt_is_big(x)) return rt_big_neg(x);
+#endif
     return rt_make_flonum(-num_d(x, who));
 }
 RT_FN obj rt_neg(obj x) { return num_neg(x, "-"); }
 RT_FN obj rt_abs(obj x) {
+#ifdef RT_HAVE_BIG
+    if (rt_is_big(x)) return RT_HFLAGS(x) & RT_F_NEG ? rt_big_neg(x) : x;
+#endif
     if (rt_is_fix(x) ? RT_FIXVAL(x) >= 0 : (num_dbits(num_d(x, "abs")) >> 63) == 0) return x;
     return num_neg(x, "abs");
 }
@@ -154,6 +201,9 @@ RT_FN obj rt_abs(obj x) {
  * gives 1/b^-e, exact when that divides, like /; anything inexact goes to pow. */
 RT_FN obj rt_expt(obj a, obj b) {
     double x = num_d(a, "expt"), y = num_d(b, "expt");
+#ifdef RT_HAVE_BIG
+    if (NUM_BIG2(a, b)) return rt_big_expt(a, b);
+#endif
     if (rt_is_fix(a) && rt_is_fix(b)) {
         intptr_t base = RT_FIXVAL(a), e = RT_FIXVAL(b), r = 1, ovf = 0;
         if (e < 0) {
@@ -175,26 +225,49 @@ RT_FN obj rt_expt(obj a, obj b) {
 RT_FN obj rt_exact(obj x) {
     double d;
     if (rt_is_fix(x)) return x;
+#ifdef RT_HAVE_BIG
+    if (rt_is_big(x)) return x;
+#endif
     d = num_d(x, "exact");
+#ifdef RT_HAVE_BIG
+    if (RT_BIG_ON && num_trunc(d) == d && d - d == 0) return rt_big_from_double(d);
+#endif
     if (num_trunc(d) != d || !(d >= -NUM_2P62 && d < NUM_2P62)) rt_error("exact", "no exact representation", rt_cons(x, RT_NIL));
     return RT_FIX((intptr_t)d);
 }
 RT_FN obj rt_inexact(obj x) { return rt_is_flo(x) ? x : rt_make_flonum(num_d(x, "inexact")); }
-RT_FN obj rt_integer_p(obj x) { return RT_BOOL(rt_is_fix(x) || (rt_is_flo(x) && num_trunc(RT_FLO(x)) == RT_FLO(x) && RT_FLO(x) - RT_FLO(x) == 0)); }
+RT_FN obj rt_integer_p(obj x) {
+#ifdef RT_HAVE_BIG
+    if (rt_is_big(x)) return RT_TRUE;
+#endif
+    return RT_BOOL(rt_is_fix(x) || (rt_is_flo(x) && num_trunc(RT_FLO(x)) == RT_FLO(x) && RT_FLO(x) - RT_FLO(x) == 0)); }
+#ifdef RT_HAVE_BIG /* a bignum is finite even when its nearest double is not */
+#define NUM_FINITE_BIG(x, r) if (rt_is_big(x)) return r;
+#else
+#define NUM_FINITE_BIG(x, r)
+#endif
 RT_FN obj rt_nan_p(obj x) { double d = num_d(x, "nan?"); return RT_BOOL(d != d); }
-RT_FN obj rt_infinite_p(obj x) { double d = num_d(x, "infinite?"); return RT_BOOL(d == NUM_INF || d == -NUM_INF); }
-RT_FN obj rt_finite_p(obj x) { double d = num_d(x, "finite?"); return RT_BOOL(d - d == 0); }
+RT_FN obj rt_infinite_p(obj x) { NUM_FINITE_BIG(x, RT_FALSE) double d = num_d(x, "infinite?"); return RT_BOOL(d == NUM_INF || d == -NUM_INF); }
+RT_FN obj rt_finite_p(obj x) { NUM_FINITE_BIG(x, RT_TRUE) double d = num_d(x, "finite?"); return RT_BOOL(d - d == 0); }
 
 /* ---- (scheme inexact): through the platform layer (rt_sys.c) ---- */
 #define NUM_MATH1(name, who, f) RT_FN obj name(obj x) { return rt_make_flonum(f(num_d(x, who))); }
 NUM_MATH1(rt_exp, "exp", rt_sys_exp)
+#ifdef RT_HAVE_BIG /* beyond the double range: from the leading bits and the bit length */
+RT_FN obj rt_log(obj x) { return rt_make_flonum(rt_is_big(x) ? rt_big_log(x) : rt_sys_log(num_d(x, "log"))); }
+#else
 NUM_MATH1(rt_log, "log", rt_sys_log)
+#endif
 NUM_MATH1(rt_sin, "sin", rt_sys_sin)
 NUM_MATH1(rt_cos, "cos", rt_sys_cos)
 NUM_MATH1(rt_tan, "tan", rt_sys_tan)
 NUM_MATH1(rt_asin, "asin", rt_sys_asin)
 NUM_MATH1(rt_acos, "acos", rt_sys_acos)
+#ifdef RT_HAVE_BIG
+RT_FN obj rt_sqrt(obj x) { return rt_make_flonum(rt_is_big(x) ? rt_big_sqrt(x) : rt_sys_sqrt(num_d(x, "sqrt"))); }
+#else
 NUM_MATH1(rt_sqrt, "sqrt", rt_sys_sqrt)
+#endif
 RT_FN obj rt_atan(obj x) { return rt_make_flonum(rt_sys_atan2(num_d(x, "atan"), 1.0)); }
 RT_FN obj rt_atan2(obj y, obj x) { return rt_make_flonum(rt_sys_atan2(num_d(y, "atan"), num_d(x, "atan"))); }
 
@@ -349,6 +422,9 @@ RT_FN obj rt_number_to_string(obj x, obj radix) {
     size_t n;
     intptr_t r = rt_is_fix(radix) ? RT_FIXVAL(radix) : 0;
     if (r != 2 && r != 8 && r != 10 && r != 16) rt_type_error("number->string", "radix 2, 8, 10 or 16", radix);
+#ifdef RT_HAVE_BIG
+    if (rt_is_big(x)) return rt_big_to_string(x, (int)r);
+#endif
     if (rt_is_fix(x)) {
         intptr_t v = RT_FIXVAL(x);
         uintptr_t u = v < 0 ? (uintptr_t)0 - (uintptr_t)v : (uintptr_t)v;
@@ -438,12 +514,35 @@ static const char *num_digits(const char *s, const char *e, int radix, int frac,
     return s;
 }
 
+#ifdef RT_HAVE_BIG
+/* --bignum: an exact integer written with a decimal point or an exponent (#e1e30, #e1.5e3): the
+ * digits d0..d1 and f0..f1 times 10^ex, exactly; -2 unless that is an integer (no rationals), or
+ * when the exponent exceeds 100,000 (an implementation limit). */
+static int num_bigdec(const char *d0, const char *d1, const char *f0, const char *f1, long ex, int neg, obj *out) {
+    char *b = (char *)rt_alloc_raw((size_t)(d1 - d0) + (size_t)(f1 - f0) + 1), *q = b;
+    long k = ex - (long)(f1 - f0);
+    for (; d0 < d1; d0++) *q++ = *d0;
+    for (; f0 < f1; f0++) *q++ = *f0;
+    while (q > b && q[-1] == '0' && k < 0) q--, k++;
+    while (q > b && *b == '0') b++;
+    if (q == b) { *out = RT_FIX(0); return 0; }
+    if (k < 0 || k > 100000) return -2;
+    *out = rt_mul(rt_big_parse(b, q, 10, neg), rt_expt(RT_FIX(10), RT_FIX(k)));
+    return 0;
+}
+#endif
 static int num_real(const char *s, const char *e, int radix, int exactness, obj *out) {
     char dig[NUM_MAXDIG], den[NUM_MAXDIG];
     int neg = 0, sign = 0, nd = 0, ndig = 0, inexact = 0, ovf = 0, sticky = 0;
     long dexp = 0, ex = 0;
     uint64_t mant = 0;
     double v;
+#ifdef RT_HAVE_BIG /* where the digits are (bignum literals) */
+    const char *d0, *d1, *f0 = 0, *f1 = 0;
+#define NUM_AT(v, x) (v = (x))
+#else
+#define NUM_AT(v, x) x /* the same tokens as without bignums */
+#endif
     if (s < e && (*s == '+' || *s == '-')) { neg = *s == '-'; sign = 1; s++; }
     if (sign && e - s == 5 && (num_ci(s, "inf.0") || num_ci(s, "nan.0"))) {
         if (exactness == 'e') return -2;
@@ -451,10 +550,10 @@ static int num_real(const char *s, const char *e, int radix, int exactness, obj 
         *out = rt_make_flonum(neg ? -v : v);
         return 0;
     }
-    s = num_digits(s, e, radix, 0, dig, &nd, &dexp, &sticky, &mant, &ovf, &ndig);
+    s = NUM_AT(d1, num_digits(NUM_AT(d0, s), e, radix, 0, dig, &nd, &dexp, &sticky, &mant, &ovf, &ndig));
     if (radix == 10 && s < e && *s == '.') {
         inexact = 1;
-        s = num_digits(s + 1, e, 10, 1, dig, &nd, &dexp, &sticky, &mant, &ovf, &ndig);
+        s = NUM_AT(f1, num_digits(NUM_AT(f0, s + 1), e, 10, 1, dig, &nd, &dexp, &sticky, &mant, &ovf, &ndig));
     }
     if (ndig == 0) return -1;
     if (radix == 10 && s < e && ((*s | 0x20) == 'e' || (*s | 0x20) == 's' || (*s | 0x20) == 'f' ||
@@ -475,6 +574,15 @@ static int num_real(const char *s, const char *e, int radix, int exactness, obj 
         if (!ndd || s != e) return -1;
         if (!nden) return -2;
         if (exactness != 'i') { /* both parts must be exact integers Shikra can represent */
+#ifdef RT_HAVE_BIG /* --bignum: they are; exact when it divides, else the nearest double (no rationals) */
+            if (RT_BIG_ON && (ovf || dovf || mant > (uint64_t)RT_FIX_MAX + (uint64_t)neg || dm > (uint64_t)RT_FIX_MAX)) {
+                const char *n0 = d1 + 1;
+                obj q = rt_div(rt_big_parse(d0, d1, radix, neg), rt_big_parse(n0, s, radix, 0));
+                if (exactness == 'e' && !rt_is_exact(q)) return -2;
+                *out = q;
+                return 0;
+            }
+#endif
             if (ovf || dovf || mant > (uint64_t)RT_FIX_MAX + (uint64_t)neg || dm > (uint64_t)RT_FIX_MAX) return -2;
             if (mant % dm == 0) { mant /= dm; goto exact; }
         }
@@ -487,6 +595,9 @@ static int num_real(const char *s, const char *e, int radix, int exactness, obj 
     if (!inexact && exactness != 'i') goto exact;
     v = ovf == 2 ? NUM_INF : num_convert(dig, nd, 0, 0, radix, dexp + ex, sticky);
     if (exactness == 'e') {
+#ifdef RT_HAVE_BIG
+        if (RT_BIG_ON) return num_bigdec(d0, d1, f0, f1, ex, neg, out);
+#endif
         if (num_trunc(v) != v || !(v < NUM_2P62)) return -2;
         mant = (uint64_t)v;
         ovf = 0;
@@ -495,6 +606,9 @@ static int num_real(const char *s, const char *e, int radix, int exactness, obj 
     *out = rt_make_flonum(neg ? -v : v);
     return 0;
 exact:
+#ifdef RT_HAVE_BIG /* only the integer syntax reaches here with a value beyond the fixnum range */
+    if (RT_BIG_ON && (ovf || mant > (uint64_t)RT_FIX_MAX + (uint64_t)neg)) { *out = rt_big_parse(d0, d1, radix, neg); return 0; }
+#endif
     if (ovf || mant > (uint64_t)RT_FIX_MAX + (uint64_t)neg) return -2;
     *out = RT_FIX(neg ? (intptr_t)(0 - mant) : (intptr_t)mant);
     return 0;

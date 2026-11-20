@@ -452,6 +452,9 @@ static void io_print_atom(obj x, obj port, int write) {
 #ifndef RT_NO_FLONUMS /* no flonum can exist in this program (analysis): no float printer */
     case RT_T_FLONUM: rt_port_write(port, buf, rt_format_double(RT_FLO(x), buf)); return;
 #endif
+#ifdef RT_HAVE_BIG
+    case RT_T_BIGNUM: x = rt_big_to_string(x, 10); rt_port_write(port, RT_STR(x)->buf, (size_t)RT_STR(x)->bytes); return;
+#endif
     case RT_T_STRING:
         if (write) io_escaped(port, RT_STR(x)->buf, RT_STR(x)->bytes, '"');
         else rt_port_write(port, RT_STR(x)->buf, (size_t)RT_STR(x)->bytes);

@@ -1386,6 +1386,7 @@ ir_program *ir_build(library *order, const ir_opts *o) {
         int k;
         normalize_program(order);
         prog->unsafe = o->unsafe;
+        prog->bignum = o->bignum;
         prog->warn = o->warn;
         ir_optimize(prog);
         fails = ir_tier1_failures(prog);

@@ -34,7 +34,8 @@ enum {
     T_PCELL0 = 1 << 19, T_PCELL1 = 1 << 20, T_PCELL2 = 1 << 21, T_RTD = 1 << 22, T_UNDEF = 1 << 23,
     T_OTHER = 1 << 24, /* boxes, promises, error objects, values objects, markers */
     T_F64 = 1 << 25,   /* f64vector (shikra f64vector) */
-    T_ANY = (1 << 26) - 1, T_TOP = T_ANY & ~T_UNDEF,
+    T_BIG = 1 << 26,   /* bignum (--bignum only: an exact integer outside the fixnum range) */
+    T_ANY = (1 << 27) - 1, T_TOP = T_ANY & ~T_UNDEF,
     T_BOOL = T_TRUE | T_FALSE, T_NUM = T_FIX | T_FLO, T_PCELL = T_PCELL0 | T_PCELL1 | T_PCELL2,
     T_STDPORT = T_STDIN | T_STDOUT | T_STDERR, T_PORTS = T_PORT | T_STDPORT
 };
@@ -179,6 +180,7 @@ typedef struct {
     ir_lambda *travel;     /* (shikra dynamic) travel-to!: tier-2 continuations' winders walk, or NULL */
     int opt;               /* OPT_* */
     int unsafe;            /* --unsafe (spec §3.3) */
+    int bignum;            /* --bignum: + - * on fixnums may give bignums (T_BIG) */
     long growth;           /* inlining budget left (nodes), across the optimizer's runs */
     int nopt;              /* runs of the optimizer so far */
     int no_handlers;       /* no exception handler can be installed: errors print and exit */
@@ -194,6 +196,7 @@ typedef struct {
     int warn;              /* report unused definitions and imports (warnings) */
     const char **keep;     /* program definitions to keep as functions (REPL ,c), NULL-terminated */
     int unsafe;            /* --unsafe */
+    int bignum;            /* --bignum */
 } ir_opts;
 
 /* Middle end (normalize.c): tree shaking, normalization to IR, optimisation (opt.c),
@@ -246,6 +249,6 @@ int ir_ffi_type(obj sym);              /* FT_*, -1 if unknown */
 int ir_ccall_type(ir_node *p, int i);  /* FT_* of C argument i (i = -1: the result) */
 
 /* Back end (emit.c): the complete C translation unit (DESIGN.md §3). */
-typedef struct { int unsafe, debug, gc_bump, unicode_full, gc_stress, no_musttail; } emit_opts;
+typedef struct { int unsafe, debug, gc_bump, unicode_full, gc_stress, no_musttail, bignum; } emit_opts;
 void emit_c(ir_program *p, const emit_opts *o, sbuf *out);
 #endif

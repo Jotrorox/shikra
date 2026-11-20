@@ -25,6 +25,7 @@ static sbuf pairs;         /* initialisers of rt_lit_pairs[] (all literal pairs,
 static int nlits, nsyms, npairs;
 static pmap litmap;        /* heap literal datum -> C expression */
 static int need_ext;       /* the program uses an extension library: RT_EXT, rt_ext.c (spec §10) */
+static int big_;           /* --bignum: RT_BIGNUM, rt_big.c (DESIGN.md "Bignums as built") */
 static const char *dbl_lit(double d);
 static htab symmap;        /* symbol name -> C expression */
 static sbuf symtab;        /* initialiser list of static symbols */
@@ -185,6 +186,12 @@ static const char *lit(obj x) {
             sb_puts(&linit, "}}");
         }
         lit_shared("b:", RT_PTR(x, rt_bytevector)->b, (size_t)n, r);
+    } else if (rt_is_type(x, RT_T_BIGNUM)) { /* --bignum: the limbs, static (bignums are immutable) */
+        n = RT_HLEN(x) >> 2;
+        r = lit_member(fmt("struct { uintptr_t hdr; uint32_t d[%ld]; }", (long)n));
+        sb_printf(&linit, "{RT_HDR(RT_T_BIGNUM, %s, %ld), {", RT_HFLAGS(x) & RT_F_NEG ? "RT_F_NEG" : "0", (long)(4 * n));
+        for (i = 0; i < n; i++) sb_printf(&linit, "%s0x%lxu", i ? ", " : "", (unsigned long)RT_PTR(x, rt_bignum)->d[i]);
+        sb_puts(&linit, "}}");
     } else if (rt_is_type(x, RT_T_F64VECTOR)) { /* (shikra f64vector) literal: read-only raw doubles */
         n = RT_HLEN(x) >> 3;
         need_ext = 1;
@@ -275,9 +282,10 @@ static const char *atom_as(ir_node *n, int rep) {
 }
 /* A proven number as a double (spec §6.2: unboxed). */
 static int only(int t, int m) { return t && !(t & ~m); }
+#define NUMT (T_NUM | (big_ ? T_BIG : 0)) /* a number whose double rt_num_dbl gives (--bignum: bignums too) */
 static const char *as_dbl(ir_node *n) {
     int t = ir_atom_type(n);
-    if (n->kind == IR_CONST || only(t, T_FLO)) return atom_as(n, R_DBL);
+    if ((n->kind == IR_CONST && !rt_is_big(n->u.value)) || only(t, T_FLO)) return atom_as(n, R_DBL);
     if (only(t, T_FIX)) return fmt("(double)RT_FIXVAL(%s)", atom_as(n, R_FIX));
     return fmt("rt_num_dbl(%s)", atom_as(n, R_OBJ));
 }
@@ -535,7 +543,7 @@ static const char *ext_special(ir_node *r, int *erep) {
     case PI_rt_f64vector_set: {
         ir_node *x = r->u.prim.args[2];
         A = f64a(r, 0, w), B = fxa(r, 1, w);
-        C = only(ir_atom_type(x), T_NUM) ? as_dbl(x) : fmt("rt_f64num(%s, %s)", atom_as(x, R_OBJ), w);
+        C = only(ir_atom_type(x), NUMT) ? as_dbl(x) : fmt("rt_f64num(%s, %s)", atom_as(x, R_OBJ), w);
         e = fmt("rt_f64set(%s, %s, %s)", A, B, C);
         break;
     }
@@ -588,7 +596,7 @@ static const char *ccall(ir_node *r, int *erep) {
             case FT_INT: sb_printf(&c, "rt_ffi_int(%s, %s)", x, who); break;
             case FT_LONG: sb_printf(&c, ok ? "(long)RT_FIXVAL(%s)" : "rt_ffi_long(%s, %s)", ok ? atom_as(a, R_FIX) : x, who); break;
             case FT_DOUBLE: case FT_FLOAT:
-                if (ok || only(ir_atom_type(a), T_NUM)) sb_printf(&c, "%s%s", t == FT_FLOAT ? "(float)" : "", as_dbl(a));
+                if (ok || only(ir_atom_type(a), NUMT)) sb_printf(&c, "%s%s", t == FT_FLOAT ? "(float)" : "", as_dbl(a));
                 else sb_printf(&c, "%srt_ffi_dbl(%s, %s)", t == FT_FLOAT ? "(float)" : "", x, who);
                 break;
             case FT_BOOL: sb_printf(&c, ok ? "(%s == RT_TRUE)" : "rt_ffi_bool(%s, %s)", x, who); break;
@@ -619,7 +627,7 @@ static const char *special(ir_node *r, int *erep) {
     ir_node **a = r->u.prim.args;
     int op = r->u.prim.op, sp = r->spec, n = r->u.prim.n;
     int t0 = n > 0 ? ir_atom_type(a[0]) : 0, t1 = n > 1 ? ir_atom_type(a[1]) : 0;
-    int ff = only(t0, T_FIX) && only(t1, T_FIX), fl = only(t0, T_NUM) && only(t1, T_NUM) && ((t0 | t1) & T_FLO) && (only(t0, T_FLO) || only(t1, T_FLO));
+    int ff = only(t0, T_FIX) && only(t1, T_FIX), fl = only(t0, NUMT) && only(t1, NUMT) && ((t0 | t1) & T_FLO) && (only(t0, T_FLO) || only(t1, T_FLO));
     int fcmp = (only(t0, T_FLO) && only(t1, T_FLO)) || (only(t0, T_FLO) && small_fix(a[1 < n ? 1 : 0])) || (only(t1, T_FLO) && small_fix(a[0]));
     static const char *const ops[] = {"+", "-", "*", "/", "<", ">", "<=", ">=", "=="};
     int k = op == PI_rt_add ? 0 : op == PI_rt_sub ? 1 : op == PI_rt_mul ? 2 : op == PI_rt_div ? 3 : op == PI_rt_lt ? 4 : op == PI_rt_gt ? 5
@@ -629,25 +637,47 @@ static const char *special(ir_node *r, int *erep) {
         *erep = R_FIX;
         if (sp & S_NOOVF) return k == 2 ? fmt("RT_FIXVAL(%s) * %s", atom_as(a[0], R_FIX), atom_as(a[1], R_FIX))
                                         : fmt("%s %s %s", atom_as(a[0], R_FIX), ops[k], atom_as(a[1], R_FIX));
+        if (big_) { /* overflow promotes: the slow path makes a bignum */
+            *erep = R_OBJ;
+            return fmt("rt_fx%sb(%s, %s)", k == 0 ? "add" : k == 1 ? "sub" : "mul", atom_as(a[0], R_FIX), atom_as(a[1], R_FIX));
+        }
         return fmt("rt_fx%s(%s, %s)", k == 0 ? "add" : k == 1 ? "sub" : "mul", atom_as(a[0], R_FIX), atom_as(a[1], R_FIX));
     }
     if (k >= 0 && k <= 3 && fl) { *erep = R_DBL; return fmt("%s %s %s", as_dbl(a[0]), ops[k], as_dbl(a[1])); }
     if (k >= 4 && ff) return fmt("RT_BOOL(%s %s %s)", atom_as(a[0], R_FIX), ops[k], atom_as(a[1], R_FIX));
     if (k >= 4 && fcmp) return fmt("RT_BOOL(%s %s %s)", as_dbl(a[0]), ops[k], as_dbl(a[1]));
+    if (k >= 4 && big_ && ((only(t0, T_FIX) && only(t1, T_FIX | T_BIG)) || (only(t1, T_FIX) && only(t0, T_FIX | T_BIG)))) {
+        /* --bignum, a fixnum against a fixnum-or-bignum: a bignum never equals a fixnum (normalised);
+         * the order of two fixnums is that of their tagged words, else the generic comparison */
+        const char *x = atom_as(a[0], R_OBJ), *y = atom_as(a[1], R_OBJ), *g = only(t0, T_FIX) ? y : x;
+        static const char *const fn[] = {"rt_lt", "rt_gt", "rt_num_le", "rt_num_ge"};
+        if (k == 8) return fmt("RT_BOOL(%s == %s)", x, y);
+        return fmt("(rt_is_fix(%s) ? RT_BOOL((intptr_t)%s %s (intptr_t)%s) : %s(%s, %s))", g, x, ops[k], y, fn[k - 4], x, y);
+    }
     switch (op) {
     case PI_rt_quotient: case PI_rt_remainder: case PI_rt_modulo:
+        if (big_ && !ff && only(t0, T_FIX | T_BIG) && a[1]->kind == IR_CONST && rt_is_fix(a[1]->u.value) && a[1]->u.value != RT_FIX(0) &&
+            (op != PI_rt_quotient || a[1]->u.value != RT_FIX(-1))) { /* --bignum: a fixnum-or-bignum by a constant */
+            const char *x = atom_as(a[0], R_OBJ), *y = atom_as(a[1], R_OBJ);
+            return fmt("(rt_is_fix(%s) ? RT_O(rt_fx%s((intptr_t)%s, (intptr_t)%s)) : rt_%s(%s, %s))", x, op == PI_rt_quotient ? "quo" : op == PI_rt_remainder ? "rem" : "mod",
+                       x, y, op == PI_rt_quotient ? "quotient" : op == PI_rt_remainder ? "remainder" : "modulo", x, y);
+        }
         if (!ff) return NULL;
         *erep = R_FIX;
+        if (big_ && op == PI_rt_quotient && !(a[1]->kind == IR_CONST && a[1]->u.value != RT_FIX(-1))) {
+            *erep = R_OBJ; /* fixnum-least / -1 gives a bignum */
+            return fmt("rt_fxquob(%s, %s)", atom_as(a[0], R_FIX), atom_as(a[1], R_FIX));
+        }
         return fmt("rt_fx%s(%s, %s)", op == PI_rt_quotient ? "quo" : op == PI_rt_remainder ? "rem" : "mod", atom_as(a[0], R_FIX), atom_as(a[1], R_FIX));
     case PI_rt_neg: if (only(t0, T_FLO)) { *erep = R_DBL; return fmt("-%s", as_dbl(a[0])); } return NULL;
     case PI_rt_abs: if (only(t0, T_FLO)) { *erep = R_DBL; return fmt("rt_flabs(%s)", as_dbl(a[0])); } return NULL;
     case PI_rt_sqrt: case PI_rt_exp: case PI_rt_log: case PI_rt_sin: case PI_rt_cos: case PI_rt_tan: case PI_rt_asin: case PI_rt_acos:
-        if (!only(t0, T_NUM)) return NULL;
+        if (!only(t0, T_NUM)) return NULL; /* --bignum: a bignum goes the generic way (rt_big_log, rt_big_sqrt) */
         *erep = R_DBL;
         return fmt("rt_sys_%s(%s)", prim_table[op].who, as_dbl(a[0]));
-    case PI_rt_atan: if (!only(t0, T_NUM)) return NULL; *erep = R_DBL; return fmt("rt_sys_atan2(%s, 1.0)", as_dbl(a[0]));
-    case PI_rt_atan2: if (!only(t0, T_NUM) || !only(t1, T_NUM)) return NULL; *erep = R_DBL; return fmt("rt_sys_atan2(%s, %s)", as_dbl(a[0]), as_dbl(a[1]));
-    case PI_rt_inexact: if (!only(t0, T_NUM)) return NULL; *erep = R_DBL; return as_dbl(a[0]);
+    case PI_rt_atan: if (!only(t0, NUMT)) return NULL; *erep = R_DBL; return fmt("rt_sys_atan2(%s, 1.0)", as_dbl(a[0]));
+    case PI_rt_atan2: if (!only(t0, NUMT) || !only(t1, NUMT)) return NULL; *erep = R_DBL; return fmt("rt_sys_atan2(%s, %s)", as_dbl(a[0]), as_dbl(a[1]));
+    case PI_rt_inexact: if (!only(t0, NUMT)) return NULL; *erep = R_DBL; return as_dbl(a[0]);
     case PI_rt_exact: case PI_rt_floor: case PI_rt_ceiling: case PI_rt_round: case PI_rt_truncate:
         if (!only(t0, T_FIX)) return NULL;
         *erep = R_FIX;
@@ -683,7 +713,7 @@ static const char *special(ir_node *r, int *erep) {
     case PI_rt_box_ref: return fmt("RT_VEC(%s)[0]", atom_as(a[0], R_OBJ)); /* boxes are the compiler's own */
     case PI_rt_box_set: return fmt("(RT_VEC(%s)[0] = %s, RT_UNSPEC)", atom_as(a[0], R_OBJ), atom_as(a[1], R_OBJ));
     case PI_rt_eqv_p: case PI_rt_equal_p:
-        if (op == PI_rt_eqv_p ? !(t0 & T_FLO) || !(t1 & T_FLO) : only(t0, EQABLE) || only(t1, EQABLE))
+        if (op == PI_rt_eqv_p ? !(t0 & (T_FLO | (big_ ? T_BIG : 0))) || !(t1 & (T_FLO | (big_ ? T_BIG : 0))) : only(t0, EQABLE) || only(t1, EQABLE))
             return fmt("RT_BOOL(%s == %s)", atom_as(a[0], R_OBJ), atom_as(a[1], R_OBJ));
         return NULL;
     case PI_rt_display: case PI_rt_write: case PI_rt_write_char: case PI_rt_write_string: {
@@ -998,6 +1028,7 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     for (i = 0; i < p->nglobals; i++)
         if (!p->globals[i]->known) p->globals[i]->slot = nglob++;
     unsafe_ = o->unsafe;
+    big_ = o->bignum;
     debug_ = o->debug;
     prog_ = p;
     for (L = p->lambdas; L; L = L->next)
@@ -1019,6 +1050,7 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
     if (o->debug) sb_puts(o_, "#define RT_DEBUG 1\n");
     if (o->gc_bump) sb_puts(o_, "#define RT_GC_BUMP 1\n");
     if (o->unicode_full) sb_puts(o_, "#define RT_UNICODE_FULL 1\n");
+    if (o->bignum) sb_puts(o_, "#define RT_BIGNUM 1 /* --bignum: exact integers of any size, rt_big.c */\n");
     if (o->gc_stress) sb_puts(o_, "#define RT_GC_STRESS 1\n");
     if (o->no_musttail) sb_puts(o_, "#define SHIKRA_NO_MUSTTAIL 1\n");
     if (p->no_handlers) sb_puts(o_, "#define RT_NO_HANDLERS 1 /* no exception handler is ever installed */\n");
@@ -1069,6 +1101,7 @@ void emit_c(ir_program *p, const emit_opts *o, sbuf *o_) {
                   p->travel->cname, closure_name(p->travel));
     else sb_puts(o_, "static void rt_engine_travel(obj w) { rt_winders = w; }\n");
     for (i = 0; rtfiles[i]; i++) append_embedded(o_, rtfiles[i]);
+    if (o->bignum) append_embedded(o_, "src/rt_big.c"); /* spec §9.1: only with --bignum */
     if (o->unicode_full) append_embedded(o_, "src/rt_unicode.c"); /* spec §9.1: only with --unicode=full */
     sb_free(&protos);
     sb_free(&closures);

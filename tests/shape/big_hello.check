@@ -1,0 +1,17 @@
+# Hello world with --bignum: as tests/shape/hello.check, and no bignum code at all (dead-code-eliminated).
+flags --bignum
+fn P_init[(]
+has rt_put_string[(]
+has rt_put_newline[(]
+no rt_display[(]
+no rt_make_proc
+no RT_PROC[(]
+nm-no ^_?rt_alloc_slow$
+nm-no ^_?gc_(run|mark|scan|refill|collect)
+nm-no ^_?rt_(print|display|write|format_double|intern|read|open_input_file|make_error|raise|engine_raise|error|type_error|uncaught|fx_overflow)$
+nm-no ^_?io_(scan|print|label|print_atom)$
+nm-no ^_?P_scheme_base__
+nm-no ^_?bn_
+nm-has ^_?rt_port_write_fd$
+nm-no ^_?(rt_call_cc|rt_call_cc3|core_rewind|core_reenter|core_callcc3_run|core_cont_code)$
+nm-no ^_?(rt_big_|big_|mag_|rt_exact_isqrt)

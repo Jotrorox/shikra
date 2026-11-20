@@ -20,6 +20,7 @@ tests/r7rs/
   process-context.scm   (scheme process-context)              4
   time.scm              (scheme time)                         4
   eval.scm              (scheme eval), REPL only              3
+  bignum.scm            (scheme base) bignums, --bignum only   7
   EXCLUSIONS.md, upstream/
 ```
 
@@ -36,6 +37,7 @@ program (spec §4.3), so run the files in place:
 shikra run tests/r7rs/base.scm                  # compiled
 shikra interp tests/r7rs/base.scm               # interpreted (M3+; or shikra repl FILE)
 shikra run --unicode=full tests/r7rs/char-unicode.scm
+shikra run --bignum tests/r7rs/bignum.scm      # the upstream bignum tests (EXCLUSIONS.md)
 ```
 
 The last line of output is always exactly

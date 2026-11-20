@@ -163,6 +163,8 @@ PRIM("%integer?", "integer?", rt_integer_p, 1, "a", 'b', PF_PURE)
 PRIM("%exact?", "exact?", rt_exact_p, 1, "n", 'b', PF_FAIL)
 PRIM("%inexact?", "inexact?", rt_inexact_p, 1, "n", 'b', PF_FAIL)
 PRIM("%exact-integer?", "exact-integer?", rt_exact_integer_p, 1, "a", 'b', PF_PURE)
+/* --bignum only: (shikra fixnum) fixnum? (without bignums it is exact-integer?) */
+PRIM("%fixnum?", "fixnum?", rt_fixnum_p, 1, "a", 'b', PF_PURE)
 PRIM("%nan?", "nan?", rt_nan_p, 1, "n", 'b', PF_FAIL)
 PRIM("%infinite?", "infinite?", rt_infinite_p, 1, "n", 'b', PF_FAIL)
 PRIM("%finite?", "finite?", rt_finite_p, 1, "n", 'b', PF_FAIL)
@@ -198,6 +200,8 @@ PRIM("%acos", "acos", rt_acos, 1, "n", 'd', PF_ALLOC | PF_FAIL)
 PRIM("%atan", "atan", rt_atan, 1, "n", 'd', PF_ALLOC | PF_FAIL)
 PRIM("%atan2", "atan", rt_atan2, 2, "nn", 'd', PF_ALLOC | PF_FAIL)
 PRIM("%sqrt", "sqrt", rt_sqrt, 1, "n", 'd', PF_ALLOC | PF_FAIL)
+/* --bignum only (lib/scheme/base/numbers.scm under cond-expand bignum): the floor of the square root */
+PRIM("%exact-integer-sqrt", "exact-integer-sqrt", rt_exact_isqrt, 1, "a", 'n', PF_ALLOC | PF_FAIL)
 PRIM("%number->string", "number->string", rt_number_to_string, 2, "nf", 's', PF_ALLOC | PF_FAIL)
 PRIM("%string->number", "string->number", rt_string_to_number, 2, "sf", 'a', PF_ALLOC | PF_FAIL)
 

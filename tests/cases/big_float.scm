@@ -1,0 +1,40 @@
+;; --bignum: exact comparison of bignums with flonums around 2^53, 2^63, 1e300 and the infinities
+;; (transitive), exact (of integral flonums) and inexact (correctly rounded, ties to even, overflow to
+;; infinity), max/min contagion, sqrt, / and integer division mixing bignums and flonums. Expected
+;; output: tests/cases/inc/bignum_ref.py.
+(import (scheme base) (scheme write) (scheme inexact))
+(define (show . xs) (for-each (lambda (x) (write x) (display " ")) xs) (newline))
+(define M 2305843009213693951)
+(define (fdig d) (cond ((infinite? d) (if (> d 0) '+inf '-inf))
+                       ((infinite? (* d 1e6)) (if (> d 0) '+inf '-inf))
+                       (else (modulo (exact (floor (* d 1e6))) M))))
+(define pts (list (expt 2 53) (+ (expt 2 53) 1) (- (expt 2 53) 1) (expt 2 63) (+ (expt 2 63) 1) (- (expt 2 63) 1)
+                  (expt 2 64) (expt 10 300) (+ (expt 10 300) 1) (quotient (* (expt 2 1023) 3) 2)
+                  (- (- (expt 2 63)) 1) (- (expt 2 63)) (- (expt 10 300))))
+(define dbls (list (expt 2. 53) (+ (expt 2. 53) 2) 9223372036854775808. 9223372036854774784. 1.8446744073709552e19 1e300
+                   -9223372036854775808. -1e300 1e308 +inf.0 -inf.0 .5 -1e-300))
+(for-each (lambda (x)
+            (show 'cmp x (apply string-append
+                                (map (lambda (d)
+                                       (let ((lt (< x d)) (eq (= x d)) (gt (> x d)))
+                                         (if (not (and (eq? lt (> d x)) (eq? eq (= d x)) (eq? gt (< d x))
+                                                       (eq? (<= x d) (or lt eq)) (eq? (>= x d) (or gt eq))))
+                                             "?"
+                                             (cond (lt "<") (eq "=") (else ">")))))
+                                     dbls))))
+          pts)
+(show 'nan (< (expt 2 70) +nan.0) (> (expt 2 70) +nan.0) (= (expt 2 70) +nan.0) (= +nan.0 (expt 2 70)))
+(for-each (lambda (x) (let ((d (inexact x))) (show 'inexact x (if (infinite? d) 'inf (exact d)))))
+          (list (+ (expt 2 53) 1) (+ (expt 2 53) 3) (+ (expt 2 64) (expt 2 11)) (+ (expt 2 64) (expt 2 11) 1)
+                (+ (expt 2 64) (* 3 (expt 2 11))) (* (+ (expt 2 54) 1) (expt 2 100)) (* (+ (expt 2 54) 3) (expt 2 100))
+                (- (expt 2 1024) (expt 2 970)) (- (expt 2 1024) (expt 2 971)) (- (expt 2 1024) (expt 2 970) 1)
+                (- (- (expt 2 64)) (expt 2 11)) (expt 3 500)))
+(for-each (lambda (d) (show 'exact (exact d) (= (exact d) d)))
+          (list 1e30 -1e30 (expt 2. 62) (- (expt 2. 62)) (expt 2. 63) 1.7976931348623157e308 123456789012345680000. 4611686018427387904.))
+(let ((a (max (expt 2 100) 1.)) (b (min (- (expt 2 100)) 1.)))
+  (show 'maxmin (exact a) (inexact? a) (exact b) (inexact? b)))
+(show 'sqrt (sqrt (expt 10 40)) (exact? (sqrt (expt 10 40))) (fdig (sqrt (expt 2 101))) (inexact? (sqrt (expt 2 101))))
+(show 'div (/ (expt 2 100) 4) (fdig (/ (expt 2 100) 3)) (fdig (/ 1 (expt 2 70))) (fdig (/ (+ (expt 10 400) 1) (expt 10 399))))
+(show 'integer? (integer? (expt 2 70)) (integer? 1e30) (rational? (expt 10 400)) (finite? (expt 10 400)))
+(show 'q-inexact (fdig (quotient (expt 2. 70) 3)) (fdig (modulo (expt 2. 70) 7)) (fdig (truncate-quotient 1e30 7)))
+(show 'log (< (abs (- (log (expt 10 400)) 921.0340371976183)) 1e-9) (< (abs (- (exp (/ (log (expt 2 2000)) 2000)) 2.)) 1e-12))

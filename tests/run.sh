@@ -85,7 +85,10 @@ run_reader() {
     # smoke: every adapted R7RS test file must read without error
     for f in tests/r7rs/*.scm tests/r7rs/chibi/*.sld; do
         [ -f "$f" ] || continue
-        if $SHIKRA debug-read "$f" > /dev/null 2> "$TMP/r.err"; then ok; else bad "$f (read)"; cat "$TMP/r.err"; fi
+        rf=
+        case $f in */bignum.scm) rf=--bignum ;; esac # its literals are bignums
+        # shellcheck disable=SC2086
+        if $SHIKRA debug-read $rf "$f" > /dev/null 2> "$TMP/r.err"; then ok; else bad "$f (read)"; cat "$TMP/r.err"; fi
     done
 }
 
@@ -217,6 +220,12 @@ r7rs_files="base char inexact lazy case-lambda file read write process-context t
 r7rs_runs=
 for r7f in $r7rs_files; do r7rs_runs="$r7rs_runs $r7f:compiled $r7f:interp"; done
 r7rs_runs="$r7rs_runs char-unicode:compiled:--unicode=full char-unicode:interp:--unicode=full eval:interp"
+# --bignum (DESIGN.md "Bignums as built"): bignum.scm (the upstream bignum tests) in every mode;
+# the other files once more with --bignum in the r7rs pass at -O2 (FILE.ENGINE.bignum, if present,
+# pins the expected differences; a comma in FLAG separates several flags)
+r7rs_runs="$r7rs_runs bignum:compiled:--bignum bignum:interp:--bignum"
+r7rs_bigruns="char-unicode:compiled:--unicode=full,--bignum char-unicode:interp:--unicode=full,--bignum eval:interp:--bignum"
+for r7f in $r7rs_files; do r7rs_bigruns="$r7rs_bigruns $r7f:compiled:--bignum $r7f:interp:--bignum"; done
 # r7rs_summary OUT: the final summary line, then each failing test's report (the
 # "FAIL: ..." / "ERROR: ..." line and its "expected" / "but got" lines), indentation stripped.
 r7rs_summary() {
@@ -228,7 +237,7 @@ run_r7rs() {
         name=${run%%:*}
         engine=${run#*:}
         flag=
-        case $engine in *:*) flag=${engine#*:}; engine=${engine%%:*} ;; esac
+        case $engine in *:*) flag=$(echo "${engine#*:}" | tr , ' '); engine=${engine%%:*} ;; esac
         f=tests/r7rs/$name.scm
         exp=tests/r7rs/expected/$name.$engine
         # shellcheck disable=SC2086
@@ -245,10 +254,11 @@ run_r7rs() {
         interp-stress) exp=tests/r7rs/expected/$name.interp
             SHIKRA_GC_STRESS=$STRESS_SCALE $SHIKRA interp $flag "$f" < /dev/null > "$TMP/r7.out" 2> "$TMP/r7.err" ;;
         esac
+        case " $flag " in *" --bignum "*) [ -f "$exp.bignum" ] && exp=$exp.bignum ;; esac
         r7rs_summary "$TMP/r7.out" > "$TMP/r7.sum"
         if [ ! -f "$exp" ]; then bad "$f [$engine] (no expected results file $exp)"
         elif cmp -s "$TMP/r7.sum" "$exp"; then ok
-        else bad "$f [$engine${opt:+ -O$opt}]"; head -5 "$TMP/r7.err"; diff "$exp" "$TMP/r7.sum" | head -20; fi
+        else bad "$f [$engine${opt:+ -O$opt}${flag:+ $flag}]"; head -5 "$TMP/r7.err"; diff "$exp" "$TMP/r7.sum" | head -20; fi
         if [ "$engine" = compiled ]; then
             # shellcheck disable=SC2086
             if $SHIKRA emit-c -O${opt:-2} $flag "$f" > "$TMP/r7.c" 2> /dev/null &&
@@ -268,7 +278,7 @@ run_levels() {
         (   [ $opt = 0 ] && ulimit -s 65520 2> /dev/null
             run_cases compiled
             if [ "${1:-}" = r7rs ]; then
-                if [ $opt = 2 ]; then run_r7rs; else r7rs_runs=$compiled_runs; run_r7rs; fi
+                if [ $opt = 2 ]; then run_r7rs; r7rs_runs=$r7rs_bigruns; run_r7rs; else r7rs_runs=$compiled_runs; run_r7rs; fi
             fi
             echo "$pass $fail" > "$TMP/levels.count" )
         set -- "${1:-}" $(cat "$TMP/levels.count")
@@ -423,7 +433,7 @@ run_cache() {
     for f in tests/cases/*.scm tests/r7rs/*.scm; do
         fl=
         [ -f "${f%.scm}.flags" ] && fl=$(cat "${f%.scm}.flags")
-        case $f in */char-unicode.scm) fl=--unicode=full ;; */eval.scm) continue ;; esac
+        case $f in */char-unicode.scm) fl=--unicode=full ;; */bignum.scm) fl=--bignum ;; */eval.scm) continue ;; esac
         rm -rf "$C"
         # shellcheck disable=SC2086
         cache_emit "$C" "$TMP/k.cold" $fl "$f"; cache_emit "$C" "$TMP/k.warm" $fl "$f"; cache_emit "$C.shared" "$TMP/k.shared" $fl "$f"
@@ -543,7 +553,7 @@ run_driver() {
     if (cd "$D" && ../../../$SHIKRA build -w -I one -I two --cc "$CC -DSHIKRA_TEST_FLAG=1" main.scm) && [ -x "$D/main" ]; then ok
     else bad "build: default output name, -I, --cc with arguments"; fi
     if $SHIKRA --version | grep -q '^shikra 0'; then ok; else bad "--version"; fi
-    if $SHIKRA --help > "$TMP/help" && for w in build run repl check emit-c size -O0 --unsafe --gc --unicode -I --cc --target -g; do
+    if $SHIKRA --help > "$TMP/help" && for w in build run repl check emit-c size -O0 --unsafe --gc --unicode --bignum -I --cc --target -g; do
            grep -q -- " $w" "$TMP/help" || exit 1; done; then ok; else bad "--help does not list every command and flag"; fi
     if ! $SHIKRA build --no-such-flag tests/cases/hello.scm 2> "$TMP/flag.err" && grep -q 'unknown flag' "$TMP/flag.err"; then ok; else bad "unknown flag"; fi
 }
@@ -578,7 +588,7 @@ compiled) run_levels ;;
 compiled2) opt=2; run_cases compiled ;;
 interp) run_cases interp; run_repl ;;
 stress) run_stress ;;
-r7rs) run_r7rs; for opt in 0 s; do saved_runs=$r7rs_runs; r7rs_runs=$compiled_runs; run_r7rs; r7rs_runs=$saved_runs; done; opt= ;;
+r7rs) run_r7rs; saved_runs=$r7rs_runs; r7rs_runs=$r7rs_bigruns; run_r7rs; r7rs_runs=$saved_runs; for opt in 0 s; do saved_runs=$r7rs_runs; r7rs_runs=$compiled_runs; run_r7rs; r7rs_runs=$saved_runs; done; opt= ;;
 levels) run_levels r7rs ;;
 tramp) run_tramp ;;
 gcc) opt=2; run_cases gcc

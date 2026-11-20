@@ -541,7 +541,7 @@ static ir_node *fold(ir_node *p) {
     case PI_rt_num_ge: return fixc(a[0], &i) && fixc(a[1], &j) ? mk_const(RT_BOOL(i >= j)) : NULL;
     case PI_rt_num_eq: return fixc(a[0], &i) && fixc(a[1], &j) ? mk_const(RT_BOOL(i == j)) : NULL;
     case PI_rt_eq_p: return mk_const(RT_BOOL(x == y));
-    case PI_rt_eqv_p: return rt_is_flo(x) || rt_is_flo(y) ? NULL : mk_const(RT_BOOL(x == y));
+    case PI_rt_eqv_p: return rt_is_flo(x) || rt_is_flo(y) || rt_is_big(x) || rt_is_big(y) ? NULL : mk_const(RT_BOOL(x == y));
     case PI_rt_car: return rt_is_pair(x) ? mk_const(RT_CAR(x)) : NULL;
     case PI_rt_cdr: return rt_is_pair(x) ? mk_const(RT_CDR(x)) : NULL;
     case PI_rt_char_to_integer: return rt_is_char(x) ? mk_const(RT_FIX(RT_CHARVAL(x))) : NULL;

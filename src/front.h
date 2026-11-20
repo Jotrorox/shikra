@@ -117,6 +117,7 @@ typedef struct {
     const char **incdirs;  /* -I directories */
     int nincdirs;
     int unicode_full;      /* feature full-unicode */
+    int bignum;            /* --bignum: feature bignum */
     const char *target;    /* target triple or NULL for the host (features) */
     int repl;              /* interpreter: (scheme eval), (scheme load), (scheme repl) exist */
     const char *cache_dir; /* expansion cache directory (cache.c), NULL: no cache */

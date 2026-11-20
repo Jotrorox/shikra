@@ -31,6 +31,12 @@ static char *REACH, *ESC;            /* procedure reached; called by unknown cod
 static ir_node **TDEF;               /* variable -> the primitive whose result it is (tests) */
 static int nvars, nlams, njoins, changed, iter, widen, rec, final, stamp, structural, nwalk;
 static int pccar, stdclose, handlers_set, flo_src;
+/* --bignum: exact integers are fixnums or bignums; + - * of fixnums may give a bignum unless an
+ * overflow is excluded (the same rule as S_NOOVF); in the default mode T_BIG never occurs. */
+static int big_;
+#define BIGT (big_ ? T_BIG : 0)
+#define TN (T_NUM | BIGT) /* number */
+#define TX (T_FIX | BIGT) /* exact integer */
 static ir_lambda *cur;
 static int uguard, lguard, inloop; /* inside branches of undecided ifs of user / library code */
 static int hguard;                 /* after a handler was installed (a guard body, inlined) */
@@ -67,6 +73,7 @@ int ir_const_type(obj x) {
     if (rt_is_vector(x)) return T_VECTOR;
     if (rt_is_bytevector(x)) return T_BYTEVECTOR;
     if (rt_is_type(x, RT_T_F64VECTOR)) return T_F64;
+    if (rt_is_type(x, RT_T_BIGNUM)) return T_BIG;
     return T_OTHER;
 }
 /* ---- define-c descriptors: (name "c-name" (arg-type ...) result-type) ---- */
@@ -314,7 +321,7 @@ static int letter(char c) {
     switch (c) {
     case 'f': return T_FIX;
     case 'd': return T_FLO;
-    case 'n': return T_NUM;
+    case 'n': return TN;
     case 'c': return T_CHAR;
     case 'b': return T_BOOL;
     case 'p': return T_PAIR | T_PCELL;
@@ -333,15 +340,16 @@ static int letter(char c) {
 static const char *type_name(int t) {
     static const char *const names[] = {"a fixnum", "a flonum", "a character", "#t", "#f", "a pair", "the empty list",
         "a string", "a symbol", "a vector", "a bytevector", "a procedure", "a record", "the eof object", "the unspecified value",
-        "a port", "a port", "a port", "a port", "a pair", "a pair", "a pair", "a record type", "undefined", "an object", "an f64vector"};
+        "a port", "a port", "a port", "a port", "a pair", "a pair", "a pair", "a record type", "undefined", "an object", "an f64vector",
+        "a bignum"};
     int i;
     if ((t & ~T_BOOL) == 0 && t == T_BOOL) return "a boolean";
-    for (i = 0; i < 26; i++) if (t & (1 << i)) return names[i];
+    for (i = 0; i < 27; i++) if (t & (1 << i)) return names[i];
     return "nothing";
 }
 static const char *letter_name(char c) {
     switch (c) {
-    case 'f': return "an exact integer";
+    case 'f': return big_ ? "a fixnum" : "an exact integer";
     case 'd': return "a flonum";
     case 'n': return "a number";
     case 'c': return "a character";
@@ -372,8 +380,9 @@ static int pred_mask(int op, int *exact) {
     case PI_rt_string_p: return T_STRING;
     case PI_rt_vector_p: return T_VECTOR;
     case PI_rt_bytevector_p: return T_BYTEVECTOR;
-    case PI_rt_number_p: return T_NUM;
-    case PI_rt_exact_integer_p: return T_FIX;
+    case PI_rt_number_p: return TN;
+    case PI_rt_exact_integer_p: return TX;
+    case PI_rt_fixnum_p: return T_FIX;
     case PI_rt_eof_object_p: return T_EOF;
     case PI_rt_port_p: return T_PORTS;
     case PI_rt_flonum_p: return T_FLO;
@@ -411,6 +420,23 @@ static int leaks(int op, int i) {
     }
 }
 static int arith_t(int a, int b) { return (a & T_FIX && b & T_FIX ? T_FIX : 0) | ((a | b) & T_FLO && a & T_NUM && b & T_NUM ? T_FLO : 0); }
+static int noovf_ok(ir_node *p, env *e);
+/* --bignum: the result types of + - * quotient remainder modulo floor-quotient (p NULL: no facts) */
+static int big_arith(int op, int a, int b, ir_node *p, env *e) {
+    int r = (a | b) & T_FLO && a & TN && b & TN ? T_FLO : 0, fa = !(a & ~T_FIX), fb = !(b & ~T_FIX);
+    ir_node *d = p ? p->u.prim.args[1] : NULL;
+    if (!(a & TX) || !(b & TX)) return r;
+    switch (op) {
+    case PI_rt_add: case PI_rt_sub: if (p && fa && fb && noovf_ok(p, e)) return r | T_FIX; break;
+    case PI_rt_remainder: if (fa || fb) return r | T_FIX; break; /* |r| <= |a| and |r| < |b| */
+    case PI_rt_modulo: if (fb) return r | T_FIX; break;
+    case PI_rt_quotient: case PI_rt_floor_quotient: /* only fixnum-least / -1 overflows */
+        if (d && fa && fb && d->kind == IR_CONST && d->u.value != RT_FIX(-1)) return r | T_FIX;
+        break;
+    default: break;
+    }
+    return r | T_FIX | T_BIG;
+}
 
 /* ---- diagnostics (spec §11.3) ----
  * A provably wrong type is an error when the proof is local -- the value follows from constants
@@ -503,16 +529,20 @@ static aval prim(ir_node *p, env *e, env **out, env *s, ir_var *dst) {
     switch (op) {
     case PI_rt_add: case PI_rt_sub: case PI_rt_mul: case PI_rt_quotient: case PI_rt_remainder: case PI_rt_modulo:
     case PI_rt_floor_quotient:
+        if (big_) return mkav(big_arith(op, a[0].t, a[1].t, p, e), 0, 0, big_arith(op, a[0].lt & TN, a[1].lt & TN, NULL, NULL) | LTSET);
         return mkav(arith_t(a[0].t, a[1].t), 0, 0, arith_t(a[0].lt & T_NUM, a[1].lt & T_NUM) | LTSET);
     case PI_rt_div:
-        return mkav((a[0].t & T_FIX && a[1].t & T_FIX ? T_NUM : 0) | ((a[0].t | a[1].t) & T_FLO ? T_FLO : 0), 0, 0,
-                    (a[0].lt & T_FIX && a[1].lt & T_FIX ? T_NUM : 0) | ((a[0].lt | a[1].lt) & T_FLO ? T_FLO : 0) | LTSET);
+        return mkav((a[0].t & TX && a[1].t & TX ? TN : 0) | ((a[0].t | a[1].t) & T_FLO ? T_FLO : 0), 0, 0,
+                    (a[0].lt & TX && a[1].lt & TX ? TN : 0) | ((a[0].lt | a[1].lt) & T_FLO ? T_FLO : 0) | LTSET);
     case PI_rt_neg: case PI_rt_abs: case PI_rt_floor: case PI_rt_ceiling: case PI_rt_round: case PI_rt_truncate:
-        return mkav(a[0].t & T_NUM, 0, 0, (a[0].lt & T_NUM) | LTSET);
-    case PI_rt_expt: return mkav(T_NUM, 0, 0, 1);
-    case PI_rt_exact_p: return decide(a[0].t, T_FIX, 1);
+        t = (op == PI_rt_neg || op == PI_rt_abs) && a[0].t & T_FIX ? BIGT : 0; /* -fixnum-least */
+        return mkav((a[0].t & TN) | t, 0, 0, (a[0].lt & TN) | t | LTSET);
+    case PI_rt_expt: return mkav(TN, 0, 0, 1);
+    case PI_rt_exact: if (big_) return mkav(TX, MANYF, -1, 1); break;
+    case PI_rt_exact_isqrt: return mkav(TX, MANYF, -1, 1);
+    case PI_rt_exact_p: return decide(a[0].t, TX, 1);
     case PI_rt_inexact_p: return decide(a[0].t, T_FLO, 1);
-    case PI_rt_integer_p: return !(a[0].t & T_NUM) ? mask(T_FALSE) : !(a[0].t & ~T_FIX) ? mask(T_TRUE) : mask(T_BOOL);
+    case PI_rt_integer_p: return !(a[0].t & TN) ? mask(T_FALSE) : !(a[0].t & ~TX) ? mask(T_TRUE) : mask(T_BOOL);
     case PI_rt_list_p: return !(a[0].t & (T_PAIR | T_NULL)) ? mask(T_FALSE) : a[0].t == T_NULL ? mask(T_TRUE) : mask(T_BOOL);
     case PI_rt_eq_p: case PI_rt_eqv_p: case PI_rt_equal_p:
         if (!(a[0].t & a[1].t)) return mask(T_FALSE);
@@ -580,7 +610,7 @@ static aval prim(ir_node *p, env *e, env **out, env *s, ir_var *dst) {
     case PI_rt_read_char: case PI_rt_peek_char: return mask(T_CHAR | T_EOF);
     case PI_rt_read_line: case PI_rt_read_string: return mask(T_STRING | T_EOF);
     case PI_rt_read_u8: case PI_rt_peek_u8: return mask(T_FIX | T_EOF);
-    case PI_rt_string_to_number: return mask(T_NUM | T_FALSE);
+    case PI_rt_string_to_number: return mask(TN | T_FALSE);
     case PI_rt_digit_value: return mask(T_FIX | T_FALSE);
     case PI_rt_eof_object: return mask(T_EOF);
     case PI_rt_append2: return top();
@@ -797,20 +827,26 @@ static int no_overflow(ir_node *x, intptr_t c, env *e) {
         }
     return 0;
 }
+/* (+ x c), (+ c x), (- x c) of fixnums cannot overflow (types checked by the caller) */
+static int noovf_ok(ir_node *p, env *e) {
+    ir_node **x = p->u.prim.args;
+    int op = p->u.prim.op == PI_rt_fx_add ? PI_rt_add : p->u.prim.op == PI_rt_fx_sub ? PI_rt_sub : p->u.prim.op;
+    intptr_t c;
+    if (x[1]->kind == IR_CONST && rt_is_fix(x[1]->u.value)) {
+        c = RT_FIXVAL(x[1]->u.value);
+        if (op == PI_rt_sub) { if (c == RT_FIX_MIN) return 0; c = -c; }
+        return no_overflow(x[0], c, e);
+    }
+    return op == PI_rt_add && x[0]->kind == IR_CONST && rt_is_fix(x[0]->u.value) && no_overflow(x[1], RT_FIXVAL(x[0]->u.value), e);
+}
 static void noovf(ir_node *p, env *e) {
     ir_node **x = p->u.prim.args;
     int op = p->u.prim.op;
-    intptr_t c;
     if (op == PI_rt_fx_add) op = PI_rt_add;
     if (op == PI_rt_fx_sub) op = PI_rt_sub;
     if ((op != PI_rt_add && op != PI_rt_sub) || !(p->spec & S_OK(0)) || !(p->spec & S_OK(1))) return;
     if ((ir_atom_type(x[0]) & ~T_FIX) || (ir_atom_type(x[1]) & ~T_FIX)) return;
-    if (x[1]->kind == IR_CONST && rt_is_fix(x[1]->u.value)) {
-        c = RT_FIXVAL(x[1]->u.value);
-        if (op == PI_rt_sub) { if (c == RT_FIX_MIN) return; c = -c; }
-        if (no_overflow(x[0], c, e)) p->spec |= S_NOOVF;
-    } else if (op == PI_rt_add && x[0]->kind == IR_CONST && rt_is_fix(x[0]->u.value) && no_overflow(x[1], RT_FIXVAL(x[0]->u.value), e))
-        p->spec |= S_NOOVF;
+    if (noovf_ok(p, e)) p->spec |= S_NOOVF;
 }
 static int small_result(int op) { /* lengths, character codes, bytes */
     return op == PI_rt_length || op == PI_rt_string_length || op == PI_rt_vector_length || op == PI_rt_bytevector_length ||
@@ -976,6 +1012,7 @@ static void walk_all(void) {
     for (L = P->lambdas; L; L = L->next) walk_lambda(L);
 }
 int ir_analyze(ir_program *p, int last) {
+    big_ = p->bignum;
     ir_lambda *L;
     int i;
     P = p;
@@ -1452,14 +1489,15 @@ static int float_slot(ir_node *r, int i) {
         return (prim_table[op].args[i] == 'd' || prim_table[op].args[i] == 'n') && op != PI_rt_make_f64vector && op != PI_rt_list_to_f64vector;
     switch (op) {
     case PI_rt_add: case PI_rt_sub: case PI_rt_mul: case PI_rt_div:
-        return only_t(t0, T_NUM) && only_t(t1, T_NUM) && ((t0 | t1) & T_FLO) && (only_t(t0, T_FLO) || only_t(t1, T_FLO));
+        return only_t(t0, TN) && only_t(t1, TN) && ((t0 | t1) & T_FLO) && (only_t(t0, T_FLO) || only_t(t1, T_FLO));
     case PI_rt_lt: case PI_rt_gt: case PI_rt_num_le: case PI_rt_num_ge: case PI_rt_num_eq:
         return (only_t(t0, T_FLO) && only_t(t1, T_FLO)) || (only_t(t0, T_FLO) && small_fixc(a[1])) || (only_t(t1, T_FLO) && small_fixc(a[0]));
     case PI_rt_neg: case PI_rt_abs: return only_t(t0, T_FLO);
     case PI_rt_sqrt: case PI_rt_exp: case PI_rt_log: case PI_rt_sin: case PI_rt_cos:
-    case PI_rt_tan: case PI_rt_asin: case PI_rt_acos: case PI_rt_atan: case PI_rt_inexact:
-        return only_t(t0, T_NUM);
-    case PI_rt_atan2: return only_t(t0, T_NUM) && only_t(t1, T_NUM);
+    case PI_rt_tan: case PI_rt_asin: case PI_rt_acos:
+        return only_t(t0, T_NUM); /* --bignum: a bignum goes the generic way (rt_big_log, rt_big_sqrt) */
+    case PI_rt_atan: case PI_rt_inexact: return only_t(t0, TN);
+    case PI_rt_atan2: return only_t(t0, TN) && only_t(t1, TN);
     default: return 0;
     }
 }

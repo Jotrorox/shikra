@@ -34,6 +34,16 @@ Common flags: `-O0 | -O2 | -Os`, `--unsafe`, `--gc=immix|bump`, `--unicode=ascii
 `-I dir`, `-g`, `--cc CC` (default `$SHIKRA_CC`, else `cc`), `--target TRIPLE`.
 `shikra --help` lists them.
 
+**Bignums.** By default exact integers are 63-bit fixnums and overflow raises an error (spec §3.2).
+`--bignum` gives exact integers of any size (`(expt 3 10000)`, factorials, reading and printing
+long numbers in radix 2, 8, 10 and 16) and the `cond-expand` feature `bignum`; results that fit are
+always fixnums again, and there are still no exact rationals (`(/ 1 3)` is a flonum). Only programs
+built with the flag contain bignum code; see DESIGN.md "Bignums as built".
+
+```sh
+shikra run --bignum pi.scm        # also: build, check, emit-c, repl
+```
+
 ## Platforms
 
 | Target | Executables | Notes |
@@ -75,5 +85,6 @@ one-liner using GCC and clang, and runs `tests/run.sh` once per program compiler
 - [`DESIGN.md`](DESIGN.md): architecture contract, deviations from the spec, "as built" notes
   per milestone.
 - [`tests/r7rs/EXCLUSIONS.md`](tests/r7rs/EXCLUSIONS.md): R7RS suite tests that do not apply
-  (no bignums, no exact rationals, ...), each with its reason.
+  (no exact rationals, no complex numbers, ...), each with its reason; the bignum tests run under
+  `--bignum` (`tests/r7rs/bignum.scm`).
 - [`bench/RESULTS.md`](bench/RESULTS.md): r7rs-benchmarks against Chez Scheme and Gambit.

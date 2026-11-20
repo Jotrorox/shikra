@@ -237,6 +237,7 @@ static void init_features(void) {
     add_feature("shikra");
     add_feature("ieee-float");
     if (opts.unicode_full) add_feature("full-unicode");
+    if (opts.bignum) add_feature("bignum");
     if (darwin) { add_feature("darwin"); add_feature("macos"); }
     if (linux_) { add_feature("linux"); add_feature("gnu-linux"); }
     if (darwin || linux_) { add_feature("unix"); add_feature("posix"); }

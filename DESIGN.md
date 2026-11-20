@@ -153,7 +153,8 @@ Raw non-`obj` words stored in precisely-scanned objects must look like fixnums
   `include-library-declarations`, `cond-expand`. `(import (a b))` → `a/b.sld`
   searched in the program's directory, each `-I` dir, then the embedded
   built-ins. Features: `r7rs shikra ieee-float`, OS, architecture, and
-  `full-unicode` with `--unicode=full`; never `ratios` or `exact-complex`.
+  `full-unicode` with `--unicode=full`, `bignum` with `--bignum`; never `ratios` or
+  `exact-complex`.
 - **Expand**: hygienic `syntax-rules` (nested ellipsis, custom ellipsis,
   `(... ...)`, `_`, literals compared by binding, vector and improper patterns,
   tail patterns, `let-syntax`, `letrec-syntax`, internal `define-syntax`,
@@ -344,6 +345,11 @@ engines and the outputs must be identical.
   symbol with an asm label (GCC/clang; plain names otherwise). A fixnum check of a loop-invariant value of
   unknown type stays inside the loop (no loop peeling; the C compiler may hoist it). The math accuracy
   figures are measured against the host libm, which is itself not correctly rounded.
+- *`--bignum`* (an addition to the spec's flag table, §11.1; details in "Bignums as built"): spec
+  §3.2 says "optional bignums may come later, behind a flag". The flag is accepted by `build`, `run`,
+  `check`, `emit-c`, `repl` and the hidden `interp`, adds the feature `bignum`, and is part of the
+  expansion-cache and `shikra run` cache keys. Without it nothing changes (binaries are byte-identical
+  to those of the compiler before bignums).
 
 ## 11. As built
 
@@ -2933,3 +2939,137 @@ the C. Both fixed.
 - `make test`: 1,323 checks, 0 failures, 2 skips (ext_ffi_user in the interpreter and its stress run,
   marked compiled-only); `tests/run.sh gcc` (gcc-16): 222 checks, 0 failures. `shikra size` attributes
   rt_ext.c symbols to the component "extensions (shikra ...)".
+
+### Bignums as built (`--bignum`; spec §3.2 "optional bignums ... behind a flag", §13 M6)
+
+**Selection.** Without `--bignum` nothing changes: exact integers are 63-bit fixnums, overflow raises
+"fixnum overflow", and the default runtime preprocesses to the same tokens as before bignums existed,
+so default binaries are byte-identical to `main`'s (checked on 14 programs x -O2/-Os/-O0; -O0
+binaries differ between any two builds in LC_UUID and the code signature, which the check masks).
+With `--bignum` (build, run, check, emit-c, repl, interp; in `--help`; feature `bignum`; part of the
+expansion-cache key through the feature set and of the `shikra run` key as `n1`) exact integers have
+any size. The mode is selected differently in the two lives of the runtime (§3):
+- *Programs*: a link-time property. The emitter writes `#define RT_BIGNUM 1` and pastes
+  `src/rt_big.c` after the other runtime files; `RT_HAVE_BIG` (rt.h) then enables the bignum branches
+  in rt_num.c, rt_core.c (`eqv?`), rt_io.c (printing) and rt.h, with `RT_BIG_ON` the constant 1. A
+  program built without the flag contains no bignum code and no extra branch.
+- *The tool* (compiler, interpreter, REPL): always compiled with `RT_HAVE_BIG`; the variable
+  `rt_bignum_on` (set from the flag in `main`) is `RT_BIG_ON`, so the reader (literals), constant
+  handling and the interpreter promote only under `--bignum`. Without the flag the tool behaves
+  exactly as before (e.g. a big literal is "number cannot be represented").
+
+**Representation.** A bignum is an immutable raw heap object of header type `RT_T_BIGNUM` (a raw
+type, so the collector never scans it): sign in the header flag `RT_F_NEG`, magnitude in 32-bit
+limbs, little-endian, top limb nonzero, header length = 4 x limbs. *Normalisation invariant*: every
+result that fits in a fixnum is a fixnum (`big_fin`, the only constructor's exit), so a bignum is never
+numerically equal to a fixnum, `=`/`eqv?` on two fixnums stay word comparisons, and `fixnum?` is a tag
+test. `big_fin` shrinks an over-allocated result in place and turns the freed tail into a raw filler
+object, keeping the heap walkable. Literal bignums are `static const` structs like other literals.
+32-bit limbs keep every intermediate in `uint64_t`: plain C99, no `__int128`, no libgcc helpers (the
+x86-64 and arm64 freestanding builds have no undefined symbols), no libc.
+
+**Algorithms** (n, m limbs): add/subtract O(n); multiplication schoolbook O(nm) below 40 limbs,
+Karatsuba O(n^1.585) above (unbalanced operands in slices of the shorter length; temporaries are raw
+heap buffers kept alive by the conservative stack scan); division Knuth's algorithm D O(nm) with a
+one-limb fast path (no subquadratic division); `exact-integer-sqrt` Dickinson's recursive-precision
+Newton (the algorithm of Python's `math.isqrt`, about two full-size divisions); `expt` square and
+multiply; decimal output by repeated division by 10^9 and input by multiply-add in 9-digit chunks,
+both O(n^2) (radix 2/8/16 output O(n)); bignum -> double correctly rounded (nearest-even, from the
+leading 64 bits plus a sticky bit, subnormals and overflow to infinity included); double -> bignum
+exact; bignum/flonum comparison exact (the flonum's integer part converted exactly, then its fraction),
+hence transitive; exact `/` exact when it divides, else the correctly rounded double of the quotient
+(computed from >= 66 quotient bits and a sticky remainder). Timings (Apple M5, -O2): `(factorial 1000)`
+computed and printed 0.6 ms, `(expt 3 10000)` 0.5 ms, a 10,000-digit number printed in 2.1 ms and read
+in 0.9 ms; the 845,099 digits of 7^1000000 print in 15 s (quadratic).
+
+**Integration.** The generic slow paths promote instead of raising: `+ - *` (fixnum overflow),
+`-`/`abs` of fixnum-least, `quotient`/`floor-quotient` of fixnum-least by -1, `expt`, `square`, `exact`
+of any integral finite flonum, the reader and `string->number` (integers of any size in radix
+2/8/10/16, `#e1e30`, `#e1.5e3` and other exact decimals with an integral value up to exponent 100,000,
+ratios of bignums: exact when they divide, else the nearest flonum, as for fixnums). Everything in
+R7RS-small's exact-integer list accepts bignums: arithmetic, `/`, `quotient remainder modulo`, `floor/
+truncate/` and their components, `gcd lcm` (library code over the generic operations), `abs`,
+`exact-integer-sqrt` (a primitive under `cond-expand bignum`; the default definition is unchanged),
+comparisons, the predicates, `max min` (inexact contagion), `number->string`/`string->number`,
+`exact`/`inexact`, `numerator`/`denominator`, `floor`... (identity), `sqrt` (exact for perfect
+squares through `exact-integer-sqrt`; else the double root, from the integer root beyond 2^1000),
+`log` (from the leading bits beyond the double range), `finite?`/`infinite?`/`nan?`, `eqv?`/`equal?`
+(numeric equality), `write`/`display`. Machine-size arguments (indices, counts, sizes, character codes,
+shift amounts, an `expt` exponent that is itself a bignum) keep their fixnum checks and raise the same
+catchable type errors as before. `(shikra fixnum)` stays fixnum-only: `fx+` & co. raise on overflow,
+`fixnum?` is `%fixnum?` (a bignum is an exact integer but not a fixnum).
+
+**Compiler.** The analysis gets the atom `T_BIG` (ir.h; only ever produced with `--bignum`): the
+letter `n` of prims.def and `number?` mean `T_FIX|T_FLO|T_BIG`, `exact-integer?`/`exact?`/`integer?`
+`T_FIX|T_BIG`; `+ - *` of fixnums give `T_FIX|T_BIG` unless the overflow-exclusion rule of M4-2 (the
+`i <= n` loop counter, constant ranges) proves the result a fixnum, `remainder`/`modulo` with a fixnum
+operand stay `T_FIX`, `quotient` stays `T_FIX` for a constant divisor other than -1, `neg`/`abs` of a
+fixnum may be a bignum. Consequences: a proven-no-overflow counter is still an `intptr_t` local with
+pure fixnum code; a variable that may hold a bignum is a tagged `obj`, never an unboxed `intptr_t`
+(`R_FIX` is chosen only for `T_FIX`-only values); `+ - *` of proven fixnums that may overflow emit
+`rt_fxaddb`/`rt_fxsubb`/`rt_fxmulb` (tagged add + overflow branch to the out-of-line, promoting
+`rt_add2`) instead of the error-raising `rt_fxadd`; unknown operands keep the inline `rt_add` fast path.
+A "fixnum or bignum" compared with a proven fixnum is `RT_BOOL(a == b)` for `=` (normalisation) and
+`rt_is_fix(x) ? <word comparison> : <generic>` for the orderings; `quotient`/`remainder`/`modulo` of
+one by a fixnum constant (not 0, not -1 for `quotient`) is `rt_is_fix(x) ? rt_fxquo(...) : <generic>`.
+The flonum specialisations (`+ - * /` with a flonum operand, `inexact`, `atan`, define-c and f64vector
+double arguments) accept operands that may be bignums (`rt_num_dbl` converts them), in the emitter
+(`NUMT`) and in the analysis's double-representation choice (`float_slot`) alike; `sqrt exp log sin
+...` stay generic for them (`rt_big_log`, `rt_big_sqrt` beyond the double range).
+`eqv?` is a word comparison only if one side cannot be a flonum or bignum; constant folding of `eqv?`
+leaves bignum constants to run time, other folds only fold fixnum constants within range (big
+constants are computed at run time; literals themselves are exact). `--unsafe --bignum` removes type
+checks but not promotion (semantics, not a check): the wrapping `rt_add` & co. of `--unsafe` exist only
+without `RT_HAVE_BIG`, and `rt_fxquob` promotes fixnum-least / -1 also unsafe. Shape tests:
+`big_sum_to` (the spec §12 loop under `--bignum`: `i` an `intptr_t` with `+ (intptr_t)RT_FIX(1)`, `acc`
+an `obj` added by one `rt_add`, no overflow-error call) and `big_hello` (no bignum symbol linked).
+
+**Pay for what you use** (macOS arm64): hello world 50,880 bytes at -O2 (50,896 -Os) with and without
+`--bignum` (no bignum symbol survives dead-code elimination); the spec §12 program 51,104 -> 69,184
+bytes with `--bignum` (its `display` is generic and links the printer and `rt_big_to_string`);
+tests/cases/big_arith.scm 122,816 bytes, of which `shikra size` attributes 10,096 to the `(runtime)`
+component "bignums (--bignum)" (6,852 at -Os). src/rt_big.c is 498 lines; the hooks elsewhere about
+190 lines of `#ifdef RT_HAVE_BIG` (rt_num.c, rt.h, rt_core.c, rt_io.c).
+
+**Tests.** tests/cases `big_*` (`NAME.flags` = `--bignum`; expected outputs written by
+tests/cases/inc/bignum_ref.py from Python's integers and doubles): `big_arith` (factorials, Fibonacci
+1000, powers across 2^62, all sign combinations of the division operators and their reconstruction,
+gcd/lcm, exact-integer-sqrt of squares +- 1, normalisation at +-2^62, predicates, errors for bignum
+indices and counts), `big_float` (comparisons around 2^53, 2^63, 1e300 and the infinities, `exact`/
+`inexact` round trips with halfway cases, contagion, sqrt, log), `big_text` (radix 2/8/10/16 round
+trips, literals, exact decimals, a 10,000-digit number), `big_random` (a differential corpus of 4,000
+operations on operands up to 3,000 bits), `big_kmul` (120 Karatsuba-size products, squares and long
+divisions up to 30,000 bits), `big_fold` (constant expressions), `big_cmp` (the inline comparison and division forms), `big_fixnum`, `big_unsafe`; all in
+both engines, -O2/-O0/-Os, GC stress (compiled and interpreted), trampoline. tests/r7rs/bignum.scm:
+the 7 upstream tests EXCLUSIONS.md excluded because of bignums, verbatim, in every mode (7/7 in both
+engines); the other r7rs files also run with `--bignum` in both engines (r7rs pass at -O2): all pass
+except three pinned `base.scm` differences (`expected/base.*.bignum`, reasons in EXCLUSIONS.md: two
+rewritten tests that assert the default mode's overflow error, and `#x4000000000000001/3e1`, whose
+numerator now fits, read as the nearest flonum). Linux: the `big_*` cases pass as static no-libc
+executables built by GCC 14 on arm64 (native) and x86-64 (qemu). `make test`: 1,485 checks, 0 failures,
+2 skips (the existing ext_ffi_user compiled-only skips).
+
+**Benchmarks** (r7rs-benchmarks, bench/run.sh series `shikra-bignum`, which enables `pi` and
+`chudnovsky`; they stay `unsupported` in the default series; `compiler` stays unsupported for its
+complex numbers): `pi` 0.39 s
+(Chez 0.45 s, Gambit 0.62 s from the committed reference CSVs), `chudnovsky` 0.14 s (Chez 0.18 s,
+Gambit 0.25 s); results in bench/results/shikra-bignum-*.csv. The cost of `--bignum` on the other 53
+benchmarks that run, measured interleaved on the same machine (each benchmark's default and `--bignum`
+binaries alternately, best of 3; a busy machine made whole-series comparisons unreliable): geometric
+mean 1.09x, median 1.03x; most within +-5 %, the worst are loops whose counter ends on `=` or comes
+from unbounded arithmetic, so it is "fixnum or bignum" and runs generic code: `mazefun` 1.51x, `maze`
+1.51x, `simplex` 1.47x, `triangl` 1.44x, `fibfp` 1.36x, `ack` 1.34x, `fib` 1.27x.
+
+**Known gaps**
+- No subquadratic division or radix conversion: decimal printing and reading of a 10^6-digit number
+  is O(n^2) (15 s for 845,000 digits), and `/`, `quotient` of huge operands cost O(nm).
+- `sqrt` of a non-square bignum beyond 2^1000 is the double of the integer root (within one unit of
+  the integer part, not always correctly rounded); `exp`, `sin`, ... of a bignum go through its double
+  (infinite beyond the double range).
+- `expt` with a bignum exponent raises "result too large" (except bases 0, 1, -1), and results over
+  2^36 bits are refused; exact decimal literals with exponents above 100,000 read as `#f`.
+- With unknown operands, `(display x)` of a value that may be a bignum is the generic printer (no
+  fixnum-only `rt_put_fixnum`), and code whose operands may be bignums keeps the generic paths, so
+  fixnum-heavy recursive code such as `fib` runs slightly slower under `--bignum` (see above).
+- `tests/run.sh gcc` could not be run: gcc-16 is no longer installed on this machine (the mode falls
+  back to `gcc` = Apple clang); the Linux runs above used GCC 14.

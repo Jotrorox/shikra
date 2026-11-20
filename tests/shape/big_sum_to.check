@@ -1,0 +1,17 @@
+# Spec §12 under --bignum (DESIGN.md "Bignums as built"): the proven-no-overflow counter i stays an
+# intptr_t local with pure fixnum code (i + 1 untouched); acc, "fixnum or bignum", is never an
+# intptr_t: acc + i is rt_add (inline tagged add, overflow branch to the promoting slow path), no
+# overflow-error call, no type check, call or allocation besides; bignum code is linked (printing).
+flags --bignum
+fn P_init[(]
+has intptr_t[[:space:]]v_i_
+no intptr_t[[:space:]]v_acc_
+has obj[[:space:]]v_acc_
+loops 1
+count 1 rt_add[(]
+no rt_fx(add|sub|mul)b?[(]
+has \+[[:space:]][(]intptr_t[)]RT_FIX[(]1[)]
+no rt_(gt|lt|car|cdr|make_flonum|cons|alloc)[(]
+no RT_NT[(]
+no RT_PROC[(]
+nm-has ^_?rt_big_to_string$
