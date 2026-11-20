@@ -3031,16 +3031,16 @@ mode of `all`: reader unit (rt_unit, math_unit, flmath) amalg expand levels (com
 | unit (rt_unit, flush at exit, math_unit, flmath) | 4 | 4 | 4 | 4 |
 | amalg | 1 | 1 | 1 | 1 |
 | expand | 1 | 1 | 1 | 1 |
-| levels (cases -O2/-O0/-Os + C warning check, r7rs both engines) | 576 | 576 | AMD_LEVELS |
-| shape (incl. tier-3, extension shapes, two hello-world size pins) | 61 | 61 | AMD_SHAPE |
-| size | 27 | 27 | AMD_SIZE |
-| cache | 99 | 99 | AMD_CACHE |
-| debug (-g) | 30 | 30 | AMD_DEBUG |
-| driver (incl. 6 build-mode checks) | 70 | 70 | AMD_DRIVER |
-| interp (+ repl) | 87 + 1 skip | 87 + 1 skip | AMD_INTERP |
-| tramp | 85 | 85 | AMD_TRAMP |
-| stress | 255 + 1 skip | 255 + 1 skip | AMD_STRESS |
-| **total** | **1,331 passed, 0 failed, 2 skipped** | **1,331, 0, 2** | AMD_TOTAL |
+| levels (cases -O2/-O0/-Os + C warning check, r7rs both engines) | 576 | 576 | 576 | 576 |
+| shape (incl. tier-3, extension shapes, two hello-world size pins) | 61 | 61 | 61 | 61 |
+| size | 27 | 27 | 27 | 27 |
+| cache | 99 | 99 | 99 | 99 |
+| debug (-g) | 30 | 30 | 30 | 30 |
+| driver (incl. 6 build-mode checks) | 70 | 70 | 70 | 70 |
+| interp (+ repl) | 87 + 1 skip | 87 + 1 skip | 87 + 1 skip | 87 + 1 skip |
+| tramp | 85 | 85 | 85 | 85 |
+| stress | 255 + 1 skip | 255 + 1 skip | 255 + 1 skip (20× intervals) | 255 + 1 skip (20×) |
+| **total** | **1,331 passed, 0 failed, 2 skipped** | **1,331, 0, 2** | **1,331, 0, 2** | **1,331, 0, 2** |
 
 Skips: ext_ffi_user in the interpreter and in its stress pass (marked compiled-only: its C functions
 are in a user C file). arm64 runs every mode at full intervals (stress: a collection at every
@@ -3067,7 +3067,8 @@ handler.scm right on both. `shikra size` on macOS reads all 16 ELF files (`ELF x
 libc)`, rows add up to the file size). The full `zig cc` / ld.lld paths were last exercised by M6
 (above) and are not re-run here.
 
-**Sizes**: bench/SIZES.md, "Linux". Hello world 3.0-7.7 KB (under 30 KB). The 60-150 KB range (spec
+**Sizes**: bench/SIZES.md, "Linux" (all 40 Linux cells re-measured in this step from the code of
+9af1958; the later popcount change is in rt_ext.c, which these programs do not contain). Hello world 3.0-7.7 KB (under 30 KB). The 60-150 KB range (spec
 §9.3) is met at -Os by all four 1,000-2,500-line programs on x86-64 with both compilers (parsing
 with GCC is below it) and on arm64 with GCC; not by clang's arm64 -Os scheme (169 KB) and dynamic
 (155 KB), nor at -O2 by scheme and dynamic (186-312 KB, both compilers and architectures) and by
