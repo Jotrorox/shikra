@@ -66,7 +66,7 @@ static const struct { const char *name; command cmd; } commands[] = {
     {"debug-expand", CMD_DEBUG_EXPAND}, {"debug-core", CMD_DEBUG_CORE}, {"debug-ir", CMD_DEBUG_IR},
     {0, CMD_BUILD}};
 
-#define SHIKRA_VERSION "0.1 (M4)"
+#define SHIKRA_VERSION "0.1"
 static void usage(FILE *f) {
     fputs("usage: shikra <command> [flags] [file]\n"
           "commands:\n"
@@ -563,6 +563,8 @@ int main(int argc, char **argv) {
         interp_opts io;
         front_options(&o, &io.fo);
         io.argv0 = argv[0];
+        /* spec §5.5: "Always checked. There is no unsafe mode in the interpreter." */
+        if (o.cmd == CMD_REPL && o.unsafe) fputs("shikra: --unsafe has no effect in the REPL (the interpreter is always checked)\n", stderr);
         if (o.cmd == CMD_REPL) return repl_main(o.input, &io);
         return interp_main(o.input, &io, o.nargs, o.args);
     }

@@ -1,0 +1,6 @@
+shikra: --unsafe has no effect in the REPL (the interpreter is always checked)
+shikra> (vector-ref (vector 1 2) 5)
+Error: vector-ref: index out of range 5
+shikra> (+ 4611686018427387903 1)
+Error: +: fixnum overflow 4611686018427387903 1
+shikra> 
