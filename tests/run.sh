@@ -41,6 +41,8 @@
 #             NAME.interp-stress-interval; DESIGN.md M3 "Stress mode"). Since M5 every compiled
 #             r7rs run (r7rs_runs) is part of the stress pass, and every interpreted one of the
 #             interpreter stress pass.
+#   examples  examples/NAME.scm: `shikra check` clean, built at -O2, stdout == tests/examples/NAME.out
+#             (NAME.flags, NAME.args, NAME.in, NAME.exit as for compiled)
 # `all` runs reader, unit, amalg, expand, compiled, r7rs, interp and stress. Exit status is
 # non-zero if anything failed.
 set -u
@@ -630,6 +632,34 @@ run_stress() {
     r7rs_runs=$saved_runs
 }
 
+# run_examples: every examples/NAME.scm (README.md says how to run each) must pass `shikra check`
+# without a warning, build at -O2, and print tests/examples/NAME.out; NAME.flags, NAME.args,
+# NAME.in and NAME.exit as for tests/cases (paths relative to the repository root).
+run_examples() {
+    for f in examples/*.scm; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f" .scm)
+        base=tests/examples/$name
+        if [ ! -f "$base.out" ]; then bad "$f (no $base.out)"; continue; fi
+        want_exit=0
+        [ -f "$base.exit" ] && want_exit=$(cat "$base.exit")
+        in=/dev/null
+        [ -f "$base.in" ] && in=$base.in
+        flags=
+        [ -f "$base.flags" ] && flags=$(cat "$base.flags")
+        args=
+        [ -f "$base.args" ] && args=$(cat "$base.args")
+        # shellcheck disable=SC2086
+        if $SHIKRA check $flags "$f" > /dev/null 2> "$TMP/x.err" && [ ! -s "$TMP/x.err" ]; then ok
+        else bad "$f (check: not clean)"; head -5 "$TMP/x.err"; fi
+        # shellcheck disable=SC2086
+        $SHIKRA build -O2 $flags "$f" -o "$TMP/prog" > "$TMP/x.err" 2>&1 && "$TMP/prog" $args < "$in" > "$TMP/x.out" 2>> "$TMP/x.err"
+        st=$?
+        if [ "$st" = "$want_exit" ] && cmp -s "$TMP/x.out" "$base.out"; then ok
+        else bad "$f [examples] (exit $st)"; head -5 "$TMP/x.err"; diff "$base.out" "$TMP/x.out" | head -10; fi
+    done
+}
+
 opt=
 mode=${1:-all}
 case $mode in
@@ -653,9 +683,10 @@ size) run_size ;;
 cache) run_cache ;;
 debug) run_debug ;;
 driver) run_driver ;;
-all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_size; run_cache; run_debug; run_driver; run_cases interp; run_repl; run_tramp
+examples) run_examples ;;
+all) run_reader; run_unit; run_amalg; run_expand; run_levels r7rs; run_shape; run_size; run_cache; run_debug; run_driver; run_examples; run_cases interp; run_repl; run_tramp
     run_stress ;;
-*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape|size|cache|debug|driver]"; exit 2 ;;
+*) echo "usage: tests/run.sh [all|reader|unit|amalg|expand|compiled|compiled2|r7rs|interp|stress|tramp|gcc|shape|size|cache|debug|driver|examples]"; exit 2 ;;
 esac
 if [ "$skip" -gt 0 ]; then echo "tests: $pass passed, $fail failed, $skip skipped (see above)"
 else echo "tests: $pass passed, $fail failed"; fi

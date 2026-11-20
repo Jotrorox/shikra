@@ -1,0 +1,12 @@
+The compiler reads the whole program, and every library the program imports, before it
+writes a single line of C. Because it sees the whole program, it knows which procedures are
+never called, and it leaves them out. It knows which variables are never assigned, and it
+treats them as constants. It knows when a loop only ever adds flonums, and it keeps the
+flonums in registers.
+
+A small program gets a small executable. A program that never reads a datum does not carry
+the reader; a program that never prints a float does not carry the float printer. The
+runtime is a set of parts, and the program only links the parts it uses.
+
+Don't take the compiler's word for it: `shikra size` shows what is in the executable, part
+by part, so you can see where every byte came from.

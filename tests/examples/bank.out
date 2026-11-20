@@ -1,0 +1,18 @@
+alice pays bob 25.00
+  alice: 75.00 EUR
+  bob: 50.50 EUR
+ok
+bob pays alice 100.00
+  alice: 75.00 EUR
+  bob: 50.50 EUR
+  refused: bob cannot pay 100.00 EUR
+refused
+alice pays bob -5
+  alice: 75.00 EUR
+  bob: 50.50 EUR
+  error: withdraw!: amount must be a positive number of cents (-5)
+error
+in francs: bob pays alice 0.07
+  alice: 75.07 CHF
+  bob: 50.43 CHF
+ok

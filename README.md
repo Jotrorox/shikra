@@ -7,8 +7,9 @@ same tool provides the REPL.
 
 - **Small binaries:** hello world is under 10 KB as a static Linux executable without libc,
   and about 50 KB on macOS. Programs only link the runtime parts they use.
-- **Fast code:** on r7rs-benchmarks it runs at parity with Chez Scheme (geometric mean 0.99×
-  Chez's time over 53 benchmarks; [results](bench/RESULTS.md)).
+- **Fast code:** on r7rs-benchmarks it runs at parity with Chez Scheme and a little faster
+  than Gambit (geometric mean 0.99× Chez's time and 0.88× Gambit's over 53 benchmarks;
+  [results](bench/RESULTS.md)).
 - **No dependencies:** the compiler is about 10,000 lines of C99 and builds with one command.
 
 ## Build
@@ -52,6 +53,8 @@ complex numbers, and exact integers are 63-bit fixnums unless you build with `--
 
 ## More
 
+- [`examples/`](examples/README.md): small complete programs, from a word counter to
+  generators, bignums and calling C.
 - [`docs/USAGE.md`](docs/USAGE.md): flags, extensions and the C interface, bignums,
   cross-compiling, tests.
 - [`docs/shikra-spec-0.1.pdf`](docs/shikra-spec-0.1.pdf): the specification.

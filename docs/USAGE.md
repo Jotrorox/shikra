@@ -102,8 +102,9 @@ against glibc dynamically; plain clang needs a sysroot.
 ```sh
 make test                     # everything (macOS: about 10 minutes)
 sh tests/run.sh MODE          # one part: reader unit amalg expand compiled compiled2 r7rs
-                              # levels interp stress tramp shape size cache debug driver gcc
-                              # (see the script's header; `all` = everything but gcc)
+                              # levels interp stress tramp shape size cache debug driver
+                              # examples gcc (see the script's header; `all` = everything
+                              # but gcc)
 sh tests/linux.sh arm64       # the suite on Linux in a podman container (native)
 sh tests/linux.sh amd64 MODE  # x86-64, emulated with qemu-user (slow)
 ```
